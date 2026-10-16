@@ -1,0 +1,6 @@
+# Compiled JavaScript never lives next to the TypeScript sources.
+# `tsconfig.build.json` must emit only into dist/.
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map

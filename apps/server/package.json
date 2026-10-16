@@ -1,0 +1,30 @@
+{
+  "name": "@insighthub/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "InsightHub backend: HTTP API, WebSocket collaboration transport",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "prebuild": "pnpm --filter @insighthub/shared build",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
+    "verify:m0": "node scripts/m0-verify.mjs"
+  },
+  "dependencies": {
+    "@insighthub/shared": "workspace:*",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.2"
+  }
+}

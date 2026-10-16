@@ -1,0 +1,16 @@
+# Normalize line endings so Prettier (LF) and Git agree on every platform.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# Lockfile is generated; keep it out of diffs/review noise.
+pnpm-lock.yaml -diff linguist-generated
