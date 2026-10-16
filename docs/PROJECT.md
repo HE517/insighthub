@@ -35,7 +35,7 @@ MVP is delivered in milestones. Only the marked milestone is in scope at a time.
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | **M0 Bootstrap** | Monorepo, shared contracts, `/health`, WebSocket `connected` handshake, React shell with CodeMirror, typecheck/test/build green | **done** |
-| **M1 Collaboration core** | `Y.Doc`/`Y.Text` bound to CodeMirror, WebSocket document rooms + sync, IndexedDB persistence, offline editing, reconnect merge | not started |
+| **M1 Collaboration core** | `Y.Doc`/`Y.Text` bound to CodeMirror, WebSocket document rooms + sync, IndexedDB persistence, offline editing, reconnect merge | **contract frozen (M1-A0), implementation not started** |
 | **M2 Permissions & state** | Auth, document RBAC (server authority), request cancellation, stale-response and document-switch race protection | not started |
 | **M3 AI suggestions** | AI request pipeline, suggestion + diff, Diff Preview, Accept/Reject/Undo applied via Yjs transaction | not started |
 | **M4 Hardening** | Markdown preview and editor performance, virtualized document/tree lists, chaos tests (concurrency, duplicate events, reconnect) | not started |
@@ -69,6 +69,10 @@ dependencies that presume them:
 CodeMirror 6.
 
 **Collaboration** (across `apps/web` + `apps/server`): Yjs, IndexedDB, WebSocket.
+Supporting libraries, approved by A0 in M1-A0: `y-protocols` (official sync and
+awareness wire format — we do not invent a CRDT protocol), `lib0` (the
+varint/binary codec that Yjs uses), `y-indexeddb` (local persistence provider,
+client only).
 
 **Backend** (`apps/server`): Node.js, Express, TypeScript, `ws`, Zod.
 

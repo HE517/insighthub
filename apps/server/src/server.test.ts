@@ -9,7 +9,12 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 
-import { parseServerMessage, type WsServerMessage } from '@insighthub/shared';
+import {
+  PROTOCOL_VERSION,
+  WS_ERROR_CODES,
+  parseServerMessage,
+  type WsServerMessage,
+} from '@insighthub/shared';
 import { WebSocket } from 'ws';
 
 import { createApp } from './app.js';
@@ -75,9 +80,45 @@ describe('WebSocket /ws', () => {
 
     assert.equal(message.type, 'connected');
     if (message.type === 'connected') {
-      assert.equal(message.payload.protocolVersion, 1);
+      assert.equal(message.payload.protocolVersion, PROTOCOL_VERSION);
       assert.ok(message.payload.connectionId.length > 0);
       assert.ok(Number.isFinite(Date.parse(message.payload.serverTime)));
+    }
+
+    ws.close();
+  });
+
+  it('answers a binary data-plane frame with ROOM_NOT_JOINED before join-room', async () => {
+    // M1-A0 froze the two-plane model; the server has no room state yet, so the
+    // only correct answer to collaboration data is "you have not joined".
+    const wsUrl = baseUrl.replace('http://', 'ws://') + config.wsPath;
+    const ws = new WebSocket(wsUrl);
+
+    const error = await new Promise<WsServerMessage>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('timed out waiting for error')), 5000);
+      ws.on('message', (raw: Buffer) => {
+        // The server answers control-plane violations on the TEXT channel, so the
+        // response to a binary frame is itself a text envelope. Select by message
+        // type, not by the transport flag.
+        const parsed = parseServerMessage(JSON.parse(raw.toString()));
+        if (!parsed.success || parsed.data === undefined) {
+          reject(new Error(`server sent an invalid message: ${parsed.error}`));
+          return;
+        }
+        if (parsed.data.type !== 'error') return; // skip the `connected` handshake
+        clearTimeout(timer);
+        resolve(parsed.data);
+      });
+      ws.once('open', () => {
+        // Any binary payload: the frame content is irrelevant before a join.
+        ws.send(new Uint8Array([0, 0, 0]));
+      });
+      ws.once('error', reject);
+    });
+
+    assert.equal(error.type, 'error');
+    if (error.type === 'error') {
+      assert.equal(error.payload.code, WS_ERROR_CODES.ROOM_NOT_JOINED);
     }
 
     ws.close();

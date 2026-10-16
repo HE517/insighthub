@@ -7,6 +7,8 @@
 import cors from 'cors';
 import express, { type Express, type Request, type Response } from 'express';
 
+import { PROTOCOL_VERSION } from '@insighthub/shared';
+
 import { type ServerConfig } from './config.js';
 
 export function createApp(config: ServerConfig): Express {
@@ -26,7 +28,7 @@ export function createApp(config: ServerConfig): Express {
     res.status(200).json({
       name: 'insighthub-server',
       wsPath: config.wsPath,
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
     });
   });
 

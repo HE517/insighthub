@@ -4,15 +4,20 @@
  * M0 scope: accept an upgrade on `config.wsPath`, assign a connection id and
  * send the `connected` handshake defined in `@insighthub/shared`.
  *
- * Explicitly NOT in M0: document rooms, Yjs sync frames, presence fan-out.
- * M1 (A3 Realtime Backend) builds those on top of the seams left here.
+ * M1-A0 scope (this change): the two-plane message model is wired in — text
+ * frames are JSON control messages, binary frames are collaboration data and are
+ * rejected with `ROOM_NOT_JOINED` until a room exists.
+ *
+ * Still NOT implemented: document rooms, Yjs sync, presence fan-out. M1-A3
+ * (Realtime Backend) builds those on top of the seams left here.
  */
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 
 import {
-  WS_MESSAGE_TYPES,
+  WS_ERROR_CODES,
   createConnectedMessage,
+  createErrorMessage,
   parseMessageJson,
   type WsServerMessage,
 } from '@insighthub/shared';
@@ -63,19 +68,33 @@ export function attachWebSocketServer(server: Server, config: ServerConfig): Web
     // The M0 acceptance criterion: the client receives `{ type: "connected" }`.
     send(ws, createConnectedMessage(connectionId));
 
-    ws.on('message', (raw) => {
-      // Until M1 handles join-room, inbound frames are only validated and
-      // logged. Malformed frames get an explicit error rather than silence.
-      const parsed = parseMessageJson(raw.toString());
-      if (!parsed.success) {
-        send(ws, {
-          type: WS_MESSAGE_TYPES.error,
-          payload: { code: 'invalid_message', message: parsed.error ?? 'invalid message' },
-          ts: new Date().toISOString(),
-        });
+    ws.on('message', (raw: Uint8Array | ArrayBuffer | Buffer | string, isBinary: boolean) => {
+      // M1-A0 froze the two-plane model: binary = collaboration data (Yjs sync /
+      // awareness), text = JSON control envelope. The server does not own room
+      // state yet (that is M1-A3), so a binary frame can only be answered with
+      // ROOM_NOT_JOINED — which is exactly the contract's rule for data-plane
+      // traffic arriving before a successful join-room.
+      if (isBinary) {
+        send(
+          ws,
+          createErrorMessage(
+            WS_ERROR_CODES.ROOM_NOT_JOINED,
+            'binary collaboration frames require a successful join-room first',
+          ),
+        );
         return;
       }
-      // M1: route join-room / leave-room here.
+
+      // Text frames are only validated here until M1-A3 routes join-room.
+      const parsed = parseMessageJson(raw.toString());
+      if (!parsed.success) {
+        send(
+          ws,
+          createErrorMessage(WS_ERROR_CODES.INVALID_MESSAGE, parsed.error ?? 'invalid message'),
+        );
+        return;
+      }
+      // M1-A3: route join-room / leave-room here.
     });
 
     ws.on('close', () => {

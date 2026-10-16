@@ -7,11 +7,21 @@
  * review-blocking violation (see AGENTS.md).
  */
 
+export * from './errors.js';
 export * from './document.js';
 export * from './permission.js';
 export * from './connection.js';
 export * from './ai-suggestion.js';
+export * from './awareness-state.js';
+export * from './binary-frame.js';
 export * from './protocol.js';
+export * from './collab-session.js';
 
-/** Protocol version spoken by this build of the contracts. */
-export const SHARED_CONTRACT_VERSION = 1;
+/**
+ * Version of the shared contract surface as a whole.
+ *
+ * v2 (M1-A0): added the binary data plane (`binary-frame.ts`), the awareness
+ * state contract, the A1↔A2 `CollaborativeSession` seam, and the frozen error
+ * code vocabulary. `PROTOCOL_VERSION` was bumped to 2 in the same change.
+ */
+export const SHARED_CONTRACT_VERSION = 2;

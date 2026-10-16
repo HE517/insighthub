@@ -11,8 +11,20 @@ Tasks: [`docs/TASKS.md`](docs/TASKS.md) ·
 Decisions: [`docs/DECISIONS.md`](docs/DECISIONS.md) ·
 Multi-agent rules: [`AGENTS.md`](AGENTS.md).
 
-**Current status: M0 Bootstrap complete.** No collaboration, AI or auth yet —
-only a running skeleton and the shared contract they build on.
+**Current status: M1-A0 (contract freeze) complete.** The collaboration contract
+is frozen — binary data-plane framing, error codes, the WebSocket room messages and
+the A1↔A2 session interface. Collaboration behaviour itself (Yjs sync, offline
+persistence, rooms) is **not implemented yet**; M1-A1/A2/A3 build it against the
+frozen contract.
+
+## Transport in one paragraph
+
+One WebSocket at `/ws` carries two planes. **TEXT frames** are the JSON control
+protocol (`connected`, `join-room`, `room-joined`, `leave-room`, `presence`,
+`error`). **BINARY frames** carry Yjs sync and awareness as raw bytes — never
+base64 inside JSON. The framing codec lives in `packages/shared/src/binary-frame.ts`
+and is the only place either app may parse frames. Details:
+[`docs/CONTRACTS.md`](docs/CONTRACTS.md) §4–§10.
 
 ## Layout
 

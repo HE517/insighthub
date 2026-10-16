@@ -1,9 +1,18 @@
 import { z } from 'zod';
 
+import { wsErrorCodeSchema, type WsErrorCode } from './errors.js';
+
 /**
- * WebSocket protocol for the InsightHub collaboration channel.
+ * WebSocket CONTROL-PLANE protocol for the InsightHub collaboration channel.
  *
- * Transport shape (all messages, both directions):
+ * See `docs/ARCHITECTURE.md` §5 for the two-plane model:
+ *
+ * - **Control plane (TEXT frames)** — this file. JSON envelope below. Carries
+ *   `connected`, `join-room`, `room-joined`, `leave-room`, `presence`, `error`.
+ * - **Data plane (BINARY frames)** — `binary-frame.ts`. Carries Yjs sync and
+ *   awareness as raw binary; never base64-wrapped into this JSON envelope.
+ *
+ * Transport shape (all control messages, both directions):
  *
  *   { type, payload, requestId?, ts }
  *
@@ -13,11 +22,17 @@ import { z } from 'zod';
  * - `payload` is always an object; never a bare primitive.
  * - Unknown `type` values are rejected by parsers instead of being ignored
  *   silently, so protocol drift shows up in tests rather than in production.
- *
- * M0 only defines the handshake (`connected`) plus the room-join/lifecycle
- * messages M1 needs. Binary Yjs sync frames are a separate transport concern
- * and are deliberately NOT part of this JSON envelope.
  */
+
+/**
+ * Version of the WebSocket control protocol.
+ *
+ * Bumped 1 → 2 by M1-A0: the protocol gained the binary data plane (Yjs sync and
+ * awareness frames) and grew from a handshake into a real collaboration
+ * transport. A peer that does not speak this exact version must be rejected with
+ * `PROTOCOL_VERSION_MISMATCH` rather than talking past us.
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** Discriminator values, in one place so both sides use the same strings. */
 export const WS_MESSAGE_TYPES = {
@@ -46,7 +61,7 @@ export const connectedPayloadSchema = z.object({
   /** Connection id assigned by the server; useful in logs and M1 debugging. */
   connectionId: z.string().min(1),
   /** Protocol version; clients refuse to speak a version they do not know. */
-  protocolVersion: z.literal(1),
+  protocolVersion: z.literal(PROTOCOL_VERSION),
   /** Server time (ISO 8601) so clients can measure clock skew. */
   serverTime: z.string().datetime(),
 });
@@ -55,14 +70,30 @@ export type ConnectedPayload = z.infer<typeof connectedPayloadSchema>;
 
 export const joinRoomPayloadSchema = z.object({
   documentId: z.string().min(1),
-  /** Last revision the client already has; lets the server compute a delta. M1. */
-  lastKnownRevision: z.number().int().nonnegative().optional(),
+  /**
+   * Protocol version the client speaks. Checked before any room state is
+   * created so a mismatch fails fast with `PROTOCOL_VERSION_MISMATCH`.
+   */
+  protocolVersion: z.literal(PROTOCOL_VERSION),
+  /**
+   * How the client intends to open the document. `readonly` is reserved for the
+   * M2 permission work; M1 clients always send `readwrite`.
+   */
+  mode: z.enum(['readonly', 'readwrite']).default('readwrite'),
 });
 
 export type JoinRoomPayload = z.infer<typeof joinRoomPayloadSchema>;
 
 export const roomJoinedPayloadSchema = z.object({
   documentId: z.string().min(1),
+  /** Server's authoritative connection id for this socket. */
+  connectionId: z.string().min(1),
+  /**
+   * Number of Yjs document updates the server has applied to this room so far.
+   * M1 rooms are in-memory only, so this is a room-activity counter rather than a
+   * persisted document revision; it exists to make sync order observable in logs
+   * and tests. `DocumentMeta.revision` (M2, stored) is the durable equivalent.
+   */
   revision: z.number().int().nonnegative(),
   /** Connection ids of peers already in the room (excluding self). */
   peers: z.array(z.string()),
@@ -85,7 +116,9 @@ export const presencePayloadSchema = z.object({
 export type PresencePayload = z.infer<typeof presencePayloadSchema>;
 
 export const wsErrorPayloadSchema = z.object({
-  code: z.string().min(1),
+  /** Frozen vocabulary from `errors.ts`; the code is the contract. */
+  code: wsErrorCodeSchema,
+  /** Human-facing text. Must never contain a stack trace or internal path. */
   message: z.string().min(1),
   /** Set when the failing message was correlated with a request. */
   requestId: z.string().min(1).optional(),
@@ -226,9 +259,39 @@ export function createConnectedMessage(
     WS_MESSAGE_TYPES.connected,
     {
       connectionId,
-      protocolVersion: 1 as const,
+      protocolVersion: PROTOCOL_VERSION,
       serverTime: options.ts ?? new Date().toISOString(),
     },
     options,
   );
+}
+
+/**
+ * Build an error message from the frozen vocabulary.
+ *
+ * Always use this instead of hand-writing `{ type: 'error', payload: {...} }`: it
+ * keeps the code typed, so an invented error string is a compile error.
+ */
+export function createErrorMessage(
+  code: WsErrorCode,
+  message: string,
+  options: CreateEnvelopeOptions = {},
+): Extract<WsServerMessage, { type: 'error' }> {
+  return createEnvelope(WS_MESSAGE_TYPES.error, { code, message }, options);
+}
+
+/** Build the `room-joined` acknowledgement for a client's successful join. */
+export function createRoomJoinedMessage(
+  payload: RoomJoinedPayload,
+  options: CreateEnvelopeOptions = {},
+): Extract<WsServerMessage, { type: 'room-joined' }> {
+  return createEnvelope(WS_MESSAGE_TYPES.roomJoined, payload, options);
+}
+
+/** Build a presence change notification. */
+export function createPresenceMessage(
+  payload: PresencePayload,
+  options: CreateEnvelopeOptions = {},
+): Extract<WsServerMessage, { type: 'presence' }> {
+  return createEnvelope(WS_MESSAGE_TYPES.presence, payload, options);
 }

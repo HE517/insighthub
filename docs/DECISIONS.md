@@ -259,3 +259,174 @@ the app, and every component uses one address family. Cost: binding to loopback
 only, which is the intended development default (expose with `--host` if you
 deliberately want LAN access).
 
+---
+
+## D-014 · 2026-02-14 · accepted · Two-plane WebSocket: TEXT for control, BINARY for collaboration data
+
+**Context.** M1 adds Yjs sync and awareness on top of the M0 handshake. The
+obvious shortcut is to wrap a Yjs update as a base64 string inside the existing
+JSON envelope. That costs ~33% size inflation on every keystroke, adds a base64
+encode/decode and a JSON parse per edit, and destroys the ability to stream or
+inspect the payload efficiently.
+
+**Decision.** One WebSocket at `/ws`, two planes distinguished by the **frame
+kind**:
+
+- **Control plane (TEXT):** the existing JSON envelope — `connected`,
+  `join-room`, `room-joined`, `leave-room`, `presence`, `error`.
+- **Data plane (BINARY):** Yjs sync and awareness, carried as raw bytes.
+
+`ws` already exposes the distinction (`string` vs `Buffer`), so no in-band
+discriminator is needed. Yjs updates are never base64-encoded. Both planes share
+one `PROTOCOL_VERSION`.
+
+**Consequences.** No size/CPU tax on the hot path, and the control plane stays
+human-readable in DevTools. Cost worth documenting: a data-plane violation is
+reported on the **control plane** as a text `error` frame, so a client must not
+assume a text frame implies a text-frame cause. This is stated in
+`docs/CONTRACTS.md` §6.3 and `docs/ARCHITECTURE.md` §5.
+
+---
+
+## D-015 · 2026-02-14 · accepted · Reuse `y-protocols` framing rather than inventing one
+
+**Context.** The receiver must distinguish SYNC from AWARENESS, and within SYNC
+distinguish SyncStep1/SyncStep2/Update. Writing a bespoke framing was tempting but
+would mean inventing a wire format that other editors cannot speak and that we
+alone must maintain.
+
+**Decision.** Copy the `y-websocket` convention, verified against the installed
+`y-protocols@1.0.7` source rather than assumed:
+
+- Frame layout: `frameType (varUint)` then payload. `0 = SYNC`, `1 = AWARENESS`.
+- The SYNC payload is written by `y-protocols/sync` itself
+  (`writeSyncStep1/2/Update`) and read by `readSyncMessage`; our codec only adds
+  and strips the frame-type header, so the official encoding is preserved byte for
+  byte. This is asserted by a test comparing the frame payload against lib0's own
+  encoder output.
+- The AWARENESS payload is exactly `awarenessProtocol.encodeAwarenessUpdate(...)`
+  output, which has **no inner message type**.
+- That convention's types `2` (`auth`) and `3` (`query-awareness`) are reserved and
+  rejected in M1 rather than silently ignored.
+
+**Verified facts that shaped the codec** (established by probing the installed
+packages, not from docs):
+
+1. `readSyncMessage` reads the message type itself, so the payload handed to it
+   must start at that type, not after it.
+2. `readSyncMessage` returns a message type even for a truncated payload, so the
+   codec must validate the length-prefixed array itself; otherwise an incomplete
+   frame is silently accepted as "no data".
+3. `reading.readAny` is a tagged lookup-table decoder and **throws on ordinary
+   JSON**; awareness state is written with `writeVarString`, so `readVarString` is
+   the correct reader.
+4. `decoder.arr` is the whole buffer (not the remainder) and `decoder.pos` is the
+   cursor, so offsets must be derived from cursor positions. `Decoder.arr` is the
+   same object instance that was passed to `createDecoder`.
+5. An `Awareness` installs a 3 s heartbeat interval and **must** be `destroy()`ed
+   or the process never exits — this is why the session contract mandates it.
+
+**Consequences.** Interoperable framing, no private CRDT algorithm, and the whole
+wire format lives in one reviewed place (`packages/shared/src/binary-frame.ts`)
+that A1 and A3 both import. Cost: the codec must be updated if `y-protocols` ever
+changes its framing — mitigated by the byte-faithfulness test.
+
+---
+
+## D-016 · 2026-02-14 · accepted · One frozen session interface to break the A1 ↔ A2 circular dependency
+
+**Context.** The M1 plan as written deadlocked: A1 was to wait for "the editor
+binding from A2" while A2 waited for "`useDocument()` from A1". Neither could
+start, and whichever went first would have dictated the other's shape by accident.
+
+**Decision.** Declare the seam in `packages/shared/src/collab-session.ts`
+(`CollaborativeSession`, `CollaborativeSessionResult`, `CollaboratorInfo`,
+`UndoState`, `CollaborativeSessionOptions`) and freeze the access path to
+`apps/web/src/collab/public.ts`:
+
+- **A1 implements** `createCollaborativeSession(options)` and
+  `useCollaborativeDocument(options)` behind that module.
+- **A2 consumes only** the shared interface, and may develop immediately against
+  its own in-memory test double typed as `CollaborativeSession`.
+- The interface deliberately omits IndexedDB, the reconnect queue, state vectors
+  and socket framing, so A2 cannot accidentally couple to them.
+- `collab/internal/**` is private to A1 and A2 must not import it.
+
+**Consequences.** A1 and A2 start in parallel with no waiting and no accidental
+coupling. Cost: the interface is now a review-gated contract, and the placeholder
+in `public.ts` returns `{ state: 'initializing' }` / rejects until A1 lands, which
+is intentionally visible rather than silently wrong.
+
+---
+
+## D-017 · 2026-02-14 · accepted · `PROTOCOL_VERSION` and `SHARED_CONTRACT_VERSION` bumped to 2
+
+**Context.** M1-A0 changed the wire protocol in ways that break a v1 peer:
+`connected.payload.protocolVersion` became a literal `2`, `join-room` now
+**requires** `protocolVersion` and gained a `mode`, `room-joined` gained
+`connectionId` and dropped `lastKnownRevision`, and `error.payload.code` became a
+closed enum instead of a free string. A v1 client would be rejected by the new
+schema, which is the correct outcome but only if the version actually moved.
+
+**Decision.** Bump `PROTOCOL_VERSION` and `SHARED_CONTRACT_VERSION` to `2` in the
+same change, make `protocolVersion` a `z.literal(PROTOCOL_VERSION)` in both
+`connected` and `join-room` so a mismatch fails at the boundary, and reserve
+`PROTOCOL_VERSION_MISMATCH` for the server to report it explicitly.
+
+**Consequences.** Peers cannot silently talk past each other, and the version is
+part of the payload rather than an afterthought. Cost: any stored or hard-coded
+`protocolVersion: 1` (including tests and the `/api/meta` response) had to be
+updated together — done in this change and covered by tests.
+
+---
+
+## D-018 · 2026-02-14 · accepted · Error codes are a closed, typed vocabulary
+
+**Context.** M0 used a free-form string code (`'invalid_message'`). With three
+agents reacting to server errors, free strings drift: one side checks
+`invalid_message`, the other emits `INVALID_MESSAGE`, and the mismatch is silent.
+
+**Decision.** A frozen `WS_ERROR_CODES` object (`INVALID_MESSAGE`,
+`UNKNOWN_MESSAGE_TYPE`, `INVALID_BINARY_FRAME`, `FRAME_TOO_LARGE`,
+`ROOM_NOT_JOINED`, `ROOM_NOT_FOUND`, `PROTOCOL_VERSION_MISMATCH`,
+`INTERNAL_ERROR`) exposed as a Zod enum on the wire and as a TypeScript union in
+code, plus:
+
+- `createErrorMessage(code, message)` so an invented code is a compile error;
+- `isWsErrorCode(value)` to guard untrusted input;
+- `isFatalErrorCode(code)` to answer "does this socket die?" in one place;
+- a rule that a `message` never carries a stack trace, path or internal id.
+
+`ROOM_NOT_FOUND` is reserved now (M1 has no persisted store) so M2 does not need a
+new vocabulary for the same concept.
+
+**Consequences.** Error handling is exhaustive and two agents cannot disagree about
+a code. Cost: adding a code is a shared-contract change requiring Supervisor
+review, which is intended.
+
+---
+
+## D-019 · 2026-02-14 · accepted · Document content is never mirrored into Redux or React state
+
+**Context.** The natural React instinct is to put the editor's text in the store.
+In a CRDT system that creates a second source of truth, which diverges, clobbers
+remote edits, breaks undo, and is invisible to other clients.
+
+**Decision.** Write the rule down as binding architecture
+(`docs/ARCHITECTURE.md` §0, `docs/CONTRACTS.md` §8) and as a review gate
+(`AGENTS.md` R11):
+
+- `Y.Doc`/`Y.Text` is the **only** source of truth for document content.
+- Redux may hold `activeDocumentId`, metadata, permission, connection status,
+  collaborator metadata and UI state — **not** the document body.
+- React state may hold text only transiently for rendering.
+- IndexedDB stores encoded Yjs updates, never a parallel Markdown string.
+- A1's task explicitly must **not** create a `documentSlice` mirroring `Y.Text`;
+  such a slice may only carry metadata/UI state.
+
+**Consequences.** One history, safe merge, trustworthy undo, and an AI path that
+cannot bypass the CRDT. Cost: editor code reads text from `session.text` and must
+subscribe to changes rather than reading a store field — slightly more wiring,
+verified by A2's acceptance criteria and A7's review.
+
+
