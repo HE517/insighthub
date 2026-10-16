@@ -237,3 +237,25 @@ text and negative offsets are all covered.
 corrupting document state later. Cost: producers must emit well-formed ISO
 timestamps — the `createEnvelope`/`createConnectedMessage` helpers guarantee this
 for anything built through the shared API.
+
+---
+
+## D-013 · 2026-02-14 · accepted · The dev stack binds IPv4 explicitly
+
+**Context.** Verifying the documented quickstart on default ports, the backend
+answered on `127.0.0.1:3001` but the web server did not: `Get-NetTCPConnection`
+showed Vite listening on `::1` only, so `http://127.0.0.1:5173` failed while
+`http://localhost:5173` worked. Vite's default `localhost` binds a single address
+family chosen by the OS resolver, which on Windows is IPv6. The README, the
+browser instructions and the backend all use `127.0.0.1`, so this was a real
+documentation/behaviour mismatch, not a cosmetic one.
+
+**Decision.** Set `server.host = '127.0.0.1'` in `apps/web/vite.config.ts` so the
+whole dev stack listens on IPv4. CORS on the server explicitly allows
+`http://localhost:5173` as well, so either spelling keeps working.
+
+**Consequences.** `http://127.0.0.1:5173` and `http://localhost:5173` both reach
+the app, and every component uses one address family. Cost: binding to loopback
+only, which is the intended development default (expose with `--host` if you
+deliberately want LAN access).
+

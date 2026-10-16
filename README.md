@@ -36,15 +36,17 @@ pnpm install
 pnpm dev          # server on :3001, web on :5173
 ```
 
-Open <http://localhost:5173>. The right-hand panel shows the live WebSocket state
-and the result of `GET /health`; the "Server messages" card shows the raw
-`connected` handshake frame.
+Open <http://127.0.0.1:5173> (or <http://localhost:5173>). Both work: the whole
+dev stack binds IPv4 `127.0.0.1` deliberately, so there are no address-family
+surprises. The right-hand panel shows the live WebSocket state and the result of
+`GET /health`; the "Server messages" card shows the raw `connected` handshake
+frame.
 
 Run the two processes separately if you prefer:
 
 ```bash
 pnpm dev:server   # tsx watch, http://127.0.0.1:3001
-pnpm dev:web      # vite,    http://localhost:5173
+pnpm dev:web      # vite,    http://127.0.0.1:5173
 ```
 
 ## Verification
@@ -71,6 +73,10 @@ proxied through Vite.
 
 The Vite dev server proxies `/api`, `/health` and `/ws` (with `ws: true`) to the
 backend, so the browser only ever talks to one origin in development.
+
+Both services bind `127.0.0.1` (IPv4) by default. Vite's own default resolves to
+`::1` on Windows, which would make `http://127.0.0.1:5173` unreachable, so the
+host is pinned deliberately.
 
 ## Environment variables
 

@@ -19,6 +19,10 @@ const wsTarget = `ws://${backendHost}:${backendPort}`;
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Bind IPv4 explicitly: Vite's default `localhost` resolves to ::1 on
+    // Windows, which makes http://127.0.0.1:5173 unreachable while the backend
+    // listens on 127.0.0.1. One address family for the whole dev stack.
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
     proxy: {
