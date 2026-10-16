@@ -13,7 +13,7 @@ import { WS_ERROR_CODES } from './errors.js';
  * The WebSocket carries two unrelated kinds of traffic:
  *
  * - **Control plane (TEXT frames)** — the JSON envelope in `protocol.ts`:
- *   `connected`, `join-room`, `room-joined`, `leave-room`, `presence`, `error`.
+ *   `connected`, `join-room`, `room-joined`, `leave-room`, `error`.
  *   Fits JSON, benefits from being human-readable in DevTools.
  * - **Data plane (BINARY frames)** — Yjs sync and awareness. These are already
  *   compact binary formats; base64-ing them into JSON would inflate every edit

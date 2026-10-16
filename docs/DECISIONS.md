@@ -429,4 +429,136 @@ cannot bypass the CRDT. Cost: editor code reads text from `session.text` and mus
 subscribe to changes rather than reading a store field — slightly more wiring,
 verified by A2's acceptance criteria and A7's review.
 
+---
+
+## D-020 · 2026-02-14 · accepted · One socket carries one document room; re-join atomically replaces it
+
+**Context.** The M1-A0 contract left the re-join transition undefined: what happens
+if a socket already in room A sends `join-room(B)`? Left unstated, A1 and A3 would
+each assume something different, and the failure mode is silent — binary Yjs frames
+carry **no `documentId`**, so if a socket could be in two rooms at once, every
+collaboration frame would be ambiguous and the server would have to guess which
+document an update belonged to. That is not a bug you find in a test; it is data
+landing in the wrong document.
+
+**Decision.**
+
+1. **Freeze the cardinality: one socket = at most one active document room.**
+   `ROOM_CARDINALITY` in `protocol.ts` encodes
+   `maxActiveRoomsPerSocket: 1`.
+2. **The re-join transition is atomic replace.** A `join-room(B)` while in A leaves
+   A and joins B in a single server-side transition, then acknowledges
+   `room-joined(B)`. No acknowledgement is sent for the implicit leave, so the
+   `room-joined(B)` reply is the client's signal that A is gone.
+3. `join-room(A)` while already in A is an idempotent re-join.
+4. `leave-room(B)` while in A (`B !== A`) is a no-op and must not drop A.
+5. A binary frame while in a room belongs to that room, unambiguously.
+6. The refusing alternative stays expressible as `ROOM_CARDINALITY_VIOLATION` (a
+   non-fatal code) but is **not** the default, so an implementation that chooses it
+   does not need to invent an error string.
+
+**Why replace rather than "error: leave first".** Switching documents is a routine
+user action. A two-round-trip protocol (`leave-room` → wait → `join-room`) creates a
+window in which the client belongs to no room; that window is precisely where a
+dropped reply or a race strands the UI with nothing joined, and it forces the client
+to sequence state transitions that the server can do atomically in one step. The
+cost of replace is that the server must tear down the old room membership before
+acknowledging, which is a few lines and has one clear order.
+
+**Consequences.** No ambiguous frame routing and no client-side join/leave
+sequencing. Cost: A3 must implement replace as genuinely atomic (remove-from-A and
+add-to-B must not be observable as two states), and A1 must treat
+`room-joined(B)` as the trigger to tear down A's local view rather than waiting for
+a leave acknowledgement. Awareness cleanup on replace is covered in D-021.
+
+---
+
+## D-021 · 2026-02-14 · accepted · Yjs awareness is the only presence channel; the TEXT `presence` message is deleted
+
+**Context.** The M1 plan carried both a control-plane `presence` message
+(`{documentId, connectionId, state: 'joined'|'left'}`) and Yjs awareness, which also
+expresses who is present along with identity, cursor and selection. Two channels
+describing the same fact is a **two-source-of-truth** problem: the server could
+broadcast `presence left` while awareness had not yet expired the entry (or vice
+versa), and the UI would have to decide which one to believe. Worse, the two would
+usually agree in testing and disagree only under load or partial failure — exactly
+where presence bugs are hardest to diagnose.
+
+**Decision.** Delete the `presence` message from the M1 protocol entirely (not
+deprecate it):
+
+- Awareness is the **single** source of truth for identity, cursor, selection and
+  online ephemeral presence.
+- The server removes a departing client's awareness entry and broadcasts that
+  removal; peers observe presence changes through awareness, not through a control
+  message.
+- `room-joined.peers` remains as a one-shot **initial roster** at join time, which
+  is a snapshot, not an ongoing channel.
+- Room membership counts stay in the server's room registry and need no wire
+  message.
+- A legacy `presence` envelope is now an unknown type and is **rejected** loudly, so
+  a stale client is caught rather than half-working.
+- `PRESENCE_SOURCE_OF_TRUTH = 'yjs-awareness'` records the decision in code.
+
+Atomic room replace (D-020) must additionally remove and broadcast the client's
+awareness entry for room A before joining B, so A never retains a stale cursor — a
+rule that only exists because presence now has exactly one channel.
+
+**Consequences.** One truth, no reconciliation logic, and no ghost cursors from two
+channels disagreeing. Cost: clients cannot learn about presence from the control
+plane, so a client that only speaks JSON cannot render collaborators at all — an
+acceptable M1 trade, recorded here rather than discovered later.
+
+---
+
+## D-022 · 2026-02-14 · accepted · `RoomJoinedPayload.revision` removed rather than renamed
+
+**Context.** `RoomJoinedPayload.revision` was documented as a "room activity
+counter", while `DocumentMeta.revision` is the durable, server-owned document
+version and the AI staleness anchor. Two different things sharing one name across
+one contract is a trap: a reader (or an agent) will use the room counter as a
+document revision, and because both are non-negative integers nothing will fail to
+compile.
+
+**Decision.** **Remove the field.** It had no M1 consumer: the sync handshake is
+state-vector driven, so no counter is needed to sequence sync, and the only stated
+justification was observability in logs and tests — which A3 can do with server-side
+logging instead of a protocol field.
+
+`RoomJoinedPayload` is now `{ documentId, connectionId, peers }`. Document
+revision remains a durable concept that arrives with M2 storage, at which point it
+gets a contract of its own with a name that cannot be confused (`DocumentMeta.revision`
+and, if a wire field is needed, something like `documentRevision`).
+
+**Consequences.** No ambiguous `revision` in the M1 wire protocol, and the name
+collision is gone before two agents built against it. Cost: M2 must add the
+revision field deliberately; that is cheaper than debugging a staleness check that
+compared against a room counter. A regression test asserts the payload shape has
+exactly three keys, so re-adding a `revision` field cannot happen silently.
+
+---
+
+## D-023 · 2026-02-14 · accepted · Presence/wire cleanup verified as a pre-parallel gate (M1-A0.1)
+
+**Context.** After M1-A0 froze the contract, an adversarial read of the frozen
+surface found three ambiguities that would each have produced divergent
+implementations in A1/A3 rather than a compile error: the undefined re-join
+transition (D-020), two presence channels (D-021), and the `revision` name collision
+(D-022). Also, `apps/server` did not yet declare `yjs`/`y-protocols`, which A3 would
+have needed and could not add under R3.
+
+**Decision.** Treat these as one final pre-parallel cleanup pass (M1-A0.1) and fix
+them before releasing A1/A2/A3, because the cost of changing them rises sharply once
+three agents code against them. In the same pass: add the approved server
+dependencies, and restate the sync handshake as a **deliberate M1 choice**
+(client-initiated) rather than as a `y-protocols` requirement — the previous wording
+presented a project decision as a library law, which would mislead anyone reasoning
+about whether the direction could change.
+
+**Consequences.** The frozen surface has no known ambiguity left. Cost: one more
+contract revision before parallel work, which is the cheapest place to pay it.
+Lesson recorded for A0's process: read the frozen contract adversarially *before*
+declaring it frozen, not after.
+
+
 

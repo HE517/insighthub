@@ -42,10 +42,11 @@ type DocumentMeta = {
 ```
 
 `revision` is the server's document version and the staleness anchor for AI
-suggestions. M2 will back it with stored state; until then the M1 room counter
-`RoomJoinedPayload.revision` is the only runtime revision, and it is per-room
-activity, not a durable document version. `DocumentStatus` is `'draft' |
-'published' | 'archived'`.
+suggestions. M2 will back it with stored state. **M1 has no runtime revision at
+all**: M1-A0.1 removed `RoomJoinedPayload.revision` because it was a per-room
+activity counter with no consumer, and its name collided with this durable field
+(`docs/DECISIONS.md` D-021). `DocumentStatus` is `'draft' | 'published' |
+'archived'`.
 
 ## 2. DocumentRole
 
@@ -82,7 +83,7 @@ The single WebSocket `/ws` carries two independent planes, distinguished by the
 
 | Plane | Frame kind | Content | Encoding |
 | --- | --- | --- | --- |
-| Control | TEXT | `connected`, `join-room`, `room-joined`, `leave-room`, `presence`, `error` | JSON envelope (§5) |
+| Control | TEXT | `connected`, `join-room`, `room-joined`, `leave-room`, `error` | JSON envelope (§5) |
 | Data | BINARY | Yjs sync, awareness | §6 binary framing |
 
 Rules:
@@ -120,8 +121,12 @@ Rules:
 | `join-room` | client → server | `JoinRoomPayload` | **M1 (frozen)** |
 | `room-joined` | server → client | `RoomJoinedPayload` | **M1 (frozen)** |
 | `leave-room` | client → server | `LeaveRoomPayload` | **M1 (frozen)** |
-| `presence` | server → client | `PresencePayload` | **M1 (frozen)** |
 | `error` | server → client | `WsErrorPayload` | M0 |
+
+There are exactly **five** control-plane message types. The M1-plan `presence`
+message was **removed** by M1-A0.1: ephemeral presence has one source of truth,
+Yjs awareness, and a second control-plane channel for the same fact could only
+disagree with it (`docs/DECISIONS.md` D-020, §9 below).
 
 ### 5.2 Payloads
 
@@ -141,17 +146,10 @@ type JoinRoomPayload = {
 type RoomJoinedPayload = {
   documentId: string;
   connectionId: string;      // the server's id for THIS socket
-  revision: number;          // room activity counter (see §1)
-  peers: string[];           // other connection ids already in the room
+  peers: string[];           // INITIAL roster of other connection ids in the room
 };
 
 type LeaveRoomPayload = { documentId: string };
-
-type PresencePayload = {
-  documentId: string;
-  connectionId: string;
-  state: 'joined' | 'left';
-};
 
 type WsErrorPayload = {
   code: WsErrorCode;         // §7 frozen vocabulary (Zod enum)
@@ -160,18 +158,56 @@ type WsErrorPayload = {
 };
 ```
 
+`RoomJoinedPayload.peers` is a one-shot roster delivered at join time. Ongoing
+collaborator presence is **not** a control-plane concern — see §9.
+
 ### 5.3 Helpers
 
 - `createEnvelope(type, payload, { requestId?, ts? })` — build a valid envelope.
 - `createConnectedMessage(connectionId, opts?)` — the handshake.
 - `createErrorMessage(code, message, opts?)` — typed error builder; use this so an
   invented code is a compile error.
-- `createRoomJoinedMessage(payload, opts?)` / `createPresenceMessage(payload, opts?)`.
+- `createRoomJoinedMessage(payload, opts?)`.
 - `parseServerMessage(raw)` / `parseClientMessage(raw)` — validate; never throw.
 - `parseMessageJson(rawString)` — JSON decode + validate; never throw.
 - `isWsMessageOfType(message, type)` — narrow a parsed message.
 
 Parsers return `{ success: true, data }` or `{ success: false, error }`.
+
+### 5.4 Room cardinality (frozen by M1-A0.1)
+
+**One WebSocket connection carries at most ONE active document room.**
+
+Why this is forced rather than chosen: binary Yjs frames carry **no
+`documentId`** (see §6), so a frame's room is implied by the socket. Two
+concurrent rooms on one socket would make every data-plane frame ambiguous, and
+the server would have to guess which document an update belonged to.
+
+| Situation | Required server behaviour |
+| --- | --- |
+| `join-room(A)`, not yet in a room | Create/attach room A, reply `room-joined(A)`. |
+| Any binary frame while **not** in a room | `ROOM_NOT_JOINED`, socket stays open. |
+| Any binary frame while in room A | The frame belongs to A. There is no ambiguity to resolve. |
+| `join-room(A)` while already in room A | Idempotent re-join: reply `room-joined(A)`. |
+| `join-room(B)` while in room A | **Atomic replace**: leave A and join B as a single transition, then reply `room-joined(B)`. A's peers see A lose a member; B's peers see B gain one. No intermediate state where the socket is in both or in neither. |
+| `leave-room(A)` while in room A | Leave A, no further data-plane frames belong to A. |
+| `leave-room(B)` while in room A (`B !== A`) | Ignore (no-op); A stays active. Do not treat it as leaving A. |
+
+`ROOM_CARDINALITY` in `protocol.ts` encodes this (`maxActiveRoomsPerSocket: 1`,
+`joinWhileInRoom: 'atomic-replace'`).
+
+**Why atomic replace rather than "error, leave first":** switching documents is a
+normal user action. A two-round-trip protocol (`leave-room` → wait → `join-room`)
+adds a state window in which the client has no room, which is exactly when a race
+or a dropped reply leaves the UI stuck. Atomic replace has no such window and
+needs no client-side sequencing. The alternative refusal path remains expressible
+via `ROOM_CARDINALITY_VIOLATION` (a non-fatal code) for an implementation that
+deliberately chooses it, but it is **not** the frozen default.
+
+Both transitions must be observable on the wire, so a client that switches
+documents can treat the `room-joined(B)` reply as the signal to tear down A's
+local view; it must not rely on an intervening `leave-room` acknowledgement,
+because none is sent.
 
 ## 6. Data plane: binary frame framing (frozen by M1-A0)
 
@@ -259,13 +295,13 @@ Every local document mutation must be stamped with one of these origins, because
 revert a collaborator's edit — and (b) an update must not be echoed back to the
 connection it arrived from.
 
-## 7. Error codes (frozen by M1-A0)
+## 7. Error codes (frozen by M1-A0; extended by M1-A0.1)
 
 ```ts
 type WsErrorCode =
   | 'INVALID_MESSAGE' | 'UNKNOWN_MESSAGE_TYPE' | 'INVALID_BINARY_FRAME'
   | 'FRAME_TOO_LARGE' | 'ROOM_NOT_JOINED' | 'ROOM_NOT_FOUND'
-  | 'PROTOCOL_VERSION_MISMATCH' | 'INTERNAL_ERROR';
+  | 'ROOM_CARDINALITY_VIOLATION' | 'PROTOCOL_VERSION_MISMATCH' | 'INTERNAL_ERROR';
 ```
 
 | Code | Meaning | Fatal for the socket |
@@ -276,6 +312,7 @@ type WsErrorCode =
 | `FRAME_TOO_LARGE` | Binary frame over the limit. | yes |
 | `ROOM_NOT_JOINED` | Data-plane frame before a successful join. | no |
 | `ROOM_NOT_FOUND` | Server refused to open the room. In M1 there is no persisted store, so this means "no room for this documentId"; reserved so M2 needs no new vocabulary. | no |
+| `ROOM_CARDINALITY_VIOLATION` | A `join-room` tried to create a second concurrent room on a socket. Added by M1-A0.1 with the one-room-per-socket rule (§5.4); the frozen default is atomic replace, so a conforming server rarely emits it — it exists for an implementation that deliberately refuses instead of replacing. | no |
 | `PROTOCOL_VERSION_MISMATCH` | Peer and server disagree on `PROTOCOL_VERSION`. | yes |
 | `INTERNAL_ERROR` | Unexpected server failure. Details go to the server log only. | no |
 
@@ -377,6 +414,29 @@ Awareness is **ephemeral presence**:
 | Client calls `session.destroy()` | Its local entry is removed and that removal is broadcast before the socket closes. |
 | No update for `outdatedTimeout` (30 s, y-protocols) | Peers expire the entry locally. Independent safety net for a server that never announced the departure. |
 | Document closed / session ends | Awareness for that document is discarded entirely; it is never persisted. |
+| Atomic room replace (`join-room(B)` while in A) | A's awareness entry for this client is removed and broadcast to A before B is joined, so A never keeps a stale cursor for a client that has left. |
+
+### 9.2 Awareness consumption boundary (frozen by M1-A0.1)
+
+Awareness is the single source of truth for ephemeral presence (§9), which makes
+the *read path* part of the contract:
+
+- **`session.awareness.getStates()` MUST NOT be used as a UI data source.**
+  Its values are `Map<number, unknown>` straight off the wire: unvalidated,
+  possibly missing required fields, possibly hostile. Rendering it directly means
+  rendering unvalidated peer input (another user's name and cursor position).
+- **A2 must read collaborator data through `session.getCollaborators()`** (or an
+  equivalent validated public accessor). That accessor returns `CollaboratorInfo[]`
+  already filtered through `awarenessStateSchema` via `collectValidAwarenessStates`.
+- **Exception, narrowly scoped:** the raw `Awareness` instance may be handed to a
+  Yjs/CodeMirror collaboration binding (e.g. an editor extension that renders
+  remote cursors), because such a binding needs the live `Awareness` object itself.
+  Even then it is used for **collaboration binding only** — never as business UI
+  state, never copied into Redux, never persisted.
+- Anything that renders a collaborator must therefore go through the validated
+  accessor; anything that merely *binds* to Yjs may hold the raw instance.
+
+Enforced by `AGENTS.md` R14 and reviewed by A7.
 
 ## 10. Lifecycle semantics (frozen)
 
@@ -404,11 +464,30 @@ read-only.
 
 ### 10.2 Sync semantics
 
-- The **client initiates** sync. The server only replies to requests and does not
-  initiate conversations (this is the documented `y-protocols` client-server
-  model and it is deliberate, not an omission).
-- `SyncStep1` carries a state vector; `SyncStep2` carries only the missing
-  structs plus the delete set, so reconnect transfers a delta, not the document.
+**InsightHub M1 chooses a client-initiated sync handshake:**
+
+```
+Client SyncStep1 (own state vector)
+  → Server SyncStep2 (the delta the client is missing) + Server SyncStep1
+  → Client SyncStep2
+  → converged
+```
+
+This is a **choice made here**, not a constraint imposed by `y-protocols`. That
+library can express the opposite direction perfectly well; we pick
+client-initiated because it degrades better in a browser: a client knows when it
+is ready (local IndexedDB loaded) and can then ask, whereas a server-initiated
+push would need the server to track per-client readiness and would speculatively
+send data to clients that may never render the document. It also means the
+handshake starts from the client's own reconnection logic, which is where the
+"am I behind?" question actually arises.
+
+Consequences of that choice, which the implementation must respect:
+
+- `SyncStep1` carries a state vector; `SyncStep2` carries only the missing structs
+  plus the delete set, so reconnect transfers a delta, not the document.
+- The server never initiates a sync exchange; it replies to one. (Stated as our
+  rule, not as a general law about Yjs.)
 - Sync is scoped to a room. Yjs messages carry no room name, so the room is bound
   by the socket's `join-room`, never by the frame.
 
@@ -420,8 +499,9 @@ read-only.
 | Duplicate update | Harmless and expected. Yjs updates are idempotent: applying the same update twice is a no-op because structs are identified by `(clientID, clock)`. No business-layer dedup, no OT. |
 | Out-of-order delivery | Safe. CRDT merge is order-independent; a causally-earlier update arriving later still merges. Nothing may assume arrival order equals edit order. |
 | Missed update while disconnected | Recovered by the next `SyncStep1`/`SyncStep2` exchange; that is exactly why sync is state-vector driven rather than a raw update stream. |
-| `leave-room` | Client stops sending/receiving data-plane frames for that document; the server removes it from the room and broadcasts presence. The `Y.Doc` and IndexedDB stay alive. |
-| Socket close | Equivalent to an implicit leave for every room the socket was in: presence broadcast, awareness cleaned up, room membership dropped. |
+| `leave-room` | Client stops sending/receiving data-plane frames for that document; the server removes it from the room and **removes + broadcasts its awareness entry** (the only presence channel — §9). The `Y.Doc` and IndexedDB stay alive. |
+| Socket close | Equivalent to an implicit leave for every room the socket was in: awareness cleanup + broadcast, room membership dropped. No separate presence notification exists or is needed. |
+| `join-room(B)` while in A | Atomic replace (§5.4): A's awareness entry is removed and broadcast before B is joined. |
 | Send to a room never joined | `ROOM_NOT_JOINED`, socket stays open. |
 
 Explicit non-goal: there is **no** business-layer OT, no sequence numbers and no

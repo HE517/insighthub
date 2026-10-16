@@ -11,12 +11,15 @@ import {
 
 describe('error code vocabulary', () => {
   it('exposes exactly the frozen M1-A0 codes', () => {
+    // `ROOM_CARDINALITY_VIOLATION` was added by M1-A0.1 alongside the frozen
+    // one-room-per-socket rule.
     assert.deepEqual([...WS_ERROR_CODE_VALUES].sort(), [
       'FRAME_TOO_LARGE',
       'INTERNAL_ERROR',
       'INVALID_BINARY_FRAME',
       'INVALID_MESSAGE',
       'PROTOCOL_VERSION_MISMATCH',
+      'ROOM_CARDINALITY_VIOLATION',
       'ROOM_NOT_FOUND',
       'ROOM_NOT_JOINED',
       'UNKNOWN_MESSAGE_TYPE',
@@ -42,6 +45,7 @@ describe('error code vocabulary', () => {
     // Recoverable: the connection stays usable.
     expect(isFatalErrorCode(WS_ERROR_CODES.ROOM_NOT_JOINED)).toBe(false);
     expect(isFatalErrorCode(WS_ERROR_CODES.ROOM_NOT_FOUND)).toBe(false);
+    expect(isFatalErrorCode(WS_ERROR_CODES.ROOM_CARDINALITY_VIOLATION)).toBe(false);
     expect(isFatalErrorCode(WS_ERROR_CODES.INTERNAL_ERROR)).toBe(false);
   });
 

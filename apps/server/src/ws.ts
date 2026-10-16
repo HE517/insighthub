@@ -8,7 +8,7 @@
  * frames are JSON control messages, binary frames are collaboration data and are
  * rejected with `ROOM_NOT_JOINED` until a room exists.
  *
- * Still NOT implemented: document rooms, Yjs sync, presence fan-out. M1-A3
+ * Still NOT implemented: document rooms, Yjs sync, awareness fan-out. M1-A3
  * (Realtime Backend) builds those on top of the seams left here.
  */
 import { randomUUID } from 'node:crypto';
@@ -16,6 +16,7 @@ import type { Server } from 'node:http';
 
 import {
   WS_ERROR_CODES,
+  WS_MESSAGE_TYPES,
   createConnectedMessage,
   createErrorMessage,
   parseMessageJson,
@@ -30,6 +31,30 @@ export interface WebSocketHandle {
   /** Number of currently open sockets. */
   clientCount(): number;
   close(): Promise<void>;
+}
+
+/** Known control-plane `type` values, for the invalid-vs-unknown distinction. */
+const KNOWN_MESSAGE_TYPES: ReadonlySet<string> = new Set(Object.values(WS_MESSAGE_TYPES));
+
+/**
+ * True when the raw frame is JSON carrying a `type` this build implements.
+ *
+ * Used only to pick between `INVALID_MESSAGE` (the peer speaks our protocol but
+ * sent a malformed payload) and `UNKNOWN_MESSAGE_TYPE` (the peer is speaking a
+ * protocol version we do not implement, e.g. the deleted `presence` message).
+ * A frame that is not decodable JSON, or has no usable `type`, counts as invalid.
+ */
+function hasKnownMessageType(raw: string): boolean {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    return true; // not a protocol message at all -> INVALID_MESSAGE
+  }
+  if (typeof decoded !== 'object' || decoded === null || !('type' in decoded)) {
+    return true;
+  }
+  return KNOWN_MESSAGE_TYPES.has(String((decoded as { type: unknown }).type));
 }
 
 /**
@@ -86,11 +111,23 @@ export function attachWebSocketServer(server: Server, config: ServerConfig): Web
       }
 
       // Text frames are only validated here until M1-A3 routes join-room.
-      const parsed = parseMessageJson(raw.toString());
+      const text = raw.toString();
+      const parsed = parseMessageJson(text);
+
       if (!parsed.success) {
+        // Distinguish "well-formed envelope with an unknown type" from "not
+        // parseable at all". They are different faults with different fixes, and
+        // the frozen vocabulary has a code for each. This is what makes a stale
+        // client speaking the deleted `presence` message fail loudly instead of
+        // looking like random corruption.
         send(
           ws,
-          createErrorMessage(WS_ERROR_CODES.INVALID_MESSAGE, parsed.error ?? 'invalid message'),
+          createErrorMessage(
+            hasKnownMessageType(text)
+              ? WS_ERROR_CODES.INVALID_MESSAGE
+              : WS_ERROR_CODES.UNKNOWN_MESSAGE_TYPE,
+            parsed.error ?? 'invalid message',
+          ),
         );
         return;
       }

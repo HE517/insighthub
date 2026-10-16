@@ -137,3 +137,67 @@ describe('WebSocket /ws', () => {
     ws.terminate();
   });
 });
+
+/** Send one text frame after the handshake and return the first error reply. */
+async function errorReplyFor(frame: string): Promise<string> {
+  const wsUrl = baseUrl.replace('http://', 'ws://') + config.wsPath;
+  const ws = new WebSocket(wsUrl);
+
+  const error = await new Promise<WsServerMessage>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out waiting for error')), 5000);
+    ws.on('message', (raw: Buffer) => {
+      const parsed = parseServerMessage(JSON.parse(raw.toString()));
+      if (!parsed.success || parsed.data === undefined) {
+        reject(new Error(`server sent an invalid message: ${parsed.error}`));
+        return;
+      }
+      if (parsed.data.type !== 'error') return; // skip the handshake
+      clearTimeout(timer);
+      resolve(parsed.data);
+    });
+    ws.once('open', () => ws.send(frame));
+    ws.once('error', reject);
+  });
+
+  ws.close();
+  assert.equal(error.type, 'error');
+  return error.type === 'error' ? error.payload.code : 'unreachable';
+}
+
+describe('control-plane error classification (M1-A0.1)', () => {
+  it('reports the deleted presence message as UNKNOWN_MESSAGE_TYPE', async () => {
+    // M1-A0.1 removed the presence message. A stale client must fail loudly with
+    // the accurate code, not be mistaken for random corruption.
+    assert.equal(
+      await errorReplyFor(
+        JSON.stringify({
+          type: 'presence',
+          payload: { documentId: 'doc-1', connectionId: 'c1', state: 'joined' },
+          ts: '2026-01-01T00:00:00.000Z',
+        }),
+      ),
+      WS_ERROR_CODES.UNKNOWN_MESSAGE_TYPE,
+    );
+  });
+
+  it('reports malformed JSON as INVALID_MESSAGE', async () => {
+    assert.equal(await errorReplyFor('{ not json'), WS_ERROR_CODES.INVALID_MESSAGE);
+  });
+
+  it('reports a known type with a bad payload as INVALID_MESSAGE', async () => {
+    // `join-room` is implemented, so this is a payload fault, not an unknown type.
+    assert.equal(
+      await errorReplyFor(
+        JSON.stringify({ type: 'join-room', payload: {}, ts: '2026-01-01T00:00:00.000Z' }),
+      ),
+      WS_ERROR_CODES.INVALID_MESSAGE,
+    );
+  });
+
+  it('reports a JSON frame with no type field as INVALID_MESSAGE', async () => {
+    assert.equal(
+      await errorReplyFor(JSON.stringify({ payload: {} })),
+      WS_ERROR_CODES.INVALID_MESSAGE,
+    );
+  });
+});

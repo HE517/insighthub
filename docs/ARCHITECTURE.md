@@ -121,6 +121,13 @@ gate editing on `connectionStatus`; "offline" is a normal editing mode, not an
 error path (`AGENTS.md` R10). The exact sequence and transport semantics are in
 `docs/CONTRACTS.md` §10.
 
+**InsightHub M1 chooses a client-initiated sync handshake.** `y-protocols` does not
+force this direction — we pick it because a browser client knows when it is ready
+(local persistence loaded) and can ask, whereas a server-initiated push would need
+per-client readiness tracking and would speculatively send document data to clients
+that may never render it. The server therefore replies to a sync exchange rather
+than starting one. Stated as our rule, not as a law about Yjs.
+
 ## 3. AI edit path
 
 ```
@@ -180,16 +187,27 @@ Undo is **local-scoped**, enforced by origin rather than by convention:
 - Nothing may implement "undo" by restoring a snapshot of document text — that
   would rewrite remote history.
 
-## 3.2 Awareness rule (frozen by M1-A0)
+## 3.2 Awareness rule (frozen by M1-A0; read path tightened by M1-A0.1)
 
 Awareness carries **ephemeral presence only**: user identity, cursor, selection
-and transient status.
+and transient status — and it is the **single** source of truth for all of them.
+There is no control-plane `presence` message; a second channel for the same fact
+could only disagree with awareness, leaving the UI to pick a winner.
 
 - Never persisted to IndexedDB, never merged into `Y.Text`, never document content.
 - It is untrusted input from peers (rendered as another user's name and cursor),
   so it is validated against the shared schema before use.
 - On disconnect the entry is removed and the departure broadcast; peers must not
   keep a ghost cursor. Full cleanup table: `docs/CONTRACTS.md` §9.1.
+
+**Read-path rule (see also `AGENTS.md` R14):** UI code must not read
+`session.awareness.getStates()` directly — that map holds raw, unvalidated peer
+payloads. Collaborator UI data comes from `session.getCollaborators()`, which
+returns schema-validated `CollaboratorInfo[]`. The raw `Awareness` instance may be
+handed to a Yjs/CodeMirror collaboration binding (an editor extension needs the
+live object), but even then it is a *binding* input, never business UI state,
+never copied into Redux, never persisted. Contract:
+`docs/CONTRACTS.md` §9.2.
 
 ## 4. Package boundaries and responsibilities
 
@@ -249,12 +267,17 @@ kind** (text vs binary) rather than by an in-band tag.
 { type: string, payload: object, requestId?: string, ts: ISO8601 }
 ```
 
-Carries `connected`, `join-room`, `room-joined`, `leave-room`, `presence`, `error`.
+Carries `connected`, `join-room`, `room-joined`, `leave-room`, `error`.
 
 - `payload` is always an object, never a bare primitive.
 - `requestId` correlates a response with its request.
 - Unknown `type` values are **rejected**, not ignored, so protocol drift fails
   loudly.
+- **Ephemeral presence is deliberately absent from this plane.** There is no
+  `presence` message: collaborator identity, cursor, selection and online state
+  come from Yjs awareness on the data plane, and the server broadcasts awareness
+  removal when a client leaves. One fact, one channel
+  (`docs/DECISIONS.md` D-020, `docs/CONTRACTS.md` §9).
 
 **Data plane — BINARY frames.** Yjs sync and awareness, carried as raw bytes:
 
@@ -270,13 +293,27 @@ bytes 1..n : payload
   reimplemented.
 - Both planes share one `PROTOCOL_VERSION`.
 
+### 5.1 Room cardinality: one socket, one document room
+
+**One WebSocket connection carries at most one active document room.** This is a
+direct consequence of the data plane: a binary Yjs frame has no `documentId`, so
+the room must be implied by the socket. Allowing two simultaneous rooms would make
+every collaboration frame ambiguous.
+
+A `join-room(B)` received while the socket is already in room A is resolved by
+**atomic replace** — leave A and join B in a single transition, then acknowledge B.
+Switching documents is routine, and a two-round-trip "leave, then join" would
+introduce a window in which the client belongs to no room, which is where races and
+dropped replies strand the UI. The refusal alternative exists as
+`ROOM_CARDINALITY_VIOLATION` but is not the frozen default.
+
 Consequences worth stating explicitly:
 
 - A violation on the data plane is reported on the **control plane** (a text
   `error` frame), so a text frame does not imply a text-frame cause.
 - Data-plane frames before a successful `join-room` get `ROOM_NOT_JOINED`.
 - Framing, limits, malformed/unknown behaviour and the error vocabulary are frozen
-  in `docs/CONTRACTS.md` §6–§7.
+  in `docs/CONTRACTS.md` §6–§7; the cardinality table is §5.4.
 
 ## 6. State ownership summary
 

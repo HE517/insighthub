@@ -8,7 +8,8 @@ import { wsErrorCodeSchema, type WsErrorCode } from './errors.js';
  * See `docs/ARCHITECTURE.md` §5 for the two-plane model:
  *
  * - **Control plane (TEXT frames)** — this file. JSON envelope below. Carries
- *   `connected`, `join-room`, `room-joined`, `leave-room`, `presence`, `error`.
+ *   `connected`, `join-room`, `room-joined`, `leave-room`, `error`. (The M1-plan
+ *   `presence` message was removed by M1-A0.1 — see `PRESENCE_SOURCE_OF_TRUTH`.)
  * - **Data plane (BINARY frames)** — `binary-frame.ts`. Carries Yjs sync and
  *   awareness as raw binary; never base64-wrapped into this JSON envelope.
  *
@@ -40,17 +41,35 @@ export const WS_MESSAGE_TYPES = {
   connected: 'connected',
   /** client -> server: join a document room. M1. */
   joinRoom: 'join-room',
-  /** server -> client: room joined, carries current revision. M1. */
+  /** server -> client: room joined (or atomically replaced). M1. */
   roomJoined: 'room-joined',
   /** client -> server: leave a document room. M1. */
   leaveRoom: 'leave-room',
-  /** server -> client: peer presence changed. M1. */
-  presence: 'presence',
   /** server -> client: server-side failure. */
   error: 'error',
 } as const;
 
 export type WsMessageType = (typeof WS_MESSAGE_TYPES)[keyof typeof WS_MESSAGE_TYPES];
+
+/**
+ * Room cardinality rule (frozen by M1-A0.1).
+ *
+ * **One socket carries at most ONE active document room.**
+ *
+ * This is forced by the data plane, not a preference: binary Yjs frames carry no
+ * `documentId`, so the room is implied by the socket. Allowing two concurrent
+ * rooms on one socket would make every binary frame ambiguous.
+ *
+ * The chosen transition when `join-room(B)` arrives while the socket is already in
+ * room A is **atomic replace**: the server leaves A and joins B in one step, then
+ * answers with B's `room-joined`. See `docs/CONTRACTS.md` §5.4 for the full rule.
+ */
+export const ROOM_CARDINALITY = {
+  /** At most one active room per socket. */
+  maxActiveRoomsPerSocket: 1,
+  /** `join-room` for a second document atomically replaces the current room. */
+  joinWhileInRoom: 'atomic-replace',
+} as const;
 
 /* ------------------------------------------------------------------ *
  * Payloads
@@ -89,13 +108,12 @@ export const roomJoinedPayloadSchema = z.object({
   /** Server's authoritative connection id for this socket. */
   connectionId: z.string().min(1),
   /**
-   * Number of Yjs document updates the server has applied to this room so far.
-   * M1 rooms are in-memory only, so this is a room-activity counter rather than a
-   * persisted document revision; it exists to make sync order observable in logs
-   * and tests. `DocumentMeta.revision` (M2, stored) is the durable equivalent.
+   * Connection ids of peers already in the room (excluding self).
+   *
+   * This is the **initial** roster only. Ongoing collaborator presence is NOT
+   * carried by control-plane messages — it comes from Yjs awareness, which is the
+   * single source of truth for ephemeral presence (`docs/CONTRACTS.md` §9).
    */
-  revision: z.number().int().nonnegative(),
-  /** Connection ids of peers already in the room (excluding self). */
   peers: z.array(z.string()),
 });
 
@@ -107,13 +125,20 @@ export const leaveRoomPayloadSchema = z.object({
 
 export type LeaveRoomPayload = z.infer<typeof leaveRoomPayloadSchema>;
 
-export const presencePayloadSchema = z.object({
-  documentId: z.string().min(1),
-  connectionId: z.string().min(1),
-  state: z.enum(['joined', 'left']),
-});
-
-export type PresencePayload = z.infer<typeof presencePayloadSchema>;
+/**
+ * NOTE (M1-A0.1): the M0/M1-plan `presence` control message was **removed**.
+ *
+ * Ephemeral presence — identity, cursor, selection, who is online — has exactly
+ * one source of truth: **Yjs awareness** over the binary data plane. A second
+ * control-plane presence channel would be a competing truth for the same fact:
+ * the two could disagree (awareness says gone, presence says joined), and the UI
+ * would have to pick a winner. The server therefore removes a departing client's
+ * awareness entry and broadcast that removal, which is what peers observe.
+ *
+ * Room membership counts remain server-side room-registry state and need no
+ * message. `room-joined.peers` provides the initial roster.
+ */
+export const PRESENCE_SOURCE_OF_TRUTH = 'yjs-awareness' as const;
 
 export const wsErrorPayloadSchema = z.object({
   /** Frozen vocabulary from `errors.ts`; the code is the contract. */
@@ -159,11 +184,6 @@ export const wsServerMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal(WS_MESSAGE_TYPES.roomJoined),
     payload: roomJoinedPayloadSchema,
-    ...envelopeBase,
-  }),
-  z.object({
-    type: z.literal(WS_MESSAGE_TYPES.presence),
-    payload: presencePayloadSchema,
     ...envelopeBase,
   }),
   z.object({
@@ -286,12 +306,4 @@ export function createRoomJoinedMessage(
   options: CreateEnvelopeOptions = {},
 ): Extract<WsServerMessage, { type: 'room-joined' }> {
   return createEnvelope(WS_MESSAGE_TYPES.roomJoined, payload, options);
-}
-
-/** Build a presence change notification. */
-export function createPresenceMessage(
-  payload: PresencePayload,
-  options: CreateEnvelopeOptions = {},
-): Extract<WsServerMessage, { type: 'presence' }> {
-  return createEnvelope(WS_MESSAGE_TYPES.presence, payload, options);
 }

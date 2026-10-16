@@ -25,6 +25,13 @@ export const WS_ERROR_CODES = {
   /** Binary collaboration data arrived before a successful `join-room`. */
   ROOM_NOT_JOINED: 'ROOM_NOT_JOINED',
   /**
+   * A `join-room` attempted a second concurrent room on a socket that already had
+   * one. The frozen default transition is **atomic replace**, so a conforming
+   * server rarely emits this; it exists so an implementation may explicitly refuse
+   * instead of replacing, rather than inventing an error string.
+   */
+  ROOM_CARDINALITY_VIOLATION: 'ROOM_CARDINALITY_VIOLATION',
+  /**
    * The requested document room does not exist.
    * M1 has no persisted document store, so in M1 this code means "the server
    * refused to open a room for this documentId" (e.g. unknown id after M2 adds a

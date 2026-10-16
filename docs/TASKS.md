@@ -86,19 +86,49 @@ pnpm --filter @insighthub/server verify:m0
 
 Status: **contract frozen (M1-A0 done)**; A1 / A2 / A3 not started.
 
+### M1-A0.1 — Pre-Parallel Cleanup ✅ done
+
+| ID | Task | Owner | Status |
+| --- | --- | --- | --- |
+| M1-A0.1-1 | Freeze room cardinality: one socket = one room, atomic replace on re-join | A0 | done |
+| M1-A0.1-2 | Delete the duplicate presence channel (TEXT `presence` removed) | A0 | done |
+| M1-A0.1-3 | Remove `RoomJoinedPayload.revision` (room counter, no M1 consumer) | A0 | done |
+| M1-A0.1-4 | Add `yjs` + `y-protocols` to `apps/server` | A0 | done |
+| M1-A0.1-5 | Restate sync handshake as a deliberate M1 choice (client-initiated) | A0 | done |
+| M1-A0.1-6 | Awareness consumption boundary (`getCollaborators()` only for UI) | A0 | done |
+| M1-A0.1-7 | Regression tests + full validation | A0 | done |
+
+### M1-A0.1 validation
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Install | `pnpm install` | lockfile up to date |
+| Typecheck | `pnpm typecheck` | 3/3 packages `Done` |
+| Unit tests | `pnpm test:unit` | 67 passed (6 files) |
+| Server integration | `pnpm test:server` | 9 passed |
+| Build | `pnpm build` | shared + server `tsc`, web `vite build` |
+| Runtime | `pnpm --filter @insighthub/server verify:m0` | 7/7 checks |
+
+Also implemented in this pass (the doc claimed it, the code did not do it): the
+server now distinguishes `UNKNOWN_MESSAGE_TYPE` from `INVALID_MESSAGE`, so the
+deleted `presence` message fails with the accurate code. Covered by four
+integration tests (legacy `presence`, malformed JSON, known type with bad payload,
+JSON with no `type`). A3 inherits this classification for its room routing.
+
 ### The contract is frozen — do not renegotiate it in code
 
-M1-A0 froze everything the three parallel tasks touch. Work from these, not from
-memory:
+M1-A0/M1-A0.1 froze everything the three parallel tasks touch. Work from these, not
+from memory:
 
 | Frozen artefact | Where |
 | --- | --- |
 | Binary frame framing, limits, malformed behaviour | `packages/shared/src/binary-frame.ts`, `docs/CONTRACTS.md` §6 |
-| Control-plane messages (`join-room`, `room-joined`, `leave-room`, `presence`) | `packages/shared/src/protocol.ts`, `docs/CONTRACTS.md` §5 |
-| Error code vocabulary | `packages/shared/src/errors.ts`, `docs/CONTRACTS.md` §7 |
+| Control-plane messages (`join-room`, `room-joined`, `leave-room`) — **no `presence`** | `packages/shared/src/protocol.ts`, `docs/CONTRACTS.md` §5 |
+| Room cardinality (one socket = one room, atomic replace) | `docs/CONTRACTS.md` §5.4, `protocol.ts` `ROOM_CARDINALITY` |
+| Error code vocabulary (9 codes) | `packages/shared/src/errors.ts`, `docs/CONTRACTS.md` §7 |
 | A1 ↔ A2 session interface | `packages/shared/src/collab-session.ts`, `docs/CONTRACTS.md` §8 |
 | A1 ↔ A3 wire semantics + lifecycle | `docs/CONTRACTS.md` §6, §10 |
-| Awareness contract + cleanup rules | `packages/shared/src/awareness-state.ts`, `docs/CONTRACTS.md` §9 |
+| Awareness contract, cleanup rules, **consumption boundary** | `awareness-state.ts`, `docs/CONTRACTS.md` §9, §9.1, §9.2 |
 | Source-of-truth rule | `docs/ARCHITECTURE.md` §0 |
 
 If a task needs something here changed: **stop and request Supervisor approval**
@@ -186,31 +216,36 @@ agents.
 
 - **Goal:** the server relays Yjs updates per document room with a correct
   connection lifecycle and no cross-room leakage.
-- **Scope:** room registry keyed by `documentId`; `join-room`/`leave-room` routing;
-  per-room `Y.Doc`; `SyncStep1`→`SyncStep2`+`SyncStep1` handling via the frozen
-  codec; awareness fan-out and departure cleanup; heartbeat + dead-socket
-  termination; slow-socket backpressure; typed errors from the frozen vocabulary.
+- **Scope:** room registry keyed by `documentId`; `join-room`/`leave-room` routing
+  with **atomic replace** on re-join (§5.4); per-room `Y.Doc`;
+  `SyncStep1`→`SyncStep2`+`SyncStep1` handling via the frozen codec; awareness
+  fan-out and departure cleanup; heartbeat + dead-socket termination; slow-socket
+  backpressure; typed errors from the frozen vocabulary.
 - **Owned Files:**
   - `apps/server/src/rooms/**` (new)
   - `apps/server/src/ws.ts`
   - `apps/server/src/rooms/*.test.ts`, `apps/server/src/ws.rooms.test.ts` (new)
 - **Do Not Touch:** `packages/shared/**`, `apps/server/src/{app,config,index}.ts`,
   `apps/web/**`, any `package.json`.
-- **Dependencies:** M1-A0 frozen. `yjs` + `y-protocols` must be added to
-  `apps/server` — **A0 adds them on request** (`package.json` is review-gated).
+- **Dependencies:** M1-A0 frozen. `yjs` + `y-protocols` are **already installed** in
+  `apps/server` by M1-A0.1 — do not edit `package.json`.
 - **Acceptance Criteria:**
   1. Two sockets in one room converge after concurrent edits.
   2. Sockets in different rooms never receive each other's updates.
   3. A socket that dies without a close frame is reaped within the heartbeat
-     window, and its peers get a `presence` `left` plus awareness cleanup.
+     window and its peers see its **awareness entry removed**, not a presence
+     message (there is none).
   4. Reconnect sends only the missing delta, not the full document (assert byte
      size shrinks).
   5. Malformed / oversized binary frames produce `INVALID_BINARY_FRAME` /
      `FRAME_TOO_LARGE` and close the socket; a binary frame before `join-room`
      produces `ROOM_NOT_JOINED` **without** closing.
-  6. A peer that joins with the wrong `protocolVersion` gets
+  6. A peer joining with the wrong `protocolVersion` gets
      `PROTOCOL_VERSION_MISMATCH`.
-  7. Integration tests in `node:test` on ephemeral ports.
+  7. `join-room(B)` while in A performs an atomic replace: A's awareness entry is
+     removed and broadcast, B is joined, and no state exists where the socket is in
+     both or neither. `leave-room(B)` while in A is a no-op.
+  8. Integration tests in `node:test` on ephemeral ports.
 
 ### Serialization points
 

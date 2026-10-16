@@ -58,17 +58,19 @@ export function useRealtimeChannel(url: string = resolveWsUrl()): void {
           dispatch(realtimeActions.protocolError(parsed.error ?? 'invalid server message'));
           return;
         }
-        if (parsed.data.type === 'connected') {
+        // Every control-plane message this build can receive is recorded. There is
+        // no `presence` message: ephemeral presence comes from Yjs awareness only.
+        const message = parsed.data;
+        if (message.type === 'connected') {
           attemptRef.current = 0;
-          dispatch(connectionActions.connected({ connectionId: parsed.data.payload.connectionId }));
+          dispatch(connectionActions.connected({ connectionId: message.payload.connectionId }));
         }
         if (
-          parsed.data.type === 'connected' ||
-          parsed.data.type === 'room-joined' ||
-          parsed.data.type === 'presence' ||
-          parsed.data.type === 'error'
+          message.type === 'connected' ||
+          message.type === 'room-joined' ||
+          message.type === 'error'
         ) {
-          dispatch(realtimeActions.serverMessageReceived(parsed.data));
+          dispatch(realtimeActions.serverMessageReceived(message));
         }
       };
 

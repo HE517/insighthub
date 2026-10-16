@@ -2,16 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import { WS_ERROR_CODES } from './errors.js';
 import {
+  PRESENCE_SOURCE_OF_TRUTH,
   PROTOCOL_VERSION,
+  ROOM_CARDINALITY,
   WS_MESSAGE_TYPES,
   createConnectedMessage,
   createEnvelope,
   createErrorMessage,
-  createPresenceMessage,
   createRoomJoinedMessage,
   parseClientMessage,
   parseMessageJson,
   parseServerMessage,
+  roomJoinedPayloadSchema,
 } from './protocol.js';
 
 const TS = '2026-01-01T00:00:00.000Z';
@@ -157,22 +159,17 @@ describe('error message contract', () => {
   });
 });
 
-describe('room-joined and presence contracts', () => {
-  it('builds a room-joined acknowledgement', () => {
+describe('room-joined contract', () => {
+  it('builds a room-joined acknowledgement carrying the initial peer roster', () => {
     const parsed = parseServerMessage(
       createRoomJoinedMessage(
-        {
-          documentId: 'doc-1',
-          connectionId: 'conn-1',
-          revision: 3,
-          peers: ['conn-0'],
-        },
+        { documentId: 'doc-1', connectionId: 'conn-1', peers: ['conn-0'] },
         { ts: TS },
       ),
     );
     expect(parsed.success).toBe(true);
     if (parsed.data?.type === 'room-joined') {
-      expect(parsed.data.payload.revision).toBe(3);
+      expect(parsed.data.payload.connectionId).toBe('conn-1');
       expect(parsed.data.payload.peers).toEqual(['conn-0']);
     }
   });
@@ -180,31 +177,63 @@ describe('room-joined and presence contracts', () => {
   it('rejects a room-joined without connectionId', () => {
     const parsed = parseServerMessage({
       type: 'room-joined',
-      payload: { documentId: 'doc-1', revision: 0, peers: [] },
+      payload: { documentId: 'doc-1', peers: [] },
       ts: TS,
     });
     expect(parsed.success).toBe(false);
   });
 
-  it('builds a presence notification', () => {
-    const parsed = parseServerMessage(
-      createPresenceMessage(
-        { documentId: 'doc-1', connectionId: 'conn-2', state: 'joined' },
+  it('has no room counter field that could be mistaken for a document revision', () => {
+    // M1-A0.1 removed `RoomJoinedPayload.revision`: it was a room-activity counter
+    // with no M1 consumer, and the name collided with the durable
+    // `DocumentMeta.revision` (the AI staleness anchor). An unknown key is stripped
+    // by default, so assert on the schema shape instead.
+    expect(Object.keys(roomJoinedPayloadSchema.shape).sort()).toEqual([
+      'connectionId',
+      'documentId',
+      'peers',
+    ]);
+  });
+});
+
+describe('presence has a single source of truth (M1-A0.1)', () => {
+  it('declares Yjs awareness as the presence source of truth', () => {
+    expect(PRESENCE_SOURCE_OF_TRUTH).toBe('yjs-awareness');
+  });
+
+  it('no longer exposes a presence message type', () => {
+    expect(Object.values(WS_MESSAGE_TYPES)).not.toContain('presence');
+    expect(WS_MESSAGE_TYPES).not.toHaveProperty('presence');
+  });
+
+  it('rejects a legacy presence message as an unknown type', () => {
+    // The M1-plan `presence` envelope must now fail loudly rather than being
+    // silently ignored, so a stale client is caught instead of half-working.
+    const parsed = parseServerMessage({
+      type: 'presence',
+      payload: { documentId: 'doc-1', connectionId: 'conn-2', state: 'joined' },
+      ts: TS,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('room cardinality (M1-A0.1)', () => {
+  it('freezes at most one active room per socket, with atomic replace on re-join', () => {
+    expect(ROOM_CARDINALITY.maxActiveRoomsPerSocket).toBe(1);
+    expect(ROOM_CARDINALITY.joinWhileInRoom).toBe('atomic-replace');
+  });
+
+  it('accepts a join-room payload for a second document (the server decides the transition)', () => {
+    // The transition is a server-side rule, not a payload rule: joining document B
+    // while in A is a valid message. It is the server that atomically leaves A.
+    const parsed = parseClientMessage(
+      createEnvelope(
+        WS_MESSAGE_TYPES.joinRoom,
+        { documentId: 'doc-B', protocolVersion: PROTOCOL_VERSION, mode: 'readwrite' },
         { ts: TS },
       ),
     );
     expect(parsed.success).toBe(true);
-    if (parsed.data?.type === 'presence') {
-      expect(parsed.data.payload.state).toBe('joined');
-    }
-  });
-
-  it('rejects an unknown presence state', () => {
-    const parsed = parseServerMessage({
-      type: 'presence',
-      payload: { documentId: 'doc-1', connectionId: 'conn-2', state: 'idle' },
-      ts: TS,
-    });
-    expect(parsed.success).toBe(false);
   });
 });

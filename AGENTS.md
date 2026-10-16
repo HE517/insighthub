@@ -16,21 +16,23 @@ Read order before doing anything:
 
 ## 1. Non-negotiable engineering rules
 
-| Rule | Detail                                                                                                                                                                                                                                          |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1   | `packages/shared/**` is the **only** source of truth for types crossing web/server. Never re-declare a shared type inside an app.                                                                                                               |
-| R2   | Never edit another agent's owned files. If you need a change there, file a request in your report under `Need Supervisor Decision`.                                                                                                             |
-| R3   | Keep the dependency surface small. No new production dependency without Supervisor approval.                                                                                                                                                    |
-| R4   | No secrets, tokens, passwords or API keys in code, docs, fixtures or tests.                                                                                                                                                                     |
-| R5   | Every acceptance criterion you claim must be backed by a command you actually ran, with its real output. "Should work" is not evidence.                                                                                                         |
-| R6   | Never mark a task done while a typecheck, test or build is failing.                                                                                                                                                                             |
-| R7   | Do not refactor unrelated code in the same change as a feature. One concern per change.                                                                                                                                                         |
-| R8   | AI features are proposals, not state. Accepting an AI edit must go through a Yjs transaction; the AI module must never write final document content into React/Redux state.                                                                     |
-| R9   | Every network call takes an `AbortSignal` and must handle the aborted/stale case.                                                                                                                                                               |
-| R10  | Offline is a first-class state, not an error path. Editing must not be silently lost.                                                                                                                                                           |
-| R11  | **Document content has exactly one source of truth: `Y.Doc` / `Y.Text`.** Never mirror the body into React state or Redux. Redux may hold only `activeDocumentId`, metadata, permission, connection status, collaborator metadata and UI state. |
-| R12  | The WebSocket has two planes: **TEXT = JSON control protocol**, **BINARY = Yjs sync + awareness**. Never base64 a Yjs update into JSON, and never invent a second framing scheme — always use `packages/shared/src/binary-frame.ts`.            |
-| R13  | A local undo reverts only local/AI-origin edits. Never undo a remote collaborator's change, and never implement undo as a text-snapshot restore. Use `UNDO_TRACKED_ORIGINS`.                                                                    |
+| Rule | Detail                                                                                                                                                                                                                                                                                      |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1   | `packages/shared/**` is the **only** source of truth for types crossing web/server. Never re-declare a shared type inside an app.                                                                                                                                                           |
+| R2   | Never edit another agent's owned files. If you need a change there, file a request in your report under `Need Supervisor Decision`.                                                                                                                                                         |
+| R3   | Keep the dependency surface small. No new production dependency without Supervisor approval.                                                                                                                                                                                                |
+| R4   | No secrets, tokens, passwords or API keys in code, docs, fixtures or tests.                                                                                                                                                                                                                 |
+| R5   | Every acceptance criterion you claim must be backed by a command you actually ran, with its real output. "Should work" is not evidence.                                                                                                                                                     |
+| R6   | Never mark a task done while a typecheck, test or build is failing.                                                                                                                                                                                                                         |
+| R7   | Do not refactor unrelated code in the same change as a feature. One concern per change.                                                                                                                                                                                                     |
+| R8   | AI features are proposals, not state. Accepting an AI edit must go through a Yjs transaction; the AI module must never write final document content into React/Redux state.                                                                                                                 |
+| R9   | Every network call takes an `AbortSignal` and must handle the aborted/stale case.                                                                                                                                                                                                           |
+| R10  | Offline is a first-class state, not an error path. Editing must not be silently lost.                                                                                                                                                                                                       |
+| R11  | **Document content has exactly one source of truth: `Y.Doc` / `Y.Text`.** Never mirror the body into React state or Redux. Redux may hold only `activeDocumentId`, metadata, permission, connection status, collaborator metadata and UI state.                                             |
+| R12  | The WebSocket has two planes: **TEXT = JSON control protocol**, **BINARY = Yjs sync + awareness**. Never base64 a Yjs update into JSON, and never invent a second framing scheme — always use `packages/shared/src/binary-frame.ts`.                                                        |
+| R13  | A local undo reverts only local/AI-origin edits. Never undo a remote collaborator's change, and never implement undo as a text-snapshot restore. Use `UNDO_TRACKED_ORIGINS`.                                                                                                                |
+| R14  | Collaborator UI data must come from the schema-validated `session.getCollaborators()`, never from `session.awareness.getStates()`. The raw `Awareness` instance is allowed only as input to a Yjs/CodeMirror collaboration binding — never business UI state, never Redux, never persisted. |
+| R15  | One socket carries **at most one** active document room. A second `join-room` means atomic replace, not a second concurrent room. Never route a binary frame without an unambiguous room.                                                                                                   |
 
 ## 2. Supervisor Review Required
 
@@ -76,8 +78,9 @@ avoiding re-render storms on every keystroke).
 
 ### A3 — Realtime Backend Agent
 
-Owns Express + `ws`: document rooms, connection lifecycle, join/leave, presence,
-fan-out, heartbeat/termination, and backpressure on slow sockets.
+Owns Express + `ws`: document rooms, connection lifecycle, join/leave, atomic room
+replacement, awareness fan-out and cleanup, heartbeat/termination, and backpressure
+on slow sockets. Presence is **not** a control-plane concern (R14/D-021).
 
 ### A4 — AI Document Agent
 
@@ -153,6 +156,18 @@ Need Supervisor Decision: <questions or approval requests; "none" if none>
 - A1 must not import editor/CodeMirror code into `collab/**`.
 - A session becomes `active` from **local** state; it must never wait on the
   network before the editor is usable.
+- **Presence read path (R14):** render collaborators from
+  `session.getCollaborators()` (schema-validated). Do not read
+  `session.awareness.getStates()` for UI — it is `Map<number, unknown>` straight
+  off the wire. Passing the raw `Awareness` to an editor binding is the single
+  allowed exception, and it is a binding input only.
+- **Presence has exactly one channel** (Yjs awareness). Do not add a control-plane
+  presence message: the M1-plan `presence` type was deleted deliberately
+  (`docs/DECISIONS.md` D-021).
+- **Room cardinality (R15):** one socket, one room. `join-room` for a different
+  document atomically replaces the current room. Never design a flow needing two
+  concurrent rooms on one socket, and never route a binary frame without an
+  unambiguous room.
 
 ## 7. Scope discipline
 

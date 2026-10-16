@@ -35,6 +35,12 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.22.0
+      y-protocols:
+        specifier: ^1.0.7
+        version: 1.0.7(yjs@13.6.33)
+      yjs:
+        specifier: ^13.6.33
+        version: 13.6.33
       zod:
         specifier: ^3.25.76
         version: 3.25.76
