@@ -12,15 +12,21 @@ import {
   FRAME_TYPES,
   MAX_BINARY_FRAME_BYTES,
   MIN_BINARY_FRAME_BYTES,
+  SYNC_MESSAGE_TYPES,
   UNDO_TRACKED_ORIGINS,
   TRANSACTION_ORIGINS,
   decodeBinaryFrame,
+  decodeSyncFrame,
   encodeAwarenessFrame,
   encodeSyncStep1,
   encodeSyncStep2,
   encodeSyncUpdate,
   frameByteLength,
   isBinaryFrame,
+  readSyncMessageType,
+  readSyncStep1StateVector,
+  readSyncStep2Payload,
+  readSyncUpdatePayload,
   varUintByteLength,
 } from './binary-frame.js';
 import { WS_ERROR_CODES } from './errors.js';
@@ -387,5 +393,109 @@ describe('binary frame codec — helpers', () => {
     );
     expect(UNDO_TRACKED_ORIGINS).not.toContain(TRANSACTION_ORIGINS.remote);
     expect(UNDO_TRACKED_ORIGINS).not.toContain(TRANSACTION_ORIGINS.persistence);
+  });
+});
+
+/**
+ * The sync accessors exist so consumers (the server's room layer, tests, tooling) never
+ * write their own varint reader. `apps/server` previously had one, which is exactly the
+ * duplication these tests lock down (`AGENTS.md` R12).
+ */
+describe('sync accessors (M1-A0.2)', () => {
+  it('keeps the message type constants equal to y-protocols', () => {
+    assert.equal(SYNC_MESSAGE_TYPES.step1, syncProtocol.messageYjsSyncStep1);
+    assert.equal(SYNC_MESSAGE_TYPES.step2, syncProtocol.messageYjsSyncStep2);
+    assert.equal(SYNC_MESSAGE_TYPES.update, syncProtocol.messageYjsUpdate);
+  });
+
+  it('identifies the kind of each sync frame', () => {
+    const doc = makeDoc();
+    const step1 = decodeSyncFrame(encodeSyncStep1(doc));
+    const step2 = decodeSyncFrame(encodeSyncStep2(doc));
+    const update = decodeSyncFrame(encodeSyncUpdate(Y.encodeStateAsUpdate(doc)));
+    assert.ok(step1 && step2 && update);
+
+    assert.equal(readSyncMessageType(step1), SYNC_MESSAGE_TYPES.step1);
+    assert.equal(readSyncMessageType(step2), SYNC_MESSAGE_TYPES.step2);
+    assert.equal(readSyncMessageType(update), SYNC_MESSAGE_TYPES.update);
+    doc.destroy();
+  });
+
+  it('extracts exactly the state vector y-protocols wrote', () => {
+    const doc = makeDoc('some content for the vector');
+    const frame = decodeSyncFrame(encodeSyncStep1(doc));
+    assert.ok(frame);
+
+    const vector = readSyncStep1StateVector(frame);
+    assert.ok(vector !== null, 'a SyncStep1 frame must yield its state vector');
+    // Byte-faithful, not merely parseable.
+    assert.deepEqual([...(vector as Uint8Array)], [...Y.encodeStateVector(doc)]);
+    assert.ok((vector as Uint8Array).byteLength > 0);
+    doc.destroy();
+  });
+
+  it('extracts the raw update from an Update frame, and proves the frame is not the update', () => {
+    const doc = makeDoc('payload');
+    const update = Y.encodeStateAsUpdate(doc);
+    const frame = decodeSyncFrame(encodeSyncUpdate(update));
+    assert.ok(frame);
+
+    const extracted = readSyncUpdatePayload(frame);
+    assert.ok(extracted !== null, 'an Update frame must yield its update');
+    assert.deepEqual([...(extracted as Uint8Array)], [...update]);
+
+    // The frame body starts with the sync message type, so it is NOT an update. This is the
+    // mistake the accessor exists to prevent: applying the body directly makes yjs read a
+    // struct reference in the wrong format.
+    assert.notDeepEqual([...frame.bytes], [...update]);
+
+    // And the extracted bytes are what `applyUpdate` accepts, which the body is not.
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, extracted as Uint8Array, 'test');
+    assert.equal(peer.getText(DOCUMENT_TEXT_KEY).toString(), 'payload');
+    peer.destroy();
+    doc.destroy();
+  });
+
+  it('returns null when the accessor does not match the frame kind', () => {
+    const doc = makeDoc('x');
+    const step1 = decodeSyncFrame(encodeSyncStep1(doc));
+    const step2 = decodeSyncFrame(encodeSyncStep2(doc));
+    const update = decodeSyncFrame(encodeSyncUpdate(Y.encodeStateAsUpdate(doc)));
+    assert.ok(step1 && step2 && update);
+
+    assert.equal(readSyncStep1StateVector(step2), null);
+    assert.equal(readSyncUpdatePayload(step1), null);
+    assert.equal(readSyncStep2Payload(update), null);
+    assert.ok(readSyncStep2Payload(step2) !== null);
+    doc.destroy();
+  });
+
+  it('exposes the SyncStep2 payload, which is an update envelope and delete set', () => {
+    const doc = makeDoc('step two payload');
+    const frame = decodeSyncFrame(encodeSyncStep2(doc));
+    assert.ok(frame);
+
+    const payload = readSyncStep2Payload(frame);
+    assert.ok(payload !== null);
+    // Unlike an Update frame, a SyncStep2 body is an update envelope, so applying it
+    // directly is valid — but it is still not a bare update of the same bytes.
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, payload as Uint8Array, 'test');
+    assert.equal(peer.getText(DOCUMENT_TEXT_KEY).toString(), 'step two payload');
+    peer.destroy();
+    doc.destroy();
+  });
+
+  it('returns null from decodeSyncFrame for a non-sync or invalid frame', () => {
+    assert.equal(decodeSyncFrame(new Uint8Array(0)), null);
+    assert.equal(decodeSyncFrame(encodeAwarenessFrame(new Uint8Array([1, 0]))), null);
+
+    // A multi-byte frame type must be read as a varint rather than as `bytes[0]`, which is
+    // what the removed hand-rolled helper did.
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, FRAME_TYPES.awareness);
+    encoding.writeVarUint8Array(encoder, new Uint8Array([0]));
+    assert.equal(decodeSyncFrame(encoding.toUint8Array(encoder)), null);
   });
 });

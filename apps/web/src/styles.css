@@ -51,6 +51,23 @@ body {
   box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
 }
 
+/* Document switcher bar */
+.document-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Offline / reconnecting notice. Offline is a normal state, not an error. */
+.offline-notice {
+  padding: 6px 10px;
+  border: 1px solid #ffe58f;
+  border-radius: 4px;
+  background: #fffbe6;
+}
+
 /* CodeMirror surface */
 .markdown-editor .cm-editor {
   border: 1px solid #d9d9d9;
@@ -61,6 +78,38 @@ body {
 .markdown-editor .cm-editor.cm-focused {
   outline: 2px solid #1677ff33;
   border-color: #1677ff;
+}
+
+/* Remote collaborator cursors and selections.
+   The per-user colour is injected inline by the CodeMirror widgets, because the
+   palette is assigned per peer and is therefore not knowable at build time. */
+.cm-remote-caret {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1.15em;
+  margin-bottom: -0.2em;
+  border-left: 2px solid;
+  vertical-align: text-bottom;
+  pointer-events: none;
+}
+
+.cm-remote-cursor-label {
+  position: absolute;
+  top: -1.25em;
+  left: -1px;
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #fff;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+.cm-remote-selection {
+  background: rgb(22 119 255 / 18%);
 }
 
 .message-json {

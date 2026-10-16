@@ -144,10 +144,35 @@ export type DecodeBinaryFrameResult =
   | { success: true; frame: DecodedBinaryFrame; error?: undefined }
   | { success: false; frame?: undefined; error: BinaryFrameDecodeOutcome; detail?: string };
 
-/** A validated SYNC frame, still in its original y-protocols wire encoding. */
+/**
+ * `y-protocols/sync` message types, named so no caller hardcodes `0/1/2`.
+ *
+ * These mirror `syncProtocol.messageYjsSyncStep1/2/Update`; `binary-frame.test.ts`
+ * asserts equality with the library's own constants, so drift in `y-protocols` fails a
+ * test instead of silently misrouting a sync message.
+ */
+export const SYNC_MESSAGE_TYPES = {
+  /** "Here is my state vector, send me what I am missing." */
+  step1: 0,
+  /** "Here are the structs you are missing." */
+  step2: 1,
+  /** An incremental document update. */
+  update: 2,
+} as const;
+
+export type SyncMessageType = (typeof SYNC_MESSAGE_TYPES)[keyof typeof SYNC_MESSAGE_TYPES];
+
+/**
+ * A validated SYNC frame, still in its original y-protocols wire encoding.
+ *
+ * `bytes` starts at the `y-protocols` sync message type — that is what
+ * `syncProtocol.readSyncMessage` expects — so it is **not** a bare Yjs update. Use
+ * `readSyncUpdatePayload` to get the update, or `readSyncStep1StateVector` to get a
+ * SyncStep1's state vector. Handing `bytes` straight to `Y.applyUpdate` is wrong: the
+ * first byte is a message type, not an update header.
+ */
 export interface DecodedSyncFrame {
   kind: 'sync';
-  /** Original bytes minus the frame-type header; pass to `readSyncMessage`. */
   bytes: Uint8Array;
 }
 
@@ -268,6 +293,35 @@ export function decodeBinaryFrame(
 }
 
 /**
+ * Read a lib0 length-prefixed byte array (`varUint` length + raw bytes), returning
+ * `null` rather than a detail string.
+ *
+ * Used both by the strict decoder above (which adds its own error detail) and by the
+ * public accessors below, which run on bytes the decoder already validated. Offsets come
+ * from cursor positions taken *before* each read, because `decoder.arr` is the whole
+ * buffer rather than the remainder.
+ */
+function tryReadLengthPrefixedBytes(decoder: decoding.Decoder): Uint8Array | null {
+  const beforeLengthPrefix = decoder.pos;
+  let length: number;
+  try {
+    length = decoding.readVarUint(decoder);
+  } catch {
+    return null;
+  }
+
+  const payloadStart = decoder.pos;
+  if (payloadStart <= beforeLengthPrefix) return null;
+  if (length > decoder.arr.byteLength - payloadStart) return null;
+
+  const bytes = decoder.arr.slice(payloadStart, payloadStart + length);
+  for (let index = 0; index < length; index += 1) {
+    decoding.readUint8(decoder);
+  }
+  return bytes;
+}
+
+/**
  * Read a lib0 length-prefixed byte array (`varUint` length + raw bytes).
  *
  * The decoder is advanced past the payload so the caller can detect trailing
@@ -280,43 +334,16 @@ function readLengthPrefixedBytes(
   decoder: decoding.Decoder,
   label: string,
 ): { ok: true; bytes: Uint8Array } | { ok: false; result: DecodeBinaryFrameResult } {
-  const beforeLengthPrefix = decoder.pos;
-  let length: number;
-  try {
-    length = decoding.readVarUint(decoder);
-  } catch {
-    return {
-      ok: false,
-      result: fail(WS_ERROR_CODES.INVALID_BINARY_FRAME, `${label} has no length prefix`),
-    };
-  }
-
-  const payloadStart = decoder.pos;
-  const available = decoder.arr.byteLength - payloadStart;
-  if (length > available) {
+  const bytes = tryReadLengthPrefixedBytes(decoder);
+  if (bytes === null) {
     return {
       ok: false,
       result: fail(
         WS_ERROR_CODES.INVALID_BINARY_FRAME,
-        `${label} payload is truncated (declared ${length}, ${available} available)`,
+        `${label} length prefix or payload is invalid`,
       ),
     };
   }
-
-  const bytes = decoder.arr.slice(payloadStart, payloadStart + length);
-  for (let index = 0; index < length; index += 1) {
-    decoding.readUint8(decoder);
-  }
-
-  // The length prefix must have consumed at least one byte; a zero-length prefix
-  // read would mean `readVarUint` silently returned without advancing.
-  if (payloadStart <= beforeLengthPrefix) {
-    return {
-      ok: false,
-      result: fail(WS_ERROR_CODES.INVALID_BINARY_FRAME, `${label} length prefix is invalid`),
-    };
-  }
-
   return { ok: true, bytes };
 }
 
@@ -393,4 +420,102 @@ function decodeAwarenessPayload(input: Uint8Array): DecodeBinaryFrameResult {
 /** True when `input` looks like a binary collaboration frame (not a text frame). */
 export function isBinaryFrame(input: unknown): input is Uint8Array {
   return input instanceof Uint8Array;
+}
+
+/* ------------------------------------------------------------------ *
+ * Sync accessors
+ *
+ * A `DecodedSyncFrame.bytes` value starts at the `y-protocols` sync message type, and
+ * every sync kind after that begins with a length-prefixed byte array. These three
+ * accessors are the *only* supported way to read inside a sync body, which is what
+ * keeps Yjs wire interpretation in one place instead of letting each consumer (the
+ * server's room layer, tests, future tooling) grow its own varint reader
+ * (`AGENTS.md` R12).
+ * ------------------------------------------------------------------ */
+
+/**
+ * The `y-protocols` sync message type of a decoded SYNC frame.
+ *
+ * Returns `null` only for a frame that `decodeBinaryFrame` already rejected, so a
+ * caller in a validated path can treat `null` as unreachable rather than as a case to
+ * handle. Never throws.
+ */
+export function readSyncMessageType(frame: DecodedSyncFrame): SyncMessageType | null {
+  const decoder = decoding.createDecoder(frame.bytes);
+  try {
+    const value = decoding.readVarUint(decoder);
+    if (value === SYNC_MESSAGE_TYPES.step1) return SYNC_MESSAGE_TYPES.step1;
+    if (value === SYNC_MESSAGE_TYPES.step2) return SYNC_MESSAGE_TYPES.step2;
+    if (value === SYNC_MESSAGE_TYPES.update) return SYNC_MESSAGE_TYPES.update;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The state vector carried by a `SyncStep1` frame, or `null` when the frame is not a
+ * well-formed `SyncStep1`.
+ *
+ * A server answering a client's `SyncStep1` computes its reply against this vector, so
+ * the reply is proportional to the *missing* content rather than the document size
+ * (`docs/CONTRACTS.md` §10.2).
+ */
+export function readSyncStep1StateVector(frame: DecodedSyncFrame): Uint8Array | null {
+  if (readSyncMessageType(frame) !== SYNC_MESSAGE_TYPES.step1) return null;
+
+  const decoder = decoding.createDecoder(frame.bytes);
+  decoding.readVarUint(decoder); // message type, just checked
+  return tryReadLengthPrefixedBytes(decoder);
+}
+
+/**
+ * Decode a raw frame that is expected to be a SYNC frame.
+ *
+ * Convenience for tooling and tests that hold wire bytes (a recorded frame, a fixture)
+ * rather than an already-decoded frame. It runs the same `decodeBinaryFrame` validation,
+ * so there is no second interpretation of "is this a SYNC frame" — in particular the
+ * frame type is read as a varint rather than assumed to be `bytes[0]`, which is only
+ * equivalent for the small type values this build uses.
+ */
+export function decodeSyncFrame(input: Uint8Array): DecodedSyncFrame | null {
+  const decoded = decodeBinaryFrame(input);
+  if (!decoded.success || decoded.frame.kind !== 'sync') return null;
+  return decoded.frame;
+}
+
+/**
+ * The raw Yjs update carried by a `messageYjsUpdate` frame, or `null`.
+ *
+ * This distinction is the one that bites: `writeUpdate` encodes
+ * `varUint(messageYjsUpdate)` + **`varUint8Array(update)`**, so the frame body is *not*
+ * the update. Passing the body to `Y.applyUpdate` feeds a length prefix where an update
+ * header belongs, and yjs then reads a struct reference in the wrong format and throws.
+ * The returned bytes are what `applyUpdate` and `encodeSyncUpdate` both expect.
+ *
+ * The result is a copy, so it stays valid independently of the frame buffer.
+ */
+export function readSyncUpdatePayload(frame: DecodedSyncFrame): Uint8Array | null {
+  if (readSyncMessageType(frame) !== SYNC_MESSAGE_TYPES.update) return null;
+
+  const decoder = decoding.createDecoder(frame.bytes);
+  decoding.readVarUint(decoder); // message type, just checked
+  return tryReadLengthPrefixedBytes(decoder);
+}
+
+/**
+ * The embedded byte array of a `SyncStep2` frame.
+ *
+ * `writeSyncStep2` writes `varUint(messageYjsSyncStep2)` + `varUint8Array(update)`, so
+ * unlike `SyncStep1` the array is a full update envelope plus delete set. Callers that
+ * want to apply it should pass the whole `DecodedSyncFrame.bytes` to
+ * `syncProtocol.readSyncMessage`, which handles the envelope; this accessor exists for
+ * tests and tooling that need the raw update bytes.
+ */
+export function readSyncStep2Payload(frame: DecodedSyncFrame): Uint8Array | null {
+  if (readSyncMessageType(frame) !== SYNC_MESSAGE_TYPES.step2) return null;
+
+  const decoder = decoding.createDecoder(frame.bytes);
+  decoding.readVarUint(decoder); // message type, just checked
+  return tryReadLengthPrefixedBytes(decoder);
 }

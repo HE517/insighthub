@@ -65,6 +65,19 @@ export interface CollaborativeSessionOptions {
   localOrigin?: TransactionOrigin;
   /** Override the IndexedDB database name (tests use a throwaway name). */
   persistenceKey?: string;
+  /**
+   * Local persistence mode. Defaults to `'indexeddb'`.
+   *
+   * `'none'` opens a memory-only session: local durability is skipped, and the
+   * `Y.Doc` lives only for the session's lifetime. It exists for environments with no
+   * IndexedDB (a Node integration test that only needs the real network path) and is
+   * **never** what a browser app should choose — a production caller that opts out of
+   * persistence loses offline durability, which is `docs/ARCHITECTURE.md` §2 Path 1.
+   *
+   * Added by M1-A0.2 as a Supervisor-owned field, replacing the option seam A1 had
+   * documented as a local augmentation (`docs/DECISIONS.md` D-034).
+   */
+  persistence?: 'indexeddb' | 'none';
 }
 
 /**

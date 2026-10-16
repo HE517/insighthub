@@ -87,7 +87,7 @@ describe('websocket protocol envelope', () => {
   });
 });
 
-describe('join-room contract (frozen by M1-A0)', () => {
+describe('join-room contract (frozen by M1-A0, version boundary by M1-A0.2)', () => {
   const validJoin = {
     documentId: 'doc-1',
     protocolVersion: PROTOCOL_VERSION,
@@ -102,14 +102,41 @@ describe('join-room contract (frozen by M1-A0)', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('rejects a join-room from a peer speaking an older protocol version', () => {
-    // This is how PROTOCOL_VERSION_MISMATCH becomes detectable: the version is
-    // part of the payload, not an afterthought, so it fails at the boundary.
-    const parsed = parseClientMessage(
-      createEnvelope(WS_MESSAGE_TYPES.joinRoom, { ...validJoin, protocolVersion: 1 }, { ts: TS }),
-    );
-    expect(parsed.success).toBe(false);
-    expect(parsed.error).toContain('protocolVersion');
+  it('accepts an older integer version structurally, so the server can answer MISMATCH', () => {
+    // The structural layer must NOT reject a differing integer: doing so collapses every
+    // version disagreement into INVALID_MESSAGE and makes PROTOCOL_VERSION_MISMATCH
+    // unreachable on the wire. Comparing the version is the server's job, and this is the
+    // test that keeps the boundary where it belongs.
+    for (const version of [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1, 1, 999, 0]) {
+      const parsed = parseClientMessage(
+        createEnvelope(
+          WS_MESSAGE_TYPES.joinRoom,
+          { ...validJoin, protocolVersion: version },
+          { ts: TS },
+        ),
+      );
+      expect(parsed.success, `version ${version} must parse structurally`).toBe(true);
+      const data = parsed.data;
+      if (data !== undefined && data.type === WS_MESSAGE_TYPES.joinRoom) {
+        expect(data.payload.protocolVersion).toBe(version);
+      }
+    }
+  });
+
+  it('rejects a non-integer protocol version as a structural fault', () => {
+    // A string/fraction/null/negative version is a malformed envelope, not an unsupported
+    // version, so it must fail here rather than reaching the server's comparison.
+    for (const version of ['2', null, 2.5, {}, -1, true]) {
+      const parsed = parseClientMessage(
+        createEnvelope(
+          WS_MESSAGE_TYPES.joinRoom,
+          { ...validJoin, protocolVersion: version },
+          { ts: TS },
+        ),
+      );
+      expect(parsed.success, `version ${JSON.stringify(version)} must be rejected`).toBe(false);
+      expect(parsed.error).toContain('protocolVersion');
+    }
   });
 
   it('rejects a join-room without a protocol version', () => {
@@ -117,6 +144,7 @@ describe('join-room contract (frozen by M1-A0)', () => {
       createEnvelope(WS_MESSAGE_TYPES.joinRoom, { documentId: 'doc-1' }, { ts: TS }),
     );
     expect(parsed.success).toBe(false);
+    expect(parsed.error).toContain('protocolVersion');
   });
 
   it('rejects an unknown join mode', () => {

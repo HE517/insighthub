@@ -1,11 +1,13 @@
 import { configureStore } from '@reduxjs/toolkit';
 
 import { connectionReducer } from './connectionSlice.js';
+import { documentReducer } from './documentSlice.js';
 import { realtimeReducer } from './realtimeSlice.js';
 
 export const store = configureStore({
   reducer: {
     connection: connectionReducer,
+    document: documentReducer,
     realtime: realtimeReducer,
   },
 });

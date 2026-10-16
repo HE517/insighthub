@@ -1,9 +1,20 @@
 /**
- * Owns the WebSocket lifecycle for the collaboration channel.
+ * M0 control-plane channel — **not mounted in the running app** (M1-A0.2).
  *
- * M0 behaviour: connect, validate every inbound frame with the shared parser,
- * push accepted messages into Redux, and reconnect with capped exponential
- * backoff. Offline persistence and delta sync arrive in M1 (see docs/TASKS.md).
+ * This hook opened a second `/ws` socket alongside the session's own connection. One
+ * socket carries at most one document room (`docs/CONTRACTS.md` §5.4, R15), so mounting
+ * it in production would either be rejected by the server or split the app across two
+ * transports. The document realtime connection is owned solely by `CollaborativeSession`,
+ * reached through `apps/web/src/collab/public.ts`.
+ *
+ * It is kept because it documents the M0 acceptance evidence (`/health` plus a `connected`
+ * handshake on `/ws`), and `apps/server/scripts/m0-verify.mjs` proves that path against a
+ * real server. **Do not mount it in `App.tsx`.** Anything needing connection status should
+ * read the live session's `connectionStatus` via
+ * `apps/web/src/features/status/connectionPresentation.ts`.
+ *
+ * Behaviour if ever mounted: connect, validate every inbound frame with the shared parser,
+ * push accepted messages into Redux, and reconnect with capped exponential backoff.
  */
 import { useEffect, useRef } from 'react';
 

@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --config vitest.config.ts apps/web",
+    "test:collab": "vitest run --root ../.. --config vitest.config.ts src/collab",
+    "test:features": "vitest run --root ../.. --config vitest.config.ts src/features"
   },
   "dependencies": {
     "@codemirror/commands": "^6.7.0",

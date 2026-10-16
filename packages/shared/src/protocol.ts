@@ -90,10 +90,20 @@ export type ConnectedPayload = z.infer<typeof connectedPayloadSchema>;
 export const joinRoomPayloadSchema = z.object({
   documentId: z.string().min(1),
   /**
-   * Protocol version the client speaks. Checked before any room state is
-   * created so a mismatch fails fast with `PROTOCOL_VERSION_MISMATCH`.
+   * Protocol version the client speaks.
+   *
+   * Deliberately a **structural** check only (`int >= 0`), not
+   * `z.literal(PROTOCOL_VERSION)`. A literal here makes `PROTOCOL_VERSION_MISMATCH`
+   * unreachable on the wire: the shared parser would reject an older or newer peer as a
+   * *malformed* message, so every version disagreement would collapse into
+   * `INVALID_MESSAGE` and hide the one fact the peer needs — "you speak N, I speak 2".
+   * The server compares this value against `PROTOCOL_VERSION` and answers with the
+   * specific code (`docs/DECISIONS.md` D-028).
+   *
+   * A non-integer (string, null, missing) is still a structural fault and is rejected
+   * here as `INVALID_MESSAGE`: that is a malformed envelope, not an unsupported version.
    */
-  protocolVersion: z.literal(PROTOCOL_VERSION),
+  protocolVersion: z.number().int().nonnegative(),
   /**
    * How the client intends to open the document. `readonly` is reserved for the
    * M2 permission work; M1 clients always send `readwrite`.

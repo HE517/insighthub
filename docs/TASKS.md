@@ -146,10 +146,29 @@ agents.
 | --- | --- | --- | --- |
 | M1-A0 | Contract freeze: binary framing, error codes, session seam, wire semantics | A0 | **done** |
 | M1-A1 | Yjs document + offline persistence + reconnect merge + awareness + undo | A1 | todo |
-| M1-A2 | CodeMirror ⇄ `Y.Text` binding + editor UI + collaborator UI | A2 | todo |
-| M1-A3 | Document rooms, sync relay, presence, connection lifecycle | A3 | todo |
+| M1-A2 | CodeMirror ⇄ `Y.Text` binding + editor UI + collaborator UI | A2 | **review** |
+| M1-A3 | Document rooms, sync relay, presence, connection lifecycle | A3 | **review** |
 | M1-A6 | Chaos tests: reconnect, duplicate frames, out-of-order, ghost awareness | A6 | todo |
 | M1-A7 | Integration gate: typecheck, tests, build, wire-format review | A7 | todo |
+
+### M1-A2 implementation notes (A2)
+
+Design decisions that matter for review:
+
+| Concern | Decision |
+| --- | --- |
+| Truth | `Y.Text` only. No document content in React state or Redux; the editor reads content solely from the session. |
+| Binding | One `CollabTextBinding` per session, created before the view and destroyed with it, so a collaborator or connection update cannot remount the editor or duplicate the observer. |
+| Echo suppression | Three independent mechanisms: transaction-origin check, re-entrancy guard, and a derived-change marker (`REMOTE_SYNC_ORIGIN`) that stops an undo or a remote update from being re-recorded as a local edit. |
+| Remote application | `Y.TextEvent.delta` is deliberately **not** translated by hand; the authoritative content is diffed against the editor and the minimal single-range change is applied (one editor transaction per update). |
+| Undo | No CodeMirror `history()`; `Mod-z` routes to `session.undo()` so undo stays CRDT-scoped by origin. |
+| Presence | Cursor offsets come from awareness; every rendered string comes from `session.getCollaborators()`. |
+| Document switch | The editor remounts per session and the old binding is destroyed before the next session exists. |
+
+Evidence: `pnpm test:unit` 169 passed (14 files), `pnpm test:server` 61 passed,
+A2-scope `tsc --noEmit` clean, `vite build` built. A browser/E2E pass is still
+required for the assertions that need a DOM; they are listed as the A6 hand-off in
+the M1-A2 completion report.
 
 ---
 
@@ -253,6 +272,50 @@ agents.
   shared codec**; neither may parse frames by hand. A7 reviews this.
 - If any agent believes a frozen contract is wrong, that is a Supervisor decision,
   not a local edit.
+
+---
+
+### M1-A3 implementation notes (A3)
+
+Files: `apps/server/src/rooms/**` (new), `apps/server/src/ws.ts`. Constants, decisions
+and the contract note live in `docs/DECISIONS.md` D-024–D-026.
+
+**Module map** — `constants.ts` (operational tuning) · `peer.ts` (the single outbound
+write path, and therefore the single backpressure enforcement point) · `context.ts`
+(per-connection state holding at most one `activeRoom`) · `room.ts` (one document's
+`Y.Doc`, sync and awareness fan-out) · `registry.ts` (membership, `join-room` /
+`leave-room`, atomic replace, teardown) · `heartbeat.ts` (liveness sweep) · `varint.ts`
+(the two sync-body reads; see the contract note below).
+
+**Why the replace is genuinely atomic.** `RoomRegistry.joinRoom` is fully synchronous,
+so JavaScript runs it to completion before any other socket event can be handled: there
+is no `await` between "leave A" and "join B", and every refusal is decided *before* the
+first mutation. Combined with `SocketContext.activeRoom` being a single field, there is
+no representable state in which a socket holds two rooms or neither while the server has
+already replied. One transition function (`#detach`) serves leave, disconnect and
+replace, so the awareness cleanup cannot be forgotten in one of the three paths.
+
+**Frozen behaviour implemented as specified.** The client-initiated handshake
+(`SyncStep1` → `SyncStep2` + `SyncStep1` → `SyncStep2`); inbound updates relayed to
+peers but never echoed to the sender; departure presence expressed only as a Yjs
+awareness removal (no control-plane presence message exists); `ROOM_NOT_JOINED` non-fatal
+for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal;
+`leave-room(B)` while in A a no-op.
+
+**Two things A7/A0 should look at:**
+
+1. **`PROTOCOL_VERSION_MISMATCH` is unreachable through the wire.** In
+   `joinRoomPayloadSchema`, `protocolVersion` is `z.literal(PROTOCOL_VERSION)`, so the
+   shared parser rejects a mismatched version first and the server answers
+   `INVALID_MESSAGE` (or `UNKNOWN_MESSAGE_TYPE`) instead of the dedicated code. The
+   registry still checks the version defensively. Recorded under `Contract Issues` in the
+   M1-A3 report; it needs an A0 decision, not a local edit.
+2. **`apps/server` cannot import `lib0`.** pnpm's strict linking exposes it only to the
+   packages that declare it (`packages/shared`, `y-protocols`), and A3 may not edit
+   `package.json`. `rooms/varint.ts` therefore implements the two varint reads the sync
+   handshake needs, with `rooms/varint.test.ts` proving they agree with the encoders
+   `y-protocols`/`yjs` actually produce. Adding `lib0` to `apps/server` would let that
+   file be deleted.
 
 ---
 

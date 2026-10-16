@@ -560,5 +560,520 @@ contract revision before parallel work, which is the cheapest place to pay it.
 Lesson recorded for A0's process: read the frozen contract adversarially *before*
 declaring it frozen, not after.
 
+---
+
+## D-024 · 2026-02-14 · accepted · A room is destroyed the moment its last member leaves (M1-A3)
+
+**Context.** M1 has no document store, so a server room is only a relay: a `Y.Doc`
+replica for state-vector deltas plus an in-memory `Awareness` instance. The open
+question was what happens when the last client leaves. A grace period would let a
+reconnecting client re-sync without the server rebuilding state, but it also means
+holding a `Y.Doc` and an awareness timer per document anyone ever opened, with no
+eviction policy — an unbounded cache in a milestone that deliberately has no cache.
+
+**Decision.** Destroy the room immediately when its participant set becomes empty:
+remove it from the registry, call `awareness.destroy()` (which clears the 3 s timer
+`y-protocols` installs) and `doc.destroy()`.
+
+**Why immediate rather than graceful.** The cost is bounded and the benefit is
+negative. A returning client's `SyncStep1` carries its state vector, so the server
+answers from whatever the room holds *now*; an empty room holds nothing, and a client
+returning to an empty room is by definition the only writer, so there is nothing for a
+grace period to preserve except server memory. Destroying on empty also means the M1
+server holds no state that outlives its connections, which is what makes "restart the
+server" a non-event in M1.
+
+**Consequences.** No per-document memory growth in a long-running process, and the
+empty-room case needs no eviction logic to review. Cost: a room that empties and
+refills immediately re-creates its `Y.Doc` — microseconds, paid only when the last
+editor of a document actually leaves. Revisitable in M2, when a persisted document
+store makes a snapshot cheaper than a rebuild; the change would be local to
+`RoomRegistry.#destroyRoomIfEmpty`.
+
+---
+
+## D-025 · 2026-02-14 · accepted · Server-side operational limits are code constants, not contract (M1-A3)
+
+**Context.** A3 needed three numeric policies the frozen contract does not specify: a
+heartbeat interval and timeout, and a send-buffer ceiling for slow-client
+backpressure. Putting them in `packages/shared` would make every tuning change a
+Supervisor-reviewed contract change; leaving them undocumented would make "why 30
+seconds" unanswerable in review.
+
+**Decision.** Keep them in `apps/server/src/rooms/constants.ts`, each with its
+rationale recorded beside it, and treat them as operational parameters rather than
+protocol: no `PROTOCOL_VERSION` bump applies, and no other agent can be broken by a
+value change.
+
+| Constant | Value | Reasoning |
+| --- | --- | --- |
+| `HEARTBEAT_INTERVAL_MS` | 30 000 | Matches the `outdatedTimeout` that `y-protocols` already uses for awareness, so the server's reaper and the clients' awareness expiry agree on a timescale instead of disagreeing. |
+| `HEARTBEAT_TIMEOUT_MS` | 10 000 | Generous for any realistic RTT while staying well under one interval; worst-case reap is 40 s. |
+| `SLOW_CLIENT_BUFFER_LIMIT_BYTES` | 4 MiB | Far above a normal Yjs update (kilobytes) and far below `MAX_BINARY_FRAME_BYTES` (16 MiB), so only a genuinely stalled reader reaches it. |
+
+The one contractual number involved, `MAX_AWARENESS_CLIENTS_PER_UPDATE`, is imported
+from `@insighthub/shared` and enforced as a frame-level drop rather than a socket
+close: awareness is ephemeral, untrusted and bounded, so discarding the frame is the
+whole remedy — and the frozen vocabulary has no code for it, which is correct, since
+an abusive peer is not owed an explanation for a frame the server never accepted.
+
+**Consequences.** Tuning is a one-line local change and a reviewer can check each value
+against its stated reasoning. Cost: the heartbeat window is fixed at build time with no
+environment override, because M1 has no operational config surface for it and
+`apps/server/src/config.ts` is outside A3's ownership. Adding one later is additive.
+
+---
+
+## D-026 · 2026-02-14 · accepted · A room's awareness is a pure relay with no server entry (M1-A3)
+
+**Context.** `y-protocols`' `Awareness` constructor does two things an unaware server
+inherits: it assigns `clientID = doc.clientID` (a random id) and calls
+`setLocalState({})` — and installs a 3 s interval that republishes that local state.
+Measured during M1-A3: a freshly created room immediately held one awareness entry
+whose state was `{}`. That is not valid presence. It has no `user`, so a peer would
+count a collaborator it cannot render, and `session.getCollaborators()` (which
+validates through `awarenessStateSchema`) would filter it out — leaving a presence
+count that never matches the rendered list, plus a phantom cursor for a user who does
+not exist. Clearing `clientID` alone is insufficient, because the constructor's entry
+survives under the id it just assigned.
+
+**Decision.** Make each room's `Awareness` strictly relay-only, in one documented
+helper (`suppressServerAwarenessOwnership`): clear `states` and `meta`, set
+`clientID = null`, and clear the constructor's interval so the server can never publish
+presence about itself.
+
+**Consequences.** `room.awareness.getStates()` contains exactly the entries peers
+published, which is what makes "no ghost cursor" a checkable property rather than a
+convention, and the server never claims an awareness id a peer might legitimately use.
+Cost: the room relies on two documented internals of `y-protocols` (`states`/`meta`
+being plain maps, `_checkInterval` being clearable), both covered by tests so a library
+change fails loudly instead of silently.
+
+---
+
+## D-027 · 2026-02-15 · accepted · A3's M1 decisions approved, with durable persistence booked as M2 P0 (M1-A0.2)
+
+**Context.** A3 recorded three decisions during implementation (D-024 room destroyed when
+empty, D-025 server limits as local constants, D-026 awareness as a pure relay). Each was
+reviewed against the frozen contract rather than accepted on report, because each one
+narrows behaviour in a way a later milestone could depend on incorrectly.
+
+**Decision.** **Approve all three as written.** Specifically:
+
+- **D-024 (destroy on empty)** is consistent with `docs/CONTRACTS.md` §10.3 — the server is
+  a relay and the contract never promised server-side retention. Confirmed by test: a room
+  that empties is gone, and the reconnecting client re-seeds from its own replica.
+- **D-025 (local constants)** respects the A0/A3 boundary: these are operational
+  parameters, not wire contract, so they must not require a `PROTOCOL_VERSION` bump or a
+  Supervisor review to tune.
+- **D-026 (relay-only awareness)** is required by R14/§9.2, not merely nice: a server entry
+  with state `{}` is presence a peer cannot render, and it would make
+  `getCollaborators()` disagree with the raw map.
+
+**The M1 limitation this approval depends on, stated explicitly:** **M1 has no durable
+server-side document persistence.** A room's `Y.Doc` lives only as long as the room, and
+the room dies with its last member (D-024). Therefore:
+
+- A client that **has** local history (IndexedDB from A1's Path 1) can re-seed the server
+  after a room was destroyed: it sends `SyncStep1`, the server answers from an empty
+  replica, and the client's `SyncStep2` uploads the document again. Convergence is
+  restored with no data loss **as long as at least one client with the full history
+  returns**.
+- A **fresh** client (empty IndexedDB, no prior session) cannot recover content that
+  existed before the room was destroyed. Nothing on the server retains it. From that
+  client's point of view the document is empty, and it will happily become the seed of a
+  new, empty lineage.
+
+That second bullet is a **data-loss window, not a cosmetic limitation**, and it must not be
+papered over in the M1 completion report. It is the direct consequence of combining D-024
+with the absence of a store.
+
+**Consequence / booking.** **Durable document persistence is M2 P0** — the highest
+priority item of the next milestone, ahead of permissions work, and it is recorded in
+`docs/TASKS.md`. Its acceptance criterion is precisely the gap above: a returning client
+must be able to open a document whose content survived a period when **no** client was
+connected. Until that lands, M1's persistence claim is scoped to "some client's local
+replica", never to "the server".
+
+---
+
+## D-028 · 2026-02-15 · accepted · A2's single-range diff reconcile is the M1 editor strategy (M1-A0.2)
+
+**Context.** A binding that mirrors `Y.Text` into CodeMirror has to answer "what do I apply
+to the editor when the document changed?". Translating `Y.TextEvent.delta` faithfully is
+the textbook answer and is genuinely more precise: it preserves the exact edit shape,
+including for text that moved. A2 implemented the simpler alternative — compute the
+minimal single-range change between the editor's current text and the authoritative
+`Y.Text` (common prefix + common suffix) — and reported the tradeoff.
+
+**Decision.** **Accept A2's design for M1.** The reconciliation contract is:
+
+- `Y.Text` is authoritative; the editor buffer is derived.
+- On a remote Yjs transaction, compute **one** minimal single-range replacement
+  (`singleRangeChange`, UTF-16 offsets, `null` when equal) and apply **at most one**
+  CodeMirror transaction per remote transaction.
+- The diff is deliberately **not** a general-purpose or Myers diff; it returns exactly one
+  replaced range, which is all an attach-to-non-empty-document or a fallback resync needs.
+
+**Why not the delta translator now.** A correct `Y.TextEvent.delta` translator is real work
+with real failure modes (delete/retain/insert ordering, attribute-only changes, nested
+deltas), and its benefit over a prefix/suffix diff appears only for edits that move text
+across the document. The single-range diff is: provably correct for the cases M1 must
+handle (attach, resync, ordinary remote edits), constant-time on the common prefix, one
+edit shape to reason about, and already covered by tests. M1's exit criteria do not include
+"remote edit preserves local selection across a move", so the precision buys nothing the
+milestone is judged on.
+
+**Known cost, accepted and recorded.** A remote change that reorders large blocks can
+reconcile as a larger replacement than the true editorial delta, which will reset the local
+selection/caret to a less precise position than a delta translator would. That is a UX
+regression in a narrow case, not a correctness or data-loss issue: the text itself always
+converges to `Y.Text`.
+
+**Where this gets re-evaluated.** **A6** owns a real-browser performance pass, which is what
+would show whether the reconcile cost matters at scale (e.g. a 5 000-line document with a
+remote edit near the top) and whether caret placement regresses visibly. If it does, the
+delta translator becomes an M4 item. Until A6 measures it, no claim about editor
+performance in M1 is evidence-backed.
+
+---
+
+## D-029 · 2026-02-15 · accepted · Pre-parallel integration prep (M1-A0.2)
+
+**Context.** A1/A2/A3 ran in parallel against a frozen contract and each reported success.
+Reviewing the actual repository — not the reports — surfaced four classes of problem that
+no single agent could see, because each was a boundary between two agents or between an
+agent and the contract:
+
+1. `joinRoomPayloadSchema.protocolVersion` was `z.literal(PROTOCOL_VERSION)`, which made
+   `PROTOCOL_VERSION_MISMATCH` **unreachable on the wire**: A3's own comparison in
+   `registry.ts` could never run, because the shared parser rejected a differing version as
+   a malformed message first. The code existed and was dead.
+2. `apps/server` had grown its own varint reader (`rooms/varint.ts`) to read inside sync
+   bodies, because it could not import `lib0` and the shared codec only exposed the body,
+   not its contents. That is a second wire parser in production, which R12 exists to
+   prevent.
+3. The root Vitest gate and a directory-local `apps/web/vitest.config.ts` both existed, so
+   "what does `pnpm test` run?" had two answers, and `mergeConfig`'s `include`
+   concatenation made an unfiltered local run execute the root's files too.
+4. The running app still mounted the M0 `useRealtimeChannel` hook, opening a **second**
+   `/ws` socket alongside the session's — against R15 and §5.4.
+
+Also found and fixed while validating: a heartbeat test whose assertion contradicted its own
+scenario (it asserted the room was destroyed while a second member was still joined), which
+made the suite **hang** rather than fail; and a harness quirk where `?? PROTOCOL_VERSION`
+silently converted a `null` version into a valid join, hiding a real case.
+
+**Decision.** Fix all of the above as one A0-owned integration pass **before** releasing
+A1/A2/A3 for further work:
+
+- Move the version boundary: the schema accepts any integer, the **server** compares and
+  answers `PROTOCOL_VERSION_MISMATCH`; non-integers stay `INVALID_MESSAGE` (D-030).
+- Move sync-body reading into `packages/shared` as the single wire authority and delete
+  `apps/server/src/rooms/varint.ts` (D-031).
+- One Vitest configuration at the root; per-package scripts become thin filters over it.
+- Unmount the legacy channel; `CollaborativeSession` is the sole owner of the document
+  socket.
+- Add the missing integration gate: a real A1 client against a real A3 server (D-032).
+
+**Consequences.** The M1 baseline is now verifiable by one command per concern, with no
+dead error path, no duplicate wire parser, no duplicate test authority and no second
+socket. Cost: this pass touched `packages/shared`, so every agent must re-read
+`docs/CONTRACTS.md` §5.2 and §6.4 before continuing — which is the point of doing it while
+the code is still small.
+
+**Process lesson (for A0).** Three parallel reports each said "done" and each was locally
+true; every defect above lived in the seam between two of them. A contract freeze reduces
+ambiguity but does not remove the need to **audit the assembled system** against the frozen
+text. The specific tell to watch for: *a frozen error code that nothing can ever emit*
+(`PROTOCOL_VERSION_MISMATCH` here) is a strong sign that a validation layer is upstream of
+the check that was supposed to produce it.
+
+---
+
+## D-030 · 2026-02-15 · accepted · Version mismatch is a server answer, not a parser rejection (M1-A0.2)
+
+**Context.** With `protocolVersion: z.literal(PROTOCOL_VERSION)`, every version
+disagreement produced `INVALID_MESSAGE`. That is the wrong signal: `INVALID_MESSAGE` means
+"your envelope is malformed", while the actual situation is "your envelope is fine, but you
+speak version N and I speak 2". A client cannot act on the first message, and a future
+version handshake (negotiation, or a bounded compatibility window) has nowhere to live.
+Worse, it made a frozen error code dead.
+
+**Decision.** Split the two concerns by layer:
+
+| Layer | Responsibility | Rejects with |
+| --- | --- | --- |
+| `joinRoomPayloadSchema` (shared) | **Structure**: `documentId` non-empty, `protocolVersion` an integer ≥ 0, `mode` in the enum | `INVALID_MESSAGE` for a string/fraction/null/negative/missing version |
+| `RoomRegistry.joinRoom` (server) | **Policy**: compare against `PROTOCOL_VERSION` | `PROTOCOL_VERSION_MISMATCH` for any integer that differs |
+
+`PROTOCOL_VERSION_MISMATCH` is **fatal** for the socket (the peer cannot usefully continue)
+and must not create a room. Tested for both directions — an older integer and a newer one —
+plus every malformed shape, and a regression test asserts the structural layer still
+*accepts* a differing integer, so nobody can make the mismatch unreachable again by
+"tightening" the schema.
+
+**Consequences.** A version disagreement is now distinguishable from corruption, both on the
+wire and in the logs, and the frozen vocabulary is fully reachable. Cost: the version check
+is server code that must be exercised by an integration test (structural mocks cannot prove
+it), and client code must handle a fatal error at join time rather than assuming a parse
+failure.
+
+---
+
+## D-031 · 2026-02-15 · accepted · All Yjs wire interpretation lives in `packages/shared` (M1-A0.2)
+
+**Context.** Reading inside a sync body — which sync message it is, a `SyncStep1`'s state
+vector, a `messageYjsUpdate`'s embedded update — is a handful of varint reads. A3 could not
+import `lib0` from `apps/server` (pnpm does not expose a transitive dependency, and
+`package.json` is review-gated), so it implemented the minimum locally in
+`rooms/varint.ts`, with tests proving agreement with `lib0`'s encoder and a clear comment
+about why. The reasoning was sound and the tests were honest; the outcome was still wrong,
+because it left **two authorities** for the same bytes.
+
+**Decision.** `packages/shared/src/binary-frame.ts` exposes the sync-body accessors, and the
+server's local parser is **deleted** (including its test file):
+
+| Helper | Purpose |
+| --- | --- |
+| `SYNC_MESSAGE_TYPES` | Named `0/1/2`, asserted equal to `y-protocols`' constants by a test |
+| `readSyncMessageType(frame)` | Which sync kind, from an already-decoded `DecodedSyncFrame` |
+| `readSyncStep1StateVector(frame)` | The state vector a server computes its delta against |
+| `readSyncUpdatePayload(frame)` | The embedded update of a `messageYjsUpdate` — **not** the body |
+| `readSyncStep2Payload(frame)` | The embedded envelope of a `SyncStep2`, for tests/tooling |
+| `decodeSyncFrame(raw)` | Raw bytes → validated `DecodedSyncFrame` |
+
+Two supporting rules follow from it:
+
+1. **No new `lib0` dependency in `apps/server`.** A3 does not need one: every byte-level
+   operation it performs is now a shared helper. The `lib0` dependency stays where the
+   encoding lives.
+2. **Test-side plumbing is separated from wire interpretation.** A3's `TestDecoder` remains
+   because `y-protocols`' `readSyncMessage` requires a decoder *instance* and `lib0` is not
+   importable there — but it now implements only lib0's decoder contract, while the harness
+   reads frame types, sync kinds and payloads through the shared helpers. The distinction is
+   documented in the harness, and its two private length-prefix readers were removed.
+
+**Consequences.** One place to change when the wire format moves, one place to review, and
+the server cannot drift from the client. Cost: `packages/shared` grew five small functions,
+and the accessors are a reviewed surface — but that surface is already Supervisor-gated,
+which is exactly where wire knowledge belongs. A concrete payoff arrived immediately: the
+hand-rolled helper read the frame type as `bytes[0]`, which is only correct while frame
+types stay below 128; the shared `decodeSyncFrame` reads a varint, and a test now pins a
+multi-byte frame type as a non-sync frame.
+
+---
+
+## D-032 · 2026-02-15 · accepted · The M1 integration gate must cross the A1↔A3 boundary (M1-A0.2)
+
+**Context.** A1 tested its client against *its own* in-process test server, built from the
+shared codec. A3 tested its server against *its own* `TestClient`, also built from the
+shared codec. Both suites were green, and both could be green while the two halves disagreed
+— each side was proving that it matched the codec, not that it matched the other agent.
+Worse, A1 and A3 independently discovered the same two wire subtleties (a sync payload must
+not be re-wrapped as a full frame; a `messageYjsUpdate` body is not a bare update), which is
+evidence that the seam was under-tested rather than well understood.
+
+**Decision.** Make a **cross-agent integration test** a required part of the M1 gate: a real
+A1 client (`createCollaborativeSession` / the real sync provider) against a real A3 server
+(`startTestServer`, real `ws` sockets on an ephemeral port), asserting the whole M1 story
+end to end:
+
+1. client1 edits → the server relays → **client2 converges**;
+2. client2 edits → the server relays → **client1 converges**;
+3. client1 disconnects, both sides keep editing, client1 reconnects → state-vector
+   incremental sync → **final text converges byte-for-byte**.
+
+Plus awareness interoperability over the same pair of real implementations: client1's
+awareness reaches client2's `getCollaborators()`, and a disconnect or room switch leaves
+**no ghost collaborator**.
+
+**Why this and not more unit tests.** The failures this catches are precisely the ones unit
+tests cannot: two independently-correct halves disagreeing about framing, a relay that
+applies a body instead of the update inside it, or a reconnect that re-sends a document
+instead of a delta. It is also the only test that exercises the *contract* as a whole rather
+than each implementation against its own reading of the contract.
+
+**Consequences.** One more suite to keep green, and it lives in `apps/server` (the side that
+owns real sockets) while importing A1's public seam — so it is the one place that legitimately
+imports from both apps. Cost: it is a coarse test, so it will not localise a failure; the
+agent-level suites remain the right tool for that. Value: it is the gate that would have
+caught the `varint.ts` duplication and the "body is not an update" class of bug by
+construction.
+
+---
+
+## D-033 · 2026-02-15 · accepted · Browser-only claims stay unverified until A6 runs them (M1-A0.2)
+
+**Context.** M1's remaining unproven surface is browser-specific: real IndexedDB, a real
+CodeMirror `EditorView` DOM, real remote-cursor rendering, and interaction latency on a
+large document. A1's README already scopes its IndexedDB claims to an in-memory double and
+publishes a runbook; A2's suites are DOM-free by design.
+
+**Decision.** Keep those claims explicitly unverified in M1 and assign them to **A6**, not
+to A0.2 and not to the agent that wrote the code. The Node-level gate proves wiring,
+protocol, convergence and validation logic; it proves **nothing** about a browser.
+
+**Consequences.** The M1 completion report must state which claims are wiring-only. That is
+a deliberate accuracy cost (`AGENTS.md` R5: an unverified claim is not evidence) paid in
+exchange for not implying that a green test suite means the browser path works. A6's
+runbook is the only path to promoting those claims.
+
+---
+
+## D-034 · 2026-02-15 · accepted · A persistence mode seam belongs on the frozen session options (M1-A0.2)
+
+**Context.** A1 needed an injection seam to test the collaboration core in Node, where there
+is no IndexedDB, and declared it as a `declare module '@insighthub/shared'` merge in
+`apps/web/src/collab/internal/session-options.ts` — an A1-owned file augmenting a
+Supervisor-owned interface. A1 flagged this itself and recommended the long-term fix: a
+field on the shared interface. The cross-agent integration test then needed the same
+capability from a *third* package, where reaching into A1's private module would have been
+worse.
+
+**Decision.** Add `persistence?: 'indexeddb' | 'none'` to `CollaborativeSessionOptions` in
+`packages/shared/src/collab-session.ts`, defaulting to `'indexeddb'`. A1's
+`createDocumentSession` honours `'none'` by resolving a no-op persistence handle, so
+`whenSynced` still resolves without the network and `active` is still reached before any
+socket (`docs/CONTRACTS.md` §10.1 is unchanged). The local declaration merge keeps working;
+removing it is A1's follow-up, not a blocker.
+
+**Why the contract is the right home.** "Does this session persist locally?" is a property of
+the session contract, not of one package's test harness, and it now has consumers of
+different kinds. The alternative for the integration test was either a hand-written
+IndexedDB double (a second, drifting storage implementation — explicitly worse) or importing
+A1's private test support from `apps/server` (a boundary violation).
+
+**Consequences.** Production defaults are unchanged; a caller that passes `'none'` loses
+offline durability, which is why the option's own doc comment says so. Cost: one more frozen
+field and one more way to silently opt out of Path 1, mitigated by the default being durable.
+
+---
+
+## D-035 · 2026-02-15 · accepted · A joining client must not have its roster wiped, and existing awareness arrives after `room-joined` (M1-A0.2)
+
+**Context.** Two independent defects met at one seam and cancelled the feature:
+
+1. **Client.** `onRoomJoined` cleared every remote awareness entry, to stop entries from a
+   previous room leaking into a new one. On the **first** join there is nothing stale, so the
+   only thing the clear could remove was the roster the server had just sent.
+2. **Server.** The existing-awareness frame was emitted from inside `Registry.joinRoom`, i.e.
+   **before** `room-joined` — a data-plane frame ahead of the join acknowledgement, which
+   `docs/CONTRACTS.md` §4 forbids.
+
+Observed symptom: the server held both awareness entries while the later joiner's
+`getCollaborators()` was empty, so a two-client session showed **no** collaborator until
+someone republished (up to the 30 s awareness renewal). Diagnosed by fingerprinting the
+joiner's map: `meta.size === 2` but `states.size === 1` — the entry was applied and then
+removed, which localised the fault to the clear rather than to the relay.
+
+**Decision.**
+
+- The server sends `room-joined` **first**, then delivers pre-existing awareness. To make
+  that order expressible, `joinRoom` performs the state transition and returns the room; the
+  transport in `ws.ts` owns the send order.
+- The client clears remote awareness **only when it has already joined once**
+  (`#hasJoinedOnce`). First join: nothing to clear. Re-join or room switch: clear, as before.
+
+**Consequences.** Presence is visible as soon as a second participant joins, and the
+"awareness is room-scoped" rule still holds for every case that can actually have stale
+entries. Cost: the client carries one boolean of history, and the server's join path has a
+required send order that only `ws.ts` may implement — both asserted by the cross-agent
+integration test rather than left to a comment.
+
+---
+
+## D-036 · 2026-02-15 · accepted · A relayed `SyncStep2` must be broadcast, not only applied (M1-A0.2)
+
+**Context.** A client that edits while disconnected delivers those edits in its `SyncStep2`
+when it reconnects. `DocumentRoom.handleSync` applied that update to the room's `Y.Doc` and
+stopped there, while `handleUpdate` applied **and** broadcast. The result was a permanent
+split no single-client test could see:
+
+```
+after reconnect   server  = "… | online-2 | offline-1"
+                  client1 = "… | online-2 | offline-1"   (the reconnecting peer)
+                  client2 = "… | online-2"               (never catches up)
+```
+
+`client2` never sends an `Update` carrying `offline-1`, because it never saw it — so nothing
+would ever deliver it. The server and the reconnecting peer were converged while a third
+participant stayed behind indefinitely.
+
+**Decision.** After applying a `SyncStep2`, relay the same update to the rest of the room,
+re-framed with the shared codec's `encodeSyncUpdate`. A receiver then applies it through its
+ordinary update path, which is the semantics a relay of already-applied content needs; the
+`SyncStep2` envelope is an answer to one client's `SyncStep1` and is not what a peer should
+receive.
+
+**Consequences.** Reconnect convergence now holds for **every** participant, which is what
+`docs/CONTRACTS.md` §10.3 promised. Cost: a reconnect broadcasts an update sized to the
+offline delta (not the document — the state vector still bounds it), and the relay is
+redundant for a peer that is also re-syncing, where Yjs merge makes it a no-op anyway.
+
+---
+
+## D-037 · 2026-02-15 · accepted · Vite env types are read through a local structural view, not a widened global (M1-A0.2)
+
+**Context.** `pnpm typecheck` was red while `pnpm build` was green:
+
+```
+apps/web/src/collab/internal/document-session.ts: TS2339:
+  Property 'env' does not exist on type 'ImportMeta'
+```
+
+`import.meta.env` is not ECMAScript — it is declared by `vite/client`, which only
+`apps/web`'s tsconfig loads. Since the cross-agent integration test imports the public seam
+from `apps/server`, **the server project now compiles that web file too**, and there
+`ImportMeta` has no `env` member. `pnpm build` never saw it because it compiles each package
+with its own tsconfig, and web's own build includes the declaration.
+
+**Decision.** Read Vite's env through a single, local structural view:
+
+```ts
+const viteEnv = import.meta as unknown as { env?: { VITE_WS_URL?: string } };
+```
+
+and keep `resolveSocketUrl`'s runtime check (`typeof configured === 'string'`) as the only
+consumer. Rejected alternatives: adding `vite/client` to `apps/server`'s `types` (hands Vite
+globals to the server), and augmenting the global `ImportMeta` (does so for every package
+including `packages/shared`). No `any`, no `@ts-ignore`, no deleted code.
+
+**Consequences.** Typecheck is green from any project that compiles the file, and the
+knowledge of *which* env variables the collab layer reads now lives in one annotated place.
+Cost: one cast with a comment explaining it, and if a second env variable is needed the view
+must be extended — deliberately, in one spot.
+
+---
+
+## D-038 · 2026-02-15 · accepted · The cross-agent gate earned its cost three times over (M1-A0.2)
+
+**Context.** D-032 made a real-A1-client ⇄ real-A3-server test part of the M1 gate. In this
+pass it found three production defects that no single-agent suite could observe, each one
+strictly *between* two agents:
+
+| # | Defect | Why the agent's own suite missed it |
+| --- | --- | --- |
+| 1 | `SyncStep2` applied without unwrapping `varint8Array` → yjs threw during the handshake | A1's in-process server and A3's `TestClient` were both built from the shared codec, so neither exercised the other's real handshake |
+| 2 | Joining client's roster wiped by its own room-scoped clear, combined with a data-plane frame sent before `room-joined` | Both halves were individually correct; the interaction was not |
+| 3 | Relayed `SyncStep2` applied but never broadcast, leaving a third participant permanently behind | Each side's two-party tests converged; no test had a third party |
+
+**Decision.** Keep the cross-agent integration test mandatory for M1 and treat "this test is
+awkward to write" as a signal about the seam rather than a reason to skip it. Also record the
+diagnostic technique that actually located defect 2, because it is reusable: fingerprint the
+observer's internal map (`meta.size` vs `states.size`) to distinguish "the frame never
+arrived" from "the frame was applied and then removed" — that one measurement collapsed
+several plausible hypotheses.
+
+**Consequences.** The gate is coarse and will not localise a failure, so agent-level suites
+stay the first tool; the integration test is the one that decides whether the milestone is
+real. Cost: it is the slowest suite in the repo and it has needed two harness fixes (join
+ordering, and an assertion that pinned a CRDT merge order) — both harness bugs, both fixed in
+the harness rather than by weakening the assertions.
+
+
+
+---
+
 
 
