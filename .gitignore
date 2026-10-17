@@ -26,3 +26,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# A6 browser suite evidence (regenerated on every run: see tests/browser/README.md)
+tests/browser/artifacts/
