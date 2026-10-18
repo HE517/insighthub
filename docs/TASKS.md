@@ -371,11 +371,14 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 ## M2 — Durable persistence & the two M1 gaps (M2-P0 Gate: PASS — reviewed by A7)
 
-状态：**三项 P0 全部 IMPLEMENTED 并合入 `m2-stabilization`。** M2-P0 Exit Gate 由 A7 独立评审判为
+状态：**三项 P0 全部 IMPLEMENTED；M2-P0 Gate 已发布到 `main`。** M2-P0 Exit Gate 由 A7 独立评审判为
 **APPROVE**（判据与证据见下「M2-P0 Exit Gate vs M2 Milestone」）。基线：从 immutable tag
-`m1-closed`（`f3c353e`）分出。
-**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）尚未开始，M2 不得标 CLOSED。
-决策：`docs/DECISIONS.md` **D-040…D-058**。
+`m1-closed`（`f3c353e`）分出，经 `m2-stabilization`（`ec762ef`）以 `--no-ff` merge 合入 `main`，
+annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck / test / build / browser 全绿
+（记录见 `docs/DECISIONS.md` D-060）。
+**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）尚未开始，M2 不得标 CLOSED；
+`m2-closed` **不存在，也不得创建**。
+决策：`docs/DECISIONS.md` **D-040…D-060**。
 
 ### M2 范围
 
@@ -387,10 +390,11 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 **不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
 
-> **范围位移，需要项目负责人确认。** `docs/PROJECT.md` 里 M2 的原蓝图是"Permissions & state
-> （认证 / RBAC / 请求取消 / 竞态）"，而现在 M2 被定义为三项 P0 收口。两者不能同时是 M2。
-> 本冻结按当前指令执行（M2 = 三项 P0），权限/认证**尚未排入任何里程碑**。
-> 选项见报告「Need Project Owner Decision」第 1 条。
+> **范围位移，已由项目负责人确认（M2-P0 release 指令）。** `docs/PROJECT.md` 里 M2 的原蓝图是
+> "Permissions & state（认证 / RBAC / 请求取消 / 竞态）"，而 M2 实际被定义为"三项 P0 + Phase 2 权限/认证"。
+> 负责人已确认 M2 的边界为：**M2-P0（已 PASS，tag `m2-p0-gate`）→ M2 Phase 2 permission/auth
+> （NOT STARTED）→ M2 final gate**。因此权限/认证**已归入 M2 Phase 2，不再是"未排入任何里程碑"的状态**
+> （见 `docs/DECISIONS.md` D-060 §1）。本节仅保留位移记录，**不再作为待决问题**。
 
 ### M2-P0 Exit Gate vs M2 Milestone
 

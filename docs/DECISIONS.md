@@ -1881,3 +1881,70 @@ commit 内直接修正，并在 commit message 点名（沿用 D-055 §1 的具�
 **后果。** 四项修正都不改变任何 Gate 判据，但让 release commit 里的文档与代码一致、审计链完整、
 且不会把"这个分支不可达"的错误印象留给后续里程碑。A7 的 P3 是一次**技术上正确**的纠错——它保护的是
 一个被 Node 用例覆盖、但观察者容易误判为死代码的分支。
+
+---
+
+## D-060 · 2026-10-18 · accepted · M2-P0 release：合入 `main` 并打 `m2-p0-gate`；耐久性与里程碑边界 (M2-P0 release)
+
+**背景。** A7 在 `be6955e` 完成 M2-P0 Exit Review，结论 **APPROVE**；四项 pinned 缺陷已由 release
+commit `ec762ef` 修正（D-059）。项目负责人在 M2-P0 Release / Phase 2 Handoff 指令中给出**一次性明确
+授权**：仅当 repository reconstruction 与预期基线一致时，允许把 `m2-stabilization` 以 `--no-ff` 合入
+`main`，在合并后的最终 HEAD 上重跑完整门禁，全绿后创建 annotated tag `m2-p0-gate`。本条记录该次 release
+的边界与结论；门禁的具体数字见该 tag 的 tag message 与 A0 的 Release Closure Report，
+Gate 判据本身**不变**（`docs/TASKS.md`「M2-P0 Exit Gate vs M2 Milestone」六条）。
+
+### 1. 里程碑边界（项目负责人确认，不再作为待决问题）
+
+- M2 = **M2-P0**（durable persistence + presence seam + IndexedDB lease 生命周期，**已 PASS**）
+  + **M2 Phase 2 permission / authentication**（NOT STARTED）+ M2 final gate。
+- `m2-p0-gate` **不等于** M2 关闭。**M2 状态：NOT CLOSED。**
+- `m2-closed` **不得创建**；permission/auth 未处理前不得把 M2 标 CLOSED。
+- M2 Phase 2 的**契约尚未冻结**。本次 release 只锁定顺序与 ownership 方向（`docs/TASKS.md`
+  「M2 Phase 2」），其架构/scope 冻结是 release 之后的下一步工作。
+
+### 2. durability 边界（发布说明原文；任何面向用户的表述不得越过此边界）
+
+1. **durable across process restart** —— `append` resolve 即意味着该 update 存活**进程死亡**
+   （`docs/CONTRACTS.md` §14.2）。
+2. **not a replication guarantee** —— 无复制、无多副本。
+3. **NORMAL 与 FULL 的 durability guarantee 不同** —— 实现为 `journal_mode = WAL` +
+   `synchronous = NORMAL`：提交存活进程崩溃，但**不是**"每次写都 fsync"的掉电承诺。`FULL` 会为每次
+   键击级 append 增加 fsync，而本栈其他部分也不提供该保证，因此不采用（`sqlite-store.ts` 头注释）。
+4. **单节点无复制** —— 不宣称高可用、不宣称故障切换。
+5. **Firefox / Safari 未验证** —— 浏览器证据只在真实 Chromium 上取得；Firefox/Safari 属**未验证**，
+   不得当作已支持。
+6. **K 的浏览器证据当前 N/A，不代表分支不可达** —— K 由 Node 级可控 hydration 用例 + 机制证明覆盖
+   （D-056）。若 store 变为真实异步 I/O 或 hydration timing 改变，**必须重新评估**并恢复浏览器级验证；
+   不要因为难以构造就把该分支当死代码删除。
+7. **no-edit join 的 2 字节 append 是已知 backlog** —— 打开文档但不输入仍追加 1 行 2 字节 update
+   （D-055 §3）；无内容污染、无数据丢失，本轮不修。
+8. **`getStates()` 的只读约束含类型层边界** —— `ReadonlyMap` 是**类型级**约束；运行时仍返回真实 `Map`
+   实例，显式 `as Map<...>` 下行转换仍可写（D-058 已知边界）。它不是运行时防护。
+
+### 3. 本次 release 做了什么 / 没做什么
+
+| 项 | 状态 |
+| --- | --- |
+| merge | `m2-stabilization`（`ec762ef`）→ `main`，`git merge --no-ff`；merge commit 见 `git log --merges -1` |
+| squash / rebase / cherry-pick 整体 feature | **未使用**（会销毁 Agent 历史） |
+| tag | `m2-p0-gate`，annotated，指向门禁全绿的最终 `main` HEAD |
+| `m2-closed` | **未创建**（禁止） |
+| `m1-closed` | **未删除、未移动**（仍在 `f3c353e`） |
+| push / 创建 remote | **未执行**；本轮 remote 保持 none |
+
+### 4. 文档事实修正（D-059 P1 的同类错误延伸到 PROJECT.md）
+
+`docs/PROJECT.md` 的 M1 行原把"没有服务端持久化"写成**当前**限制，M2 行仍写着"实现 NOT STARTED /
+没有任何 M2 生产代码"。P0 合入后这两句都是**与实现相反的事实陈述**。已改为"M1 时期的限制，已由
+`M2-P0-1` 移除"与"M2-P0 Gate: PASS，已合入 `main` 并打 tag，**M2 尚未 CLOSED**"。理由与 D-059 P1
+相同：tag 一旦打出，这批文档就是该 tag 的说明。
+
+### 5. 为什么耐久性边界要写成八条而不是一句"已持久化"
+
+一句 "durable" 在读者心里会自动扩展成"不会丢、还能容灾"。八条里每一条都对应一个真实失败模型或一个
+**未验证**面。把 NORMAL/FULL 的差别、K 的 N/A、Firefox/Safari 未验证写进决策记录，是为了让后来的 Agent
+在写发布说明时**无法合法地**把它简化成更强的承诺——这属于 D-053 §3 的「安全 / 耐久性承诺变化」，
+只能由项目负责人决定，不能由某轮实现顺手收窄或放宽。
+
+**后果。** M2-P0 成为 `main` 上一个可引用、可复现的基线点（`m2-p0-gate`）；M1 的"重启即丢"从系统行为
+降级为"M2 之前的历史限制"；同时 M2 保持 open，Phase 2 的权限/认证不会被误当作已完成。
