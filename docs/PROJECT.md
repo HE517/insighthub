@@ -35,8 +35,8 @@ MVP is delivered in milestones. Only the marked milestone is in scope at a time.
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | **M0 Bootstrap** | Monorepo, shared contracts, `/health`, WebSocket `connected` handshake, React shell with CodeMirror, typecheck/test/build green | **done** |
-| **M1 Collaboration core** | `Y.Doc`/`Y.Text` 绑定 CodeMirror、WebSocket 文档房间 + 同步、IndexedDB 持久化、离线编辑、重连合并 | **实现已完成 · 终签待办 · 合入 `main` 待定** —— 实现、A6 浏览器/Chaos 门禁（真实 Chromium 27/27）与 P0 稳定化均已在 `m1-stabilization` 完成；A7 结论为 *APPROVE WITH CONDITIONS*，两项条件均已满足（`docs/agent-governance/A7-m1-p0-review.md`）。**已知 limitation：没有服务端持久化（`M2-P0-1`）——它不是合并阻塞项。** 两项被接受的风险带入 M2：presence 写侧 seam 与 IndexedDB 引用计数（`docs/DECISIONS.md` D-039） |
-| **M2 Permissions & state** | 认证、文档级 RBAC（服务端权威）、请求取消、过期响应与切文档竞态防护 | 未开始 —— 承接 M1 带出的三项 P0，其中服务端持久化优先（`docs/TASKS.md` M2-P0） |
+| **M1 Collaboration core** | `Y.Doc`/`Y.Text` 绑定 CodeMirror、WebSocket 文档房间 + 同步、IndexedDB 持久化、离线编辑、重连合并 | **CLOSED（已收口）** —— 已以 `--no-ff` merge commit `1fa2abe` 合入 `main`。实现、A6 浏览器/Chaos 门禁（真实 Chromium 27/27）、P0 稳定化与 A7 终审（**APPROVE**，C1/C2 均 CLOSED）全部完成；合并后在 `main` 上重跑 typecheck / test / build / browser 全绿。**已知限制：没有服务端持久化（`M2-P0-1`）**，它不是 M1 未完成项，而是 M2 backlog 的首项；另两项 M2 backlog：presence 写侧 seam（`M2-P0-2`）、注入式 IndexedDB 工厂引用计数（`M2-P0-3`）——见 `docs/DECISIONS.md` D-039 |
+| **M2 Permissions & state** | 认证、文档级 RBAC（服务端权威）、请求取消、过期响应与切文档竞态防护 | **未开始** —— 承接 M1 带出的三项 P0，其中服务端持久化优先（`docs/TASKS.md` M2-P0） |
 | **M3 AI suggestions** | AI request pipeline, suggestion + diff, Diff Preview, Accept/Reject/Undo applied via Yjs transaction | not started |
 | **M4 Hardening** | Markdown preview and editor performance, virtualized document/tree lists, chaos hardening beyond the M1-A6 gate (which already covers reconnect, duplicate and out-of-order frames) | not started |
 

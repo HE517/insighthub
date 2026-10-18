@@ -11,11 +11,22 @@ Tasks: [`docs/TASKS.md`](docs/TASKS.md) ·
 Decisions: [`docs/DECISIONS.md`](docs/DECISIONS.md) ·
 Multi-agent rules: [`AGENTS.md`](AGENTS.md).
 
-**Current status: M1-A0 (contract freeze) complete.** The collaboration contract
-is frozen — binary data-plane framing, error codes, the WebSocket room messages and
-the A1↔A2 session interface. Collaboration behaviour itself (Yjs sync, offline
-persistence, rooms) is **not implemented yet**; M1-A1/A2/A3 build it against the
-frozen contract.
+**当前状态：M1（Collaboration core）已收口并合入 `main`。** 协作文档核心完整交付并验证：
+`Y.Doc`/`Y.Text` 绑定 CodeMirror、WebSocket 文档房间与增量同步、IndexedDB 离线持久化、
+重连合并与协作安全撤销、远端光标/选区、协作感知（awareness）。
+
+终审：A7 Final Closing Review = **APPROVE**（C1、C2 均 CLOSED，无 merge blocker）。
+验证基线（`main`）：`pnpm typecheck` / `pnpm test` / `pnpm build` 全部 exit 0；
+真实 Chromium 浏览器套件 **27/27** 通过（无 shim、无 pin）。
+
+> **发布限制（务必知悉）：当前 M1 没有服务端 durable persistence。** 服务端房间一经释放
+> （最后一个成员离开即销毁），新客户端**不能**依赖服务器恢复历史正文；现阶段唯一的持久副本
+> 是各客户端的 IndexedDB。用户若丢失全部本地副本，内容即无法恢复。该能力立项为
+> **M2-P0-1**（见 [`docs/TASKS.md`](docs/TASKS.md)）。
+>
+> 另有两项风险已记录并带入 M2，**均未修复**：presence 写侧 seam 缺失（M2-P0-2）、
+> 注入式 IndexedDB 工厂缺少引用计数（M2-P0-3）。详见
+> [`docs/DECISIONS.md`](docs/DECISIONS.md) D-039。
 
 ## Transport in one paragraph
 

@@ -84,20 +84,25 @@ pnpm --filter @insighthub/server verify:m0
 
 ## M1 — Collaboration core
 
-状态：**M1 实现已完成；终签（final closing review）待办。**（`m1-stabilization`）
+状态：**M1 已收口（CLOSED）。** 已合入 `main`，merge commit `1fa2abe`。
 
 | M1 领域 | 状态 |
 | --- | --- |
 | 实现（A1 / A2 / A3） | **已完成** |
 | 浏览器 / Chaos 门禁（A6） | **已完成** —— 真实 Chromium 27/27，无 shim、无 pin |
 | P0 稳定化（A1 / A2 + 集成） | **已完成** —— 基线 `9be0e1a`；C1 经 `f2dfe1a` 集成 |
-| 最终复核（A7） | **待终签** —— 结论 *APPROVE WITH CONDITIONS*，原文逐字归档于 `docs/agent-governance/A7-m1-p0-review.md`；两项条件（C1、C2）均已满足 |
-| 合入 `main` | **待定** —— `main` 仍为 `47e96e3` |
-| M2 服务端持久化 | **未开始** —— 见 `M2-P0-1` |
+| 最终复核（A7） | **已完成** —— Final Closing Review = **APPROVE**；C1 = CLOSED、C2 = CLOSED、无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
+| 合入 `main` | **已完成** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`） |
+| M1 里程碑 | **CLOSED** |
+| M2 | **未开始** |
 
-两项被接受的风险随本基线进入下一阶段，**并未**被本基线关闭（`docs/DECISIONS.md` D-039 §3/§4）：presence 的**写**路径不在冻结 seam 内；注入环境的 IndexedDB 工厂没有引用计数。
+合并后在 `main` 的最终 HEAD 上重新验证（未引用分支历史结果）：`pnpm typecheck` exit 0、
+`pnpm test` exit 0（251 + 58）、`pnpm build` exit 0、`node tests/browser/run.mjs` **27/27**。
 
-> **服务端持久化是 M1 的已知 limitation，立项为 `M2-P0-1`，且不是合并决策的阻塞项。** 阻塞项是 A7 点名的那两条——C1 与 C2——两者均已闭合。持久化影响的是**发布说明**：文档唯一持久副本是各客户端的 IndexedDB，用户若丢失全部本地副本，内容即无法恢复。
+两项被接受的风险随本里程碑进入 M2，**并未**被 M1 关闭（`docs/DECISIONS.md` D-039 §3/§4）：presence 的**写**路径不在冻结 seam 内；注入环境的 IndexedDB 工厂没有引用计数。
+
+> **服务端持久化是 M2 backlog，不是 M1 未完成项。** 它是 `M2-P0-1`，在 M1 收口时明确保留为已知限制。
+> **发布限制：** 服务端房间一经释放（最后一个成员离开即销毁），新客户端不能依赖服务器恢复历史正文；现阶段唯一持久副本是各客户端的 IndexedDB，用户若丢失全部本地副本，内容无法恢复。
 
 ### M1-A0.1 — Pre-Parallel Cleanup ✅ done
 
@@ -163,8 +168,8 @@ agents.
 | M1-A3 | 文档房间、同步中继、presence、连接生命周期 | A3 | **done** —— 经 `47e96e3` 集成；服务端 58 测试通过 |
 | M1-A6 | Chaos 测试：重连、重复帧、乱序、幽灵 awareness | A6 | **done** —— 真实浏览器 + chaos 门禁见 `f031063`；发现 P0-1/2/3 |
 | M1-P0 | A6 发现缺陷的稳定化（A1、A2）与集成 | A1 / A2 / A0 | **done** —— 基线 `9be0e1a`；见下一节 |
-| M1-A7 | 集成门禁：typecheck、测试、构建、wire 格式复核 | A7 | **review 已收口，签署待办** —— 结论 *APPROVE WITH CONDITIONS*，原文逐字归档于 `docs/agent-governance/A7-m1-p0-review.md`；C1 + C2 已满足；终签待办 |
-| M1-MERGE | 将 M1 合入 `main` | A0 | **pending** —— `main` 仍为 `47e96e3`；**不**受 `M2-P0-1` 阻塞（那是 M1 已知 limitation） |
+| M1-A7 | 集成门禁：typecheck、测试、构建、wire 格式复核 | A7 | **done** —— Final Closing Review = **APPROVE**；C1、C2 均 CLOSED，无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
+| M1-MERGE | 将 M1 合入 `main` | A0 | **done** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`）；拓扑与 A1/A2/C1 提交历史完整保留 |
 | M1-C1 | A7 条件 C1：让 fatal 重连 pin 可被观测 | A1 | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成 |
 | M1-C2 | A7 条件 C2：决策记录 + 修掉 `defect-pins.mjs` 悬空引用 | A0 | **done** —— `a06b6ff`（D-039、引用修复） |
 
