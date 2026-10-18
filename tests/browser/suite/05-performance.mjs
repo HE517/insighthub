@@ -121,16 +121,17 @@ export function register(runner) {
           sameView: afterTyping.viewId === loaded.viewId,
           mounts: afterTypingMounts,
         });
-        // Honest labelling: this measures the browser's own input → paint cost. The
-        // CRDT leg is not included because of DEFECT P0-2 (the keystroke never reaches
-        // Y.Text, so no transaction, persistence write or frame happens for it).
+        // Honest labelling: `sync`/`toPaint` time the browser's own input -> CodeMirror
+        // sync and paint. The Yjs write happens inside that same update cycle but is not
+        // separately instrumented, so it is not attributed here; that the same keystroke
+        // converges into Y.Text is asserted directly below.
         ctx.note('local input latency (ms, measured inside the page)', {
           sync: statistics(inputSamples.map((sample) => sample.sync)),
           toPaint: statistics(
             inputSamples.map((sample) => sample.toPaint).filter((value) => typeof value === 'number'),
           ),
           samples: inputSamples.length,
-          includesCrdtLeg: false,
+          crdtLegSeparatelyTimed: false,
         });
         assertEqual(afterTyping.viewId, loaded.viewId, 'typing must not rebuild the EditorView');
         assertEqual(
@@ -204,9 +205,9 @@ export function register(runner) {
 
   /*
    * The invariant the task brief names explicitly: "a remote character must not
-   * replace the whole editor document". With DEFECT P0-2 open, the editor holds text
-   * that Y.Text does not, so the next remote update reconciles by replacing the whole
-   * document. Pinned, not skipped.
+   * replace the whole editor document". Before the P0-2 fix the editor could hold text
+   * that Y.Text did not, so the next remote update reconciled by replacing the whole
+   * document; this scenario guards that regression.
    */
   runner.scenario(
     'performance/remote-char-does-not-replace-document',
@@ -223,7 +224,8 @@ export function register(runner) {
           label: 'the 5 000-line document',
         });
 
-        // A real local keystroke: with P0-2 this stays in the editor only.
+        // A real local keystroke: it reaches Y.Text immediately (P0-2 fix), so the
+        // remote edit below is reconciled against a converged document.
         await typeInEditor(page, 'x');
         await sleep(1_000);
         const diverged = await editorState(page);
@@ -238,8 +240,8 @@ export function register(runner) {
           timeoutMs: 30_000,
           label: 'the remote character after local typing',
         }).catch(async (error) => {
-          // With P0-2 the editor ends up longer than Y.Text (it keeps the unsent 'x'),
-          // so an exact match may never happen. Report what we have.
+          // Report what the editor actually holds instead of throwing inside the wait;
+          // the assertions below decide whether the reconcile stayed minimal.
           ctx.note('editor never matched Y.Text', error.message);
           return editorState(page);
         });

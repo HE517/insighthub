@@ -58,8 +58,9 @@ export function register(runner) {
         const offlineStatus = await readConnectionStatus(page);
         ctx.note('status while offline', offlineStatus);
 
-        // Editing must stay possible (R10). Only the editor's own buffer is
-        // observable here because DEFECT P0-2 keeps keystrokes out of Y.Text.
+        // Editing must stay possible while offline (R10). This asserts the editable
+        // surface; that the keystrokes also reach Y.Text is proven by
+        // `editor/local-edit-reaches-ytext` and `indexeddb/B-offline-edits-survive-reopen`.
         const typedOffline = await page.evaluate(() => {
           const content = document.querySelector('.cm-content');
           return content !== null && content.getAttribute('contenteditable') === 'true';

@@ -183,7 +183,7 @@ export function register(runner) {
         collaborationSockets: summary.liveDocumentSockets,
       });
     },
-    // Offline edits are only durable if they reach Y.Text (DEFECT P0-2).
+    // Offline edits are durable because they reach Y.Text immediately (P0-2 fix).
   );
 
   /* ------------------------------------------------------------------ *
