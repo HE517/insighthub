@@ -136,18 +136,55 @@ describe('collab text binding — editor to Y.Text', () => {
     expect(transactions[0]!.origin).toBe(TRANSACTION_ORIGINS.local);
   });
 
-  it('batches a burst of local edits into one transaction', () => {
+  it('puts every local edit in Y.Text immediately, with no batch threshold', () => {
+    const { text, surface, binding, transactions } = createHarness('');
+    const typed = 'a typed sentence';
+
+    for (const character of typed) {
+      surface.typeLocally(binding, {
+        from: surface.text.length,
+        to: surface.text.length,
+        insert: character,
+      });
+      // The invariant: `Y.Text` never trails the editor between updates. The old
+      // implementation held edits in a queue until 64 of them accumulated, so a
+      // normal typing session wrote nothing at all (DEFECT P0-2).
+      expect(text.toString()).toBe(surface.getText());
+    }
+
+    expect(typed.length).toBeLessThan(64);
+    expect(transactions).toHaveLength(typed.length);
+  });
+
+  it('writes the changes of one editor update in one transaction', () => {
     const { text, surface, binding, transactions } = createHarness('ab');
 
-    // Three separate editor updates (multi-cursor / IME style) before any flush.
-    binding.handleLocalChanges([{ from: 0, to: 0, insert: 'X' }]);
-    binding.handleLocalChanges([{ from: 2, to: 2, insert: 'Y' }]);
-    binding.handleLocalChanges([{ from: 4, to: 4, insert: 'Z' }]);
-    surface.text = 'XabYZ';
-    binding.flushLocalEdits();
+    // One CodeMirror update (multi-cursor input, IME commit, paste) reporting three
+    // changes, all expressed against the document as it was before the update.
+    surface.text = 'XaYbZ';
+    binding.handleLocalChanges([
+      { from: 0, to: 0, insert: 'X' },
+      { from: 1, to: 1, insert: 'Y' },
+      { from: 2, to: 2, insert: 'Z' },
+    ]);
 
-    expect(text.toString()).toBe('XabYZ');
+    expect(text.toString()).toBe('XaYbZ');
     expect(transactions).toHaveLength(1);
+    expect(transactions[0]!.origin).toBe(TRANSACTION_ORIGINS.local);
+  });
+
+  it('cannot misplace a local edit when a remote update lands right after it', () => {
+    const { doc, text, surface, binding } = createHarness('hello');
+
+    // The local edit is already in `Y.Text` when the remote transaction runs, so
+    // nothing can reinterpret it. With the old 64-change queue `!` was still
+    // pending: the reconcile erased it from the surface (the visible symptom the
+    // browser suite pins) and the delayed flush wrote it at a stale offset.
+    surface.typeLocally(binding, { from: 5, to: 5, insert: '!' });
+    doc.transact(() => text.insert(0, 'R'), TRANSACTION_ORIGINS.remote);
+
+    expect(text.toString()).toBe('Rhello!');
+    expect(surface.getText()).toBe('Rhello!');
   });
 
   it('does not open a transaction when there is nothing to flush', () => {
@@ -436,23 +473,28 @@ describe('collab text binding — divergence repair and teardown', () => {
     expect(surface.getText()).toBe('hello');
   });
 
-  it('destroy() is idempotent and drops queued local edits', () => {
+  it('destroy() is idempotent, and an edit reported before it is already in Y.Text', () => {
     const { binding, surface, text } = createHarness('hello');
     binding.handleLocalChanges([{ from: 5, to: 5, insert: 'X' }]);
     binding.destroy();
     binding.destroy();
 
     binding.flushLocalEdits();
-    expect(text.toString()).toBe('hello');
+    // Nothing was pending at teardown, so nothing could be dropped: the keystroke
+    // was in the CRDT before `destroy()` was called (DEFECT P0-2).
+    expect(text.toString()).toBe('helloX');
     expect(surface.getText()).toBe('hello');
   });
 
-  it('does not sync after destroy even for a local flush in flight', () => {
-    const { binding, text } = createHarness('hello');
-    binding.handleLocalChanges([{ from: 0, to: 0, insert: 'X' }]);
+  it('writes nothing into Y.Text after destroy()', () => {
+    const { binding, text, transactions } = createHarness('hello');
     binding.destroy();
+
+    binding.handleLocalChanges([{ from: 0, to: 0, insert: 'X' }]);
     binding.flushLocalEdits();
+
     expect(text.toString()).toBe('hello');
+    expect(transactions).toHaveLength(0);
   });
 });
 
