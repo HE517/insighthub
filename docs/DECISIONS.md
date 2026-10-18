@@ -1921,6 +1921,15 @@ Gate 判据本身**不变**（`docs/TASKS.md`「M2-P0 Exit Gate vs M2 Milestone�
 8. **`getStates()` 的只读约束含类型层边界** —— `ReadonlyMap` 是**类型级**约束；运行时仍返回真实 `Map`
    实例，显式 `as Map<...>` 下行转换仍可写（D-058 已知边界）。它不是运行时防护。
 
+> **勘误（2026-10-18，A0 只读核验）。** 上面第 3 条初稿写成"不采用 `FULL`"，与 **D-047 决定 2**
+> （durability = Option C：`synchronous` 可配置，production 允许 `FULL`）冲突。实际状态是：
+> 实现**硬编码** `PRAGMA synchronous = NORMAL`（`apps/server/src/persistence/sqlite-store.ts`），
+> 代码注释给出的理由是该栈其他地方也不提供每写 fsync 的保证；`config.ts` 与 `ARCHITECTURE` §7.10
+> **没有** `synchronous` 开关。因此准确表述是：**NORMAL 与 FULL 的 durability guarantee 不同，
+> 当前实现固定在 NORMAL，D-047 决定 2 的"production 可配置 FULL"尚未实现**，作为已知 gap 进 backlog
+> （`docs/TASKS.md` M2 backlog），不是"已决定不要 FULL"。
+> 面向用户的耐久性表述仍以本节八条为准，**不得**因为存在这个 gap 就宣称任一更强的保证。
+
 ### 3. 本次 release 做了什么 / 没做什么
 
 | 项 | 状态 |

@@ -450,17 +450,86 @@ M2-P0（本 Gate）
 **M2 Milestone 关闭条件（在本 Gate 之外）**：Phase 2 的权限/认证一致性完成并通过 A7 的
 final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 
-### M2 Phase 2 / P1 — permission & authentication consistency（NOT STARTED）
+### M2 Phase 2 / P1 — permission & authentication consistency
 
 | 项 | 内容 |
 | --- | --- |
 | 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
-| 触发条件 | M2-P0 Exit Gate 通过之后 |
-| Owner（预计） | A5（权限/认证）+ A3（服务端权威判定点） |
-| 状态 | **NOT STARTED**；本次冻结只锁定顺序，不确定其契约 |
+| 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060） |
+| Owner | **A5**（身份/成员关系/授权判定核心）+ **A3**（WS 权威判定点接线）；A6 出证据 |
+| 状态 | **冻结中：授权边界与验收判据已冻结；身份机制待项目负责人选择（唯一阻塞项）** |
+
+#### Phase 2 — 现状重建（A0 只读核验，2026-10-18）
+
+| 层 | 现状 | 证据 |
+| --- | --- | --- |
+| HTTP API | 只有 `/health` 与 `/api/meta`；**没有**文档端点、**没有**认证端点 | `apps/server/src/app.ts`；`CONTRACTS` §12 |
+| WebSocket | `join-room` 的 `mode: 'readonly' \| 'readwrite'` 已冻结在契约里，**服务端从不读取该字段** | `packages/shared/src/protocol.ts` §5.2；`rooms/registry.ts` `joinRoom` |
+| 授权 | `RoomRegistry` 有 `authorizeJoin?(documentId) => boolean` 钩子，**生产未接线**，默认 `() => true`（全放行） | `registry.ts` L174/L201/L306；`ws.ts` 不传该选项 |
+| 角色语义 | `DocumentRole` 词表与 `documentCapabilities` 已在 shared 冻结；**除 `aiAcceptRequiredRole` 外无消费者** | `packages/shared/src/permission.ts` |
+| 身份 | 客户端每 tab 生成随机 demo 身份；**服务端不接收、不验证** | `apps/web/src/user.ts` |
+| 成员关系持久化 | store 只有文档 snapshot + update log；**没有 user / membership 表** | `apps/server/src/persistence/types.ts` |
+| space | **代码与契约中都不存在**（仅 `AGENTS.md` 的 A5 角色描述提到 "space/document permissions"） | 全仓检索 |
+
+#### Phase 2 — 四层授权边界（冻结）
+
+| 层 | 权威判定点 | 允许 | 禁止 |
+| --- | --- | --- | --- |
+| **API** | `apps/server` 的授权中间件：解析身份 → 解析成员角色 → 按 capability 判定 | 无身份 = 401；已认证无成员关系 = 403，且**不泄露文档是否存在**（403/404 不得区分存在性） | 把授权决定下放给 web；用 UI 门控代替服务端判定 |
+| **WS** | `join-room` 与每个 BINARY SYNC 帧的入口（`RoomRegistry` / `DocumentRoom`） | 无 `canRead` → 拒绝 join（复用 frozen error code，不新增）；无 `canEdit` → **不 apply、不 persist、不 broadcast** | 采信客户端声明的 `mode`；在帧路径上 `await` 之前做权限判定以外的事 |
+| **document** | `documentCapabilities`（`canRead` / `canComment` / `canEdit` / `canManageMembers`）+ 持久化成员关系 | 这四问是唯一判据 | 在 UI 或服务端各写一套"更细"的规则 |
+| **space** | **本 Phase 不引入**（见下方待决问题 2） | — | 以 space 名义新增持久化实体或端点 |
+
+#### Phase 2 — 依赖顺序（硬约束）
+
+```text
+A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）
+   → A0 integrate
+   → A3 接线（registry.ts / ws.ts：join 拒绝、BINARY 帧闸门、close code）
+   → A6 浏览器/chaos 证据
+   → A7 Phase 2 review
+```
+
+理由与 D-057 同构：A5 与 A3 都改 `apps/server`。**先冻结 seam，再由 A3 接线**，否则两人同时改
+`registry.ts` / `ws.ts`，且 A3 会在没有判据的情况下自己发明授权规则。
+
+#### Phase 2 — Acceptance Criteria（冻结；不随身份机制的选择而变）
+
+| # | 场景 | 判据 | 证据层 |
+| --- | --- | --- | --- |
+| P2-1 | viewer 不能改文档 | viewer 发送 SYNC update：服务端**不 apply / 不 persist / 不 broadcast**；发送方收到 frozen error code；第二个 peer 看不到该文本 | browser |
+| P2-2 | 判定在服务端 | 客户端把 `mode` 改成 `readwrite` **无效**；答案只由服务端按角色给出 | Node + browser |
+| P2-3 | 未认证 / 无成员关系 | 无身份请求 401；已认证但无成员关系 403；**403 与 404 不泄露文档是否存在** | Node |
+| P2-4 | 四层一致 | 同一角色在 API / WS / document capability / UI 门控四处得到同一答案；不一致即 FAIL（表驱动） | Node |
+| P2-5 | 权限不因断线/重启降级 | 角色变更后重连按**新角色**判定；进程重启后成员关系仍在 | browser + Node |
+| P2-6 | 越权管理成员 | `canManageMembers` 仅 owner；editor 调成员端点 403 | Node |
+| P2-7 | 既有门禁不回归 | typecheck / test / build / browser 全绿；M1 + M2-P0 的既有场景**一个都不能减少** | 全部 |
+
+#### Phase 2 — 待项目负责人决策（唯一阻塞项）
+
+**1. 身份 / 认证机制**（决定 `apps/server` 的身份来源与安全承诺措辞）：
+
+| 选项 | 内容 | 安全承诺 | 成本 |
+| --- | --- | --- | --- |
+| **A** | 客户端声明身份（沿用 `demoUser`），服务端只做成员关系与授权 | "授权判定在服务端，但**身份是自称的**" | 最低 |
+| **B**（推荐） | 服务端签发不透明 session token（用户名登录，无密码），httpOnly cookie | "身份由服务端签发，可防跨用户冒用；**无密码 = 无凭证保护**" | 中（+登录端点 + 登录 UI） |
+| **C** | 密码凭据认证（hash + 存储） | 完整认证 | 高，且引入新的持久化与依赖面；SSO 已在非目标内 |
+
+**为什么不选 A 的默认理由**：Phase 2 的名称是 "permission **and authentication** consistency"；
+若身份由客户端自称，"认证一致性"没有可验证的对象，等于把 Phase 2 缩成纯授权——那是**milestone
+scope 改变**，需要项目负责人另行确认，不能由 A0 顺手决定。
+
+**2. space 层**：
+
+| 选项 | 内容 | 影响 |
+| --- | --- | --- |
+| **A**（推荐） | 本 Phase **不引入 space 实体**；"space 层授权"留到出现真实 space 需求时再设计 | 保持 P2-1…P2-7 可验证，不新增持久化实体 |
+| B | 引入 space 实体 + space 级角色 + 端点 | scope 扩大；需要新的 store schema 与契约，Phase 2 时长翻倍 |
 
 **Backlog（不属于任何 Gate）**：**无编辑 join 仍 append 2 字节空 update**（D-055 §3，无内容影响）、
 **idle/background compaction**（M2-P0 只做 eviction-time，D-054）、
+**`synchronous = FULL` 的可配置性**（D-047 决定 2 要求 production 可配置，当前硬编码 `NORMAL`，
+见 D-060 §2 勘误）、
 键击通知扇出优化（D-039 L2）、主 bundle 分块、
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。
@@ -535,7 +604,7 @@ SQLite 依赖。
 | --- | --- | --- |
 | **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。能**真实重启 server 进程**、构造损坏库、注入写失败。**已交付**（`231253a`，36/36）。证据层分工见 D-056：A/B/C/E/F/G/J 必须有浏览器证据；D/H/I 允许 Node 级；K 在同步 store 下 browser N/A |
 | **A7** | 最终架构 + 发布终审 | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层 + D-056 的证据层分层）逐项判定。**启动条件：P0-1 + P0-2（step 1/2/3 全部）+ P0-3 都已合入，且 A6 门禁在集成后的 HEAD 上绿。** 在 P0-2 step 3 完成前不得启动（D-057） |
-| **A5** | **本轮不分配** | 文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证）；M2 不新增 HTTP 端点，授权面未变。若 M2 后续开放文档删除 API，再引入 A5 审授权 |
+| **A5** | M2-P0 **不分配**；**M2 Phase 2 起成为 Owner** | M2-P0 期间文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证），授权面未变。**Phase 2 起 A5 负责身份/成员关系/授权判定核心**（见上「M2 Phase 2 — 依赖顺序」），但**在身份机制由项目负责人选定之前不启动编码** |
 | **A4** | **idle** | M3 才启动 |
 
 ### Branch / worktree plan
