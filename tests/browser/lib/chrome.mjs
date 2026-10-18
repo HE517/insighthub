@@ -100,12 +100,20 @@ export class Browser {
     const deadline = Date.now() + timeoutMs;
     let port;
     while (Date.now() < deadline) {
+      // Chrome writes `DevToolsActivePort` with an exclusive-ish share mode, so a read
+      // that races the write fails with EBUSY/EPERM on Windows. That is "not ready
+      // yet", not a failure: retry instead of propagating a transient OS error out of
+      // the launch (which would fail a scenario for a harness reason).
       if (existsSync(portFile)) {
-        const contents = readFileSync(portFile, 'utf8').split('\n');
-        const parsed = Number.parseInt(contents[0] ?? '', 10);
-        if (Number.isInteger(parsed) && parsed > 0) {
-          port = parsed;
-          break;
+        try {
+          const contents = readFileSync(portFile, 'utf8').split('\n');
+          const parsed = Number.parseInt(contents[0] ?? '', 10);
+          if (Number.isInteger(parsed) && parsed > 0) {
+            port = parsed;
+            break;
+          }
+        } catch {
+          /* the browser is mid-write; try again on the next tick */
         }
       }
       if (child.exitCode !== null) {
