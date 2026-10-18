@@ -457,7 +457,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060） |
 | Owner | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据 |
-| 状态 | **FROZEN，可派发** —— 架构与契约已冻结（`docs/DECISIONS.md` D-061、`docs/CONTRACTS.md` §17、`docs/ARCHITECTURE.md` §8）；**实现 NOT STARTED** |
+| 状态 | **FROZEN，可派发** —— 架构与契约已冻结（`docs/DECISIONS.md` D-061、`docs/CONTRACTS.md` §17、`docs/ARCHITECTURE.md` §8）；P1 第一棒（A5：判定核心 + HTTP 层）**已在分支上实现**，等 A0 集成；WS 执行点仍为 A3 下一棒 |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -531,6 +531,20 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）
 > **已知的跨域点（按 D-055 §1 / D-059 P2 的具名例外处理）**：`attachWebSocketServer` 需要收到
 > authz resolver。A5 不写 `ws.ts`，A3 不改 `authz/**`，因此**这一行接线由 A0 在集成时写入**
 > 并在 commit message 点名。
+
+#### Phase 2 — P1 第一棒（A5）实现现状（分支 `agent/a5-m2-phase2-authz`，等待 A0 集成）
+
+| 层 | 现状 | 位置 |
+| --- | --- | --- |
+| HTTP（session + 文档端点） | **已实现**：§17.4 五个端点、非泄露 404、`credentials: true` 的显式 origin CORS | `apps/server/src/authz/**`、`apps/server/src/app.ts` |
+| 判定核心 | **已实现**：`roleFor` / `can` 一律复用 `documentCapabilities`；无第二套规则 | `apps/server/src/authz/authz.ts` |
+| session | **已实现**：CSPRNG 256-bit opaque token、`httpOnly`/`SameSite=Lax`/`Path=/`、12 h、吊销/轮换；**process-scoped**（limitation，不是安全属性） | `apps/server/src/authz/{tokens,session-store,cookies}.ts` |
+| 成员关系 | **已实现**：A5 自有表 `authz.db`（`documentId/userId/role`），demo fixture 种子，重启后仍在 | `apps/server/src/authz/membership-store.ts` |
+| WS 执行点 | **未接线**（A3 下一棒）：升级认证、join 拒绝、BINARY `SYNC` 闸门 | `ws.ts`、`rooms/**` **未改动** |
+| 客户端身份 | **已接线**：bootstrap 取 `userId/displayName`；token 只存在于 httpOnly cookie，JS 不可达 | `apps/web/src/session/**`、`user.ts`、`App.tsx` |
+| 客户端权限门控 | 只经 `documentCapabilities`；但**角色当前没有传输通道**（§17.4 的响应体不含 `role`），故门控不生效 | `apps/web/src/features/permissions/**` |
+| `FORBIDDEN` / 版本 | **已实现**：`SHARED_CONTRACT_VERSION` 5；`PROTOCOL_VERSION` 保持 2 | `packages/shared/src/errors.ts`、`index.ts` |
+| A3 的 public surface | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定） | 同上 |
 
 #### Phase 2 — Branch / worktree plan
 

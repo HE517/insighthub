@@ -3,10 +3,21 @@
  * `connected` handshake to a browser-style WebSocket client.
  *
  * Runs on an ephemeral port so it never collides with a dev server.
+ *
+ * ## M2 Phase 2 addition
+ *
+ * This file now opens a real `authz` on a temporary data directory and passes it to
+ * `createApp`, so the M0 checks run against the same application shape production serves. The
+ * alternative — relying on `authz` being optional — would have exercised an app that production
+ * never builds. **No assertion below changed**: `/health`, the unknown-path 404 and every
+ * WebSocket case are the M0/M1 checks they always were.
  */
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import {
@@ -18,6 +29,7 @@ import {
 import { WebSocket } from 'ws';
 
 import { createApp } from './app.js';
+import { createAuthz, type AuthzService } from './authz/public.js';
 import { type ServerConfig } from './config.js';
 import { attachWebSocketServer, type WebSocketHandle } from './ws.js';
 
@@ -28,11 +40,18 @@ const config: ServerConfig = {
   wsPath: '/ws',
 };
 
-const server = createServer(createApp(config));
+let server: Server;
 let socket: WebSocketHandle;
+let authz: AuthzService;
+let dataPath = '';
 let baseUrl = '';
 
 before(async () => {
+  // Its own temporary directory, so this test can never touch `.insighthub-data`
+  // (`docs/DECISIONS.md` D-041).
+  dataPath = await mkdtemp(join(tmpdir(), 'insighthub-m0-http-'));
+  authz = await createAuthz({ dataPath });
+  server = createServer(createApp(config, authz));
   socket = attachWebSocketServer(server, config);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
@@ -41,7 +60,9 @@ before(async () => {
 
 after(async () => {
   await socket.close();
+  authz.close();
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  await rm(dataPath, { recursive: true, force: true });
 });
 
 describe('GET /health', () => {

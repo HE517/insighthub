@@ -4,21 +4,31 @@
  * ## M2 startup order is load-bearing (`docs/DECISIONS.md` D-051)
  *
  * ```text
- * loadConfig  →  open the durable store (capability-checked)  →  listen
+ * loadConfig  →  open the durable store (capability-checked)  →  open authz  →  listen
  * ```
  *
- * The store is opened **before** the server listens, and a failure exits with a diagnostic
- * instead of starting. There is deliberately no branch that continues without storage: a
- * silent memory-only server is exactly the M1 data-loss mode that `M2-P0-1` removes, so
- * "refuse to start" is the correct behaviour rather than a harsh one.
+ * The store and the authorization subsystem are opened **before** the server listens, and a
+ * failure exits with a diagnostic instead of starting. There is deliberately no branch that
+ * continues without storage: a silent memory-only server is exactly the M1 data-loss mode that
+ * `M2-P0-1` removes, so "refuse to start" is the correct behaviour rather than a harsh one. The
+ * same reasoning applies to authorization (M2 Phase 2): a server that cannot resolve roles would
+ * answer `404` for everything, which looks like a data problem for hours.
  *
  * The capability check itself lives in `persistence/sqlite-runtime.ts`, which is also why
  * this file awaits it: a static import of a missing built-in would throw during ESM
  * evaluation, before any diagnostic could be printed.
+ *
+ * ## M2 Phase 2 seam
+ *
+ * `createAuthz` is constructed here and handed to the HTTP layer. The WebSocket server is **not**
+ * wired to it in this change: the WS enforcement points (`ws.ts`, `rooms/**`) belong to A3, and
+ * `authz/public.ts` is the surface they consume. The `authz` value is deliberately kept in scope
+ * below so that wiring is a one-line change in the integration commit, with no re-plumbing.
  */
 import { createServer } from 'node:http';
 
 import { createApp } from './app.js';
+import { createAuthz, type AuthzService } from './authz/public.js';
 import { loadConfig } from './config.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
@@ -61,7 +71,21 @@ async function main(): Promise<void> {
     return;
   }
 
-  const app = createApp(config);
+  let authz: AuthzService;
+  try {
+    authz = await createAuthz({ dataPath });
+    console.log(
+      `[server] authz  ready  ${authz.membershipCount} membership rows, sessions process-scoped`,
+    );
+  } catch (error) {
+    console.error('[server] refusing to start: authorization could not be initialised');
+    console.error(`[server]   ${error instanceof Error ? error.message : String(error)}`);
+    await store.close();
+    process.exitCode = 1;
+    return;
+  }
+
+  const app = createApp(config, authz);
   const server = createServer(app);
   const socket = attachWebSocketServer(server, config, { store });
 
@@ -87,6 +111,9 @@ async function main(): Promise<void> {
     // then flush and release the store. `registry.destroy()` inside `socket.close()` stops
     // every per-document queue, so nothing is left mid-append when the store closes.
     await socket.close();
+    // Sessions are in memory, so closing authz only drops them and releases `authz.db`. It runs
+    // after the transports stop: an in-flight HTTP request must not see a closed membership table.
+    authz.close();
     await store.close();
 
     server.close(() => {

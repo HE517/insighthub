@@ -40,6 +40,20 @@ export const WS_ERROR_CODES = {
   ROOM_NOT_FOUND: 'ROOM_NOT_FOUND',
   /** Client and server disagree on `PROTOCOL_VERSION`. */
   PROTOCOL_VERSION_MISMATCH: 'PROTOCOL_VERSION_MISMATCH',
+  /**
+   * The peer is in this room but may not perform this mutation
+   * (`docs/CONTRACTS.md` §17.6, added by M2 Phase 2).
+   *
+   * Deliberately **non-fatal**: a reader that sends a BINARY `SYNC` update it is not
+   * allowed to make keeps its socket and stays a reader. Closing the connection would
+   * turn "you may not edit" into "you may not watch", which is a different (and much
+   * stronger) denial than the one the contract specifies.
+   *
+   * Distinct from `ROOM_NOT_FOUND`: that code withholds the *existence* of a room the
+   * caller may not read (§17.4's non-disclosure rule), while this one only says the
+   * caller's role is insufficient inside a room it has already been admitted to.
+   */
+  FORBIDDEN: 'FORBIDDEN',
   /** Any unexpected server-side failure. Details go to the server log only. */
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;

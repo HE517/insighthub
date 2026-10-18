@@ -1,9 +1,21 @@
 /**
- * App shell (M1).
+ * App shell (M1/M2).
  *
  * Layout: the collaborative CodeMirror surface in the main column, presence and
  * transport chrome to the side. The document body lives **only** in `Y.Text` —
  * this component holds no text state and dispatches no text.
+ *
+ * ## Identity (M2 Phase 2)
+ *
+ * Who this client is now comes from the server: `POST /api/session/bootstrap` → a session cookie →
+ * `userId` + `displayName`. The editor is **not** made to wait for it (`AGENTS.md` R10,
+ * `docs/ARCHITECTURE.md` §2.1): the shell renders while the bootstrap is still in flight and the
+ * collaboration session opens from local state, i.e. bootstrap and editor run in parallel. When the
+ * bootstrap fails — offline, dead server — the app keeps working with a local placeholder identity
+ * and the server refuses any unauthorized traffic it later receives.
+ *
+ * The token is never part of this component's state. It lives in an `httpOnly` cookie the browser
+ * holds and JS cannot read (`docs/CONTRACTS.md` §17.2, P2-9).
  *
  * ## Socket ownership (M1-A0.2, R15)
  *
@@ -24,13 +36,18 @@ import { Card, Input, Layout, Space, Tag, Typography } from 'antd';
 import { DocumentWorkspace } from './features/editor/DocumentWorkspace.js';
 import { StatusPanel } from './features/status/StatusPanel.js';
 import { useServerHealth } from './hooks/useServerHealth.js';
+import { useServerSession } from './session/useServerSession.js';
 import { documentActions } from './store/documentSlice.js';
 import { useAppDispatch, useAppSelector } from './store/hooks.js';
-import { demoUser } from './user.js';
+import { presenceUserFor } from './user.js';
 
 export function App() {
   // HTTP-only backend liveness probe. No WebSocket: the session owns the document socket.
   const health = useServerHealth();
+  // Identity, in parallel with everything else. `pending` behaves like `unavailable`: the editor
+  // must never wait for the network.
+  const serverSession = useServerSession();
+  const identity = serverSession.status === 'ready' ? serverSession.identity : null;
 
   const dispatch = useAppDispatch();
   const activeDocumentId = useAppSelector((state) => state.document.activeDocumentId);
@@ -44,8 +61,9 @@ export function App() {
           InsightHub
         </Typography.Title>
         <Typography.Text className="app-subtitle">
-          M1 Collaboration · CodeMirror ⇄ Y.Text
+          M2 Permissions · session identity · document capabilities
         </Typography.Text>
+        <SessionIdentityTag state={serverSession} />
       </Layout.Header>
 
       <Layout.Content className="app-content">
@@ -82,7 +100,7 @@ export function App() {
             <DocumentWorkspace
               key={activeDocumentId}
               documentId={activeDocumentId}
-              user={demoUser}
+              user={presenceUserFor(identity)}
               role={role}
             />
 
@@ -102,4 +120,29 @@ export function App() {
       </Layout.Content>
     </Layout>
   );
+}
+
+/**
+ * Shows which session identity the shell is running as.
+ *
+ * Deliberately *not* phrased as "signed in" or "authenticated": §17.0 forbids claiming more for a
+ * demo bootstrap than it delivers. It claims an identity from a server-side roster; the session is
+ * what later requests cannot forge.
+ */
+function SessionIdentityTag({ state }: { state: ReturnType<typeof useServerSession> }) {
+  if (state.status === 'ready') {
+    return (
+      <Tag color="green" data-testid="session-identity" title="Server-issued session identity">
+        {state.identity.displayName} · demo session
+      </Tag>
+    );
+  }
+  if (state.status === 'unavailable') {
+    return (
+      <Tag color="default" data-testid="session-identity" title="No server session; local placeholder">
+        local identity (offline)
+      </Tag>
+    );
+  }
+  return null;
 }

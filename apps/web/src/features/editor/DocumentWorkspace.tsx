@@ -21,7 +21,7 @@
  * A stale session can therefore never publish events into the new document's UI,
  * because the component that held it no longer exists.
  */
-import { Alert, Card, Skeleton, Space, Typography } from 'antd';
+import { Alert, Card, Skeleton, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
 
 import type {
@@ -31,6 +31,7 @@ import type {
 } from '@insighthub/shared';
 
 import { useCollaborativeDocument } from '../../collab/public.js';
+import { capabilityGate } from '../permissions/capabilityGate.js';
 import { CollaboratorList } from '../collaborators/CollaboratorList.js';
 import { ConnectionStatusBadge, OfflineNotice } from '../status/ConnectionStatusBadge.js';
 import { CollaborativeMarkdownEditor } from './CollaborativeMarkdownEditor.js';
@@ -43,7 +44,10 @@ import {
 export interface DocumentWorkspaceProps {
   documentId: string;
   user: CollaborativeSessionOptions['user'];
-  /** Permission mirrored from the server for UI gating only (M2 owns the decision). */
+  /**
+   * Role mirrored from the server for **UI gating only** (M2 owns the decision). `null` means the
+   * server has not told us — offline, or no session yet — and the workspace stays fully usable.
+   */
   role?: DocumentRole | null;
 }
 
@@ -107,6 +111,11 @@ function ActiveDocument({
   const status = useSessionConnectionStatus(session);
   const undoState = useSessionUndoState(session);
   const [resyncReason, setResyncReason] = useState<string | null>(null);
+  // The only permission input this component uses, and it comes from `documentCapabilities`
+  // (`apps/web/src/features/permissions/capabilityGate.ts`). Advisory only: the server decides
+  // (`docs/ARCHITECTURE.md` §8.2), and the editor is never made unusable by a UI guess — while the
+  // role is unknown the gate reports `readOnly: false`.
+  const gate = capabilityGate(role);
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -117,11 +126,16 @@ function ActiveDocument({
           <Space size={10} wrap>
             <Typography.Text strong>{documentId}</Typography.Text>
             <ConnectionStatusBadge status={status} />
-            {role === null ? null : (
+            {gate.role === null ? null : (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                role: {role}
+                role: {gate.role}
               </Typography.Text>
             )}
+            {gate.readOnly ? (
+              <Tag color="orange" data-testid="read-only-notice">
+                read-only
+              </Tag>
+            ) : null}
           </Space>
         }
       >
