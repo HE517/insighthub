@@ -35,10 +35,10 @@ MVP is delivered in milestones. Only the marked milestone is in scope at a time.
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | **M0 Bootstrap** | Monorepo, shared contracts, `/health`, WebSocket `connected` handshake, React shell with CodeMirror, typecheck/test/build green | **done** |
-| **M1 Collaboration core** | `Y.Doc`/`Y.Text` bound to CodeMirror, WebSocket document rooms + sync, IndexedDB persistence, offline editing, reconnect merge | **contract frozen (M1-A0), implementation not started** |
-| **M2 Permissions & state** | Auth, document RBAC (server authority), request cancellation, stale-response and document-switch race protection | not started |
+| **M1 Collaboration core** | `Y.Doc`/`Y.Text` bound to CodeMirror, WebSocket document rooms + sync, IndexedDB persistence, offline editing, reconnect merge | **M1-P0 stabilised on `m1-stabilization` (`9be0e1a`); milestone NOT closed** — collaboration is green in one real browser (27/27), but there is no durable server-side persistence (M2-P0), the presence write seam and the IndexedDB reference count are accepted risk, and the merge into `main` is undecided (`docs/DECISIONS.md` D-039) |
+| **M2 Permissions & state** | Auth, document RBAC (server authority), request cancellation, stale-response and document-switch race protection | not started — carries four P0 items out of M1 (`docs/TASKS.md` M2-P0) |
 | **M3 AI suggestions** | AI request pipeline, suggestion + diff, Diff Preview, Accept/Reject/Undo applied via Yjs transaction | not started |
-| **M4 Hardening** | Markdown preview and editor performance, virtualized document/tree lists, chaos tests (concurrency, duplicate events, reconnect) | not started |
+| **M4 Hardening** | Markdown preview and editor performance, virtualized document/tree lists, chaos hardening beyond the M1-A6 gate (which already covers reconnect, duplicate and out-of-order frames) | not started |
 
 ### MVP success criteria (end of M3)
 

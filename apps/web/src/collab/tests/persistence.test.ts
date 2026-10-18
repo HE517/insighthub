@@ -204,7 +204,10 @@ function uniqueKey(prefix: string): string {
  *
  * They are still Node evidence: they pin the *descriptor shape* that breaks
  * `lib0`'s global lookup, not browser storage behaviour. Real-Chromium coverage of
- * this defect is `tests/browser/suite/defect-pins.mjs` (owner: A6).
+ * the defect is now the ordinary browser scenarios (`smoke/harness`, `indexeddb/*`),
+ * which all run the unmodified production path: the dedicated pin
+ * (`tests/browser/suite/defect-pins.mjs`, owner A6) was deleted once the fix landed,
+ * and the P0-1 test-only shim was removed with it — see `docs/DECISIONS.md` D-039.
  */
 describe('global IndexedDB installation (DEFECT P0-1)', () => {
   it('opens a document when the ambient global is a getter-only accessor', async () => {
