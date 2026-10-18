@@ -83,25 +83,80 @@ export function ambientIndexedDb(): IndexedDbLike | undefined {
   return candidate as IndexedDbLike;
 }
 
+/** The global object, seen as the single property this module installs. */
+type IndexedDbGlobalHost = { indexedDB?: unknown };
+
 /**
- * The IndexedDB global `lib0` reads.
+ * Install `factory` as the global `indexedDB` that `lib0` reads, returning a
+ * function that restores the previous state of the property.
  *
- * `lib0/indexeddb.js` (and therefore `y-indexeddb`) closes over the **global**
- * `indexedDB` rather than taking it as a parameter, so an injected implementation
- * is installed as the global for the lifetime of the provider. The previous value
- * is restored by `destroy()`, so the injection leaks nothing into the host page —
- * in production the previous value *is* the browser's own factory.
+ * `lib0/indexeddb.js` (and therefore `y-indexeddb`) reads the **global**
+ * `indexedDB` by bare identifier inside its helpers rather than taking it as a
+ * parameter, so an injected implementation can only be honoured by putting it on
+ * the global object for the lifetime of the provider.
+ *
+ * ## Why this is not `globalThis.indexedDB = factory` (DEFECT P0-1)
+ *
+ * In a real browser `window.indexedDB` is an **own accessor with a getter and no
+ * setter**, and every ES module is strict mode, so a plain assignment throws on the
+ * first line of the persistence path:
+ *
+ * ```text
+ * TypeError: Cannot set property indexedDB of #<Window> which has only a getter
+ * ```
+ *
+ * That rejected `createCollaborativeSession` for every document in every real
+ * browser — the editor never opened. Workspace Node tests could not see it, because
+ * there the property is absent and assignment simply creates a new data property.
+ * The browser's accessor is `configurable`, so `Object.defineProperty` may legally
+ * replace it; that is the mechanism used here.
+ *
+ * Two rules follow, and both are load-bearing:
+ *
+ * 1. **Do not touch the property when it already is the factory.** In production the
+ *    factory resolved by `attachDocumentPersistence` *is* `globalThis.indexedDB`, so
+ *    there is nothing to install and Chromium's descriptor is left exactly as it
+ *    defined it. Only a genuinely different, injected implementation is written.
+ * 2. **Restore the descriptor, not the previous value.** Capturing
+ *    `Object.getOwnPropertyDescriptor` and putting that descriptor back restores the
+ *    original accessor. Remembering only the *value* (what assignment did) would
+ *    leave a writable data property on `window` forever after `destroy()` — a
+ *    permanent mutation of the host page, and one that leaked whenever two sessions
+ *    overlapped.
  */
 function installGlobalIndexedDb(factory: IndexedDbLike): () => void {
-  const host = globalThis as { indexedDB?: unknown; IDBKeyRange?: unknown };
-  const previous = host.indexedDB;
-  host.indexedDB = factory;
+  const host = globalThis as IndexedDbGlobalHost;
+  const previous = Object.getOwnPropertyDescriptor(host, 'indexedDB');
+
+  // Rule 1. `host.indexedDB` is the very expression `lib0` evaluates, so identity
+  // with the factory means the provider will read the right object with no change.
+  if (host.indexedDB === factory) return () => {};
+
+  try {
+    Object.defineProperty(host, 'indexedDB', {
+      value: factory,
+      writable: true,
+      enumerable: previous?.enumerable ?? true,
+      configurable: true,
+    });
+  } catch (error) {
+    // A non-configurable property can be shadowed neither by assignment nor by
+    // `defineProperty`. Report that as an unrecoverable local failure rather than
+    // letting `y-indexeddb` write to the wrong database.
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      'the supplied IndexedDB implementation cannot be installed as the global the ' +
+        `persistence provider reads: ${reason}`,
+    );
+  }
+
+  // Rule 2. Put the original descriptor back, whether it was an accessor or data.
   return () => {
     if (previous === undefined) {
-      delete host.indexedDB;
+      delete (host as Record<string, unknown>).indexedDB;
       return;
     }
-    host.indexedDB = previous;
+    Object.defineProperty(host, 'indexedDB', previous);
   };
 }
 
