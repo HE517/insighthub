@@ -4,13 +4,15 @@ This file is the operating contract for every AI agent (and human) working in th
 repository. It is binding: when a task conflicts with this file, stop and ask the
 Supervisor instead of guessing.
 
-Read order before doing anything:
+**Read order before doing anything:**
 
-1. `AGENTS.md` (this file)
-2. `docs/PROJECT.md` — what we are building and what is out of scope
-3. `docs/ARCHITECTURE.md` — where code is allowed to live
-4. `docs/CONTRACTS.md` — the shared types you must reuse
-5. `docs/TASKS.md` — the current milestone and task ownership
+1. `AGENTS.md` (this file) — the contract and the Definition of Done
+2. `agent-prompts/COMMON.md` — shared behavioural rules for every agent
+3. `agent-prompts/A{n}-*.md` — your role's long-term scope (see §3)
+4. `docs/PROJECT.md` — what we are building and what is out of scope
+5. `docs/ARCHITECTURE.md` — where code is allowed to live
+6. `docs/CONTRACTS.md` — the frozen cross-boundary interface you must reuse
+7. `docs/TASKS.md` — the current milestone and task ownership
 
 ---
 
@@ -19,7 +21,7 @@ Read order before doing anything:
 | Rule | Detail                                                                                                                                                                                                                                                                                      |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | R1   | `packages/shared/**` is the **only** source of truth for types crossing web/server. Never re-declare a shared type inside an app.                                                                                                                                                           |
-| R2   | Never edit another agent's owned files. If you need a change there, file a request in your report under `Need Supervisor Decision`.                                                                                                                                                         |
+| R2   | Never edit another agent's owned files. If you need a change there, raise an `OWNERSHIP BLOCKER` (see `agent-prompts/COMMON.md` §5).                                                                                                                                                        |
 | R3   | Keep the dependency surface small. No new production dependency without Supervisor approval.                                                                                                                                                                                                |
 | R4   | No secrets, tokens, passwords or API keys in code, docs, fixtures or tests.                                                                                                                                                                                                                 |
 | R5   | Every acceptance criterion you claim must be backed by a command you actually ran, with its real output. "Should work" is not evidence.                                                                                                                                                     |
@@ -44,6 +46,7 @@ Changing them **requires explicit Supervisor approval before the edit lands**:
 - `pnpm-workspace.yaml`
 - `docs/ARCHITECTURE.md`
 - `docs/CONTRACTS.md`
+- `AGENTS.md` and `agent-prompts/**` (governance surface)
 
 Process for a required change:
 
@@ -58,78 +61,143 @@ agent within its assigned task.
 
 ## 3. Agent roles
 
-### A0 — Supervisor / Architect
+The **authoritative, maintenance-grade role definitions live in `agent-prompts/`**
+(one file per agent). This section is the index; the prompt files own the detail.
 
-Owns architecture, task decomposition, the API contract, decision records and
-integration coordination. Sole approver for the paths listed in §2. Does not
-implement feature work by default; unblocks and reviews instead.
+| Agent | Role                                      | Prompt file                              |
+| ----- | ----------------------------------------- | ---------------------------------------- |
+| A0    | Supervisor / Architect / Integration Lead | `agent-prompts/A0-supervisor.md`         |
+| A1    | Collaboration / Yjs                       | `agent-prompts/A1-collaboration.md`      |
+| A2    | Editor Frontend                           | `agent-prompts/A2-editor-frontend.md`    |
+| A3    | Realtime Backend                          | `agent-prompts/A3-realtime-backend.md`   |
+| A4    | AI Document Editing                       | `agent-prompts/A4-ai-document.md`        |
+| A5    | Permission & State Consistency            | `agent-prompts/A5-permission-state.md`   |
+| A6    | QA / Chaos Engineering                    | `agent-prompts/A6-qa-chaos.md`           |
+| A7    | Integration / Architecture Review         | `agent-prompts/A7-integration-review.md` |
 
-### A1 — Collaboration Agent
+Short form (the table in `agent-prompts/` is authoritative):
 
-Owns Yjs / CRDT behaviour: `Y.Doc`, `Y.Text`, state vectors, `RelativePosition`,
-IndexedDB persistence, offline editing, reconnect/merge, and collaboration undo
-(undo must not clobber remote edits).
+- **A0** owns architecture, contracts, task decomposition, assignment, dependency
+  approval, shared files, git/worktree coordination, integration, quality gate and
+  milestone planning. A0 is not the default feature developer; it dispatches,
+  reviews, decides and integrates.
+- **A1** owns `Y.Doc`/`Y.Text`, the Yjs sync client, IndexedDB, offline/reconnect,
+  awareness lifecycle, `UndoManager`, and `CollaborativeSession`.
+- **A2** owns React, CodeMirror 6, the `Y.Text` ↔ editor binding, remote cursors and
+  selections, collaborator UI, editor lifecycle and editor performance.
+- **A3** owns Express + WebSocket, the room registry, the server-side `Y.Doc` room,
+  the Yjs sync server, awareness relay, heartbeat, backpressure and connection cleanup.
+- **A4** owns AI suggestions: document read tools, selection/location, suggestion
+  generation, diff preview, accept/reject, stale detection, `RelativePosition`
+  anchoring, the `ai` transaction origin and AI undo isolation.
+- **A5** owns RBAC, space/document permissions, API and WebSocket authorization,
+  request cancellation, `AbortController` discipline, stale-response ownership and
+  document-switch/search races.
+- **A6** owns proof: real-browser regression, chaos (offline/duplicate/out-of-order/
+  race), lifecycle audits, performance invariants and the Release Gate.
+- **A7** owns the final independent gate: code/architecture review, contract
+  compliance, cross-agent integration and release recommendation. A7 is
+  deliberately independent of A0 so the Supervisor is never the only reviewer.
 
-### A2 — Editor Frontend Agent
+## 4. Task Completion Report (Definition of Done)
 
-Owns React, CodeMirror 6 integration, Redux state shape for the editor, Ant Design
-UI, Markdown rendering and frontend performance (memoization, virtualized lists,
-avoiding re-render storms on every keystroke).
+**A task is not DONE until its Task Completion Report is delivered.** A report with
+a missing required item is not accepted, even if the code is perfect.
 
-### A3 — Realtime Backend Agent
+Every formal task ends with a **Chinese** report containing all 13 sections below.
+Report conclusions first, then evidence, then risk.
 
-Owns Express + `ws`: document rooms, connection lifecycle, join/leave, atomic room
-replacement, awareness fan-out and cleanup, heartbeat/termination, and backpressure
-on slow sockets. Presence is **not** a control-plane concern (R14/D-021).
+### 4.1 Required sections
 
-### A4 — AI Document Agent
+**1. 任务状态 (Status)**
 
-Owns AI edit suggestions: request pipeline, suggestion schema usage, diff
-generation and Diff Preview, Accept / Reject / Undo, and staleness detection
-against `baseRevision`.
+- `Status`: `done` / `partial` / `blocked`
+- `Branch`, `Worktree`, `Commit` (short SHA; `未提交` if not committed)
 
-### A5 — Permission & State Agent
+**2. 本轮目标**
+One paragraph: what state was supposed to exist after this round.
 
-Owns auth, RBAC enforcement (server-side authority, client-side UI gating),
-`AbortController` discipline, stale-response protection and document-switching
-race conditions.
+**3. 完成了什么**
+Bullet list of delivered outcomes — not activities. "X now works" beats "did X".
 
-### A6 — QA / Chaos Agent
+**4. 技术实现**
 
-Owns adversarial verification: concurrency, offline/reconnect, duplicate or
-out-of-order events, race conditions, permission switching mid-session. Writes
-the failing test first, then reports.
+- 数据流：数据从哪来到哪去，谁是权威
+- 生命周期：创建/更新/销毁的触发点，什么被释放
+- 设计选择：选了什么方案
+- 为什么这样设计：被否掉的替代方案，以及否定理由
 
-### A7 — Integration / Review Agent
+**5. 发现并修复的问题**
+For **each real bug**, all five fields:
 
-Owns integration health: reviews diffs against this file and `docs/CONTRACTS.md`,
-runs `pnpm typecheck`, `pnpm test`, `pnpm build`, hunts regressions, and is the
-last gate before a milestone is declared complete.
+| 字段              | 要求                                   |
+| ----------------- | -------------------------------------- |
+| `Problem`         | 现象，可观测                           |
+| `Root Cause`      | 机制级原因，不是"某处写错了"           |
+| `Impact`          | 谁受影响、多严重、是否数据丢失         |
+| `Fix`             | 改了什么，为什么这样改                 |
+| `Regression Test` | 哪个测试能防止复发，修复前它是否真的红 |
 
-## 4. Mandatory completion report
+If nothing was found, say so explicitly — a round with no findings is a claim too.
 
-Every agent finishes a task with exactly this block. Missing fields = task not
-accepted.
+**6. Files Changed**
+List files, and for key files explain **职责** (what it owns), not just the path.
 
-```text
-Status: <done | partial | blocked>
-Files Changed: <paths, one per line; "none" if none>
-API Changes: <shared contract / protocol / endpoint changes; "none" if none>
-Tests: <command run + observed result; "none" if none written>
-Dependencies: <added/removed deps; "none" if none>
-Known Risks: <honest list; "none" if none>
-Need Supervisor Decision: <questions or approval requests; "none" if none>
+**7. Tests / Validation**
+Real results only. Must include the project gate:
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-## 5. Definition of Done (every task)
+plus the agent-specific verification (e.g. real-browser suite, chaos suite,
+integration suite). Report the command, the observed result, and the exit code.
 
-1. Code compiles: `pnpm typecheck` passes.
-2. Tests pass: `pnpm test` (add tests for new shared contracts and for any bug you fix).
-3. `pnpm build` passes if you touched a build input.
-4. New behaviour is exercised by at least one test or a documented manual command
-   with real output.
-5. Files you did not own are untouched (`git status` proves it).
-6. The §4 report is included in your final message.
+**8. Acceptance Criteria**
+Item by item: `PASS` / `FAIL` / `未验证` + the concrete evidence.
+
+**9. 与其它 Agent 的集成关系**
+What you depend on, what depends on you, which public surface you touched,
+whether any contract changed.
+
+**10. Known Risks / 未验证内容**
+Honest list. Distinguish "verified at layer X" from "not verified at all".
+Node-only evidence must never be presented as browser evidence.
+
+**11. Need Supervisor Decision**
+Open questions and approvals required, with the options and your recommendation.
+
+**12. 给项目负责人的总结**
+**3–8 sentences**, answering: what the state was before this round, what it is now,
+and what it actually means for InsightHub.
+
+**13. Git 状态**
+`git status` summary, branch, commit, and whether the tree is clean or dirty.
+
+### 4.2 Report integrity
+
+- Do not fabricate command output, and do not reuse an earlier run's output as if
+  it were current.
+- `FAIL` and `未验证` are legitimate; presenting red as green is the only
+  disqualifying outcome.
+- Do not paste internal reasoning or scratch work — report conclusions and evidence.
+- Do not skip a section because it is "obvious"; write `none` instead.
+
+## 5. Definition of Done (checklist form)
+
+A task is done only when all of the following hold **and** §4 has been delivered:
+
+1. `pnpm typecheck` passes (exit 0).
+2. `pnpm test` passes (exit 0), including tests for new shared contracts and a
+   regression test for every bug fixed.
+3. `pnpm build` passes (exit 0) if you touched a build input.
+4. New behaviour is exercised by a test, or by a documented command with real output.
+5. Agent-specific verification has been run (browser/chaos/integration as applicable).
+6. Files you did not own are untouched (`git status` proves it).
+7. No frozen contract was changed without A0 approval and a decision record.
+8. Known risks and unverified areas are stated explicitly in the report.
 
 ## 6. Interface discipline
 
