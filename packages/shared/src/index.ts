@@ -23,5 +23,11 @@ export * from './collab-session.js';
  * v2 (M1-A0): added the binary data plane (`binary-frame.ts`), the awareness
  * state contract, the A1↔A2 `CollaborativeSession` seam, and the frozen error
  * code vocabulary. `PROTOCOL_VERSION` was bumped to 2 in the same change.
+ *
+ * v3 (M2-P0-2): added the presence **write** seam — `CollaborativeSession.publishPresence`,
+ * `PresencePatch` and `parsePresencePatch`. Interface-level change to a frozen seam, so
+ * the shared contract version moves; the **wire is untouched** (awareness already
+ * carries cursor and selection), so `PROTOCOL_VERSION` stays at 2.
+ * See `docs/CONTRACTS.md` §15 and `docs/DECISIONS.md` D-045.
  */
-export const SHARED_CONTRACT_VERSION = 2;
+export const SHARED_CONTRACT_VERSION = 3;
