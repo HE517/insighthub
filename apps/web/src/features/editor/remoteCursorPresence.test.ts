@@ -30,6 +30,14 @@ function collaborator(overrides: Partial<CollaboratorInfo> = {}): CollaboratorIn
   };
 }
 
+/**
+ * A simulated **peer** awareness payload.
+ *
+ * `updatedAt` is required by `awarenessStateSchema` on every awareness entry (remote
+ * included), so a fixture without it would be rejected rather than collected. It is not
+ * A2 local bookkeeping: the collaboration layer owns the local value (M2-P0-2,
+ * `docs/CONTRACTS.md` §15).
+ */
 function stateAt(head: number, name = 'Ada') {
   return {
     user: { id: 'u-42', name, color: '#ff0000' },
