@@ -772,7 +772,8 @@ export function register(runner) {
         'P3 observation',
         grew
           ? 'the durable update log grows by one row per join even with no edit; ' +
-            'ARCHITECTURE §7.3 says persistence happens "on first write". Owner: A3.'
+            'accepted deviation — see DECISIONS D-055 §3 (ARCHITECTURE §7.3 now says ' +
+            '"the first join or write"). Owner: A3.'
           : 'the durable update log did NOT grow on a no-edit join (behaviour changed — revisit this note)',
       );
     },

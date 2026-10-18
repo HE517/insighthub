@@ -328,12 +328,13 @@ Consequences worth stating explicitly:
 | Auth session | Server-issued token | never persisted in a shared doc |
 | Undo history | `Y.UndoManager`, local/AI origins | never a text snapshot |
 
-## 7. Durable persistence (M2 — FROZEN design, NOT implemented)
+## 7. Durable persistence (M2 — IMPLEMENTED, M2-P0-1)
 
-> **Status: FROZEN (design) / NOT IMPLEMENTED.** This section fixes the shape `M2-P0-1`
-> must implement. M1 shipped none of it: a room was a purely in-memory `Y.Doc` that died
-> with its last participant. Nothing here changes the wire protocol (§5) or the client
-> seam (§8 of `docs/CONTRACTS.md`).
+> **Status: IMPLEMENTED (M2-P0-1) / reviewed by A7.** This section fixed the shape `M2-P0-1` had
+> to implement, and §7.13 records the scope decisions taken during integration. M1 shipped none
+> of it: a room was a purely in-memory `Y.Doc` that died with its last participant — that is what
+> M2 removed. Nothing here changes the wire protocol (§5) or the client seam
+> (§8 of `docs/CONTRACTS.md`).
 
 ### 7.1 Lifecycle: M1 vs M2
 

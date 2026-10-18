@@ -561,11 +561,13 @@ An upgrade request on any other path is rejected.
 5. If the change is breaking, bump `SHARED_CONTRACT_VERSION` **and**
    `PROTOCOL_VERSION` as appropriate, and record it in `docs/DECISIONS.md`.
 
-## 14. Durable persistence seam (M2 — FROZEN design, NOT implemented)
+## 14. Durable persistence seam (M2 — IMPLEMENTED, M2-P0-1)
 
-> **Status: FROZEN (design).** No code exists yet; `packages/shared` is unchanged and the
-> wire protocol is unchanged. This section is normative for `M2-P0-1`, so the store cannot
-> be invented differently by each caller.
+> **Status: IMPLEMENTED (M2-P0-1, reviewed by A7 — see `docs/TASKS.md` M2-P0 Exit Gate).**
+> `apps/server/src/persistence/**` implements this seam (`SqliteDocumentStore`, the hydrator, the
+> capability check) and the room lifecycle around it. `packages/shared` and the wire protocol are
+> unchanged by it. This section stays normative: the store must not be invented differently by
+> each caller.
 
 ### 14.1 The seam
 

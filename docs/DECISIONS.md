@@ -1716,9 +1716,16 @@ evidence layer。**
 > browser-level validation。**
 
 **机制根据（由 A6 实测，非推测）**：`SqliteDocumentStore.load` 虽为 `async`，内部 SQLite 工作同步，
-`await` 之后的续体在同一轮微任务内完成重放并释放屏障；而每个 WebSocket 帧是独立宏任务。因此
-BINARY 帧抵达时房间必然已是 `READY`。实测：6001 行日志 + 400 帧突发，`room-joined` 27 ms 到达，
-无 `FRAME_TOO_LARGE`，服务端正常应答 553 帧。
+`await` 之后的续体在同一轮微任务内完成重放并释放屏障。因此**在 production 的同步 store 加常规浏览器
+客户端下，backlog 不可稳定构造**：客户端通常每帧一次 flush，微任务队列会在下一个宏任务前清空。
+实测：6001 行日志 + 400 帧突发，`room-joined` 27 ms 到达，无 `FRAME_TOO_LARGE`，服务端正常应答 553 帧。
+
+> **措辞更正（A7 · P3，2026-10-18）。** 本节原写"每个 WebSocket 帧是独立宏任务，因此 BINARY 帧抵达时
+> 房间**必然**已是 `READY`"——那说得过强。同一 TCP 读内的多帧会被 `ws` 在**同一宏任务**里同步 emit，
+> 而 `handleBinaryFrame` 的生命周期门在任何 `await` 之前同步判定，所以一次性写入 `join-room` + 大量
+> BINARY 帧的客户端**可以**进入 `HYDRATING`。这正是 K 的 Node 用例（用可控 store 阻塞 hydration）
+> 能稳定触发该分支的原因。**结论不变**：该分支是**正确且被 Node 覆盖**的，只是"浏览器层不可稳定构造"，
+> 不是"不可达"。不要因为它难构造就把它当成死代码删除。
 
 **明确不做的事：不为 K 添加 production delay seam。** 把一个不可达路径变成可注入延迟，会增加攻击面
 与热路径分支，只为让一个测试可见；代价与收益不成比例。若将来 store 真变为异步 I/O，K 自然可达，
@@ -1811,3 +1818,66 @@ export interface AwarenessBinding
 **后果。** `M2-P0-2` 三步齐备，"裸 `Awareness` 只作 binding input"从注释变成类型约束；代价是版本号
 跳到 4（workspace 内已被 `tsc` 全量覆盖，无隐藏破坏），以及 `getStates()` 的只读只是类型级这一条
 已记录的边界。
+
+---
+
+## D-059 · 2026-10-18 · accepted · M2-P0 Exit Review 后的四项修正与留痕补记 (M2)
+
+**背景。** A7 在 `be6955e` 上完成 M2-P0 Exit Review，结论 **APPROVE**，同时 pin 住 4 项缺陷
+（P1 文档状态、P2 跨域留痕、P3 措辞、P4 evidence note）。四项均非 Gate 阻断项，但 A7 判定 P1
+必须在 release commit 内修正后再打 tag。本条记录修正内容与 A0 的流程失误。
+
+### P1（文档事实错误，已修正）
+
+契约与架构的 **section 头**在 P0-1/P0-3 合入后仍写着 "NOT implemented" / "No code exists yet"，
+TASKS 的 M2 章节头与范围表也还写着"没有任何 M2 生产代码"。这是**与实现相反的事实陈述**：下一位读者
+（尤其 M3 的 AI 工作）会据此误判 store seam 是否可用。
+
+| 位置 | 修正 |
+| --- | --- |
+| `CONTRACTS` §14 标题与状态行 | `FROZEN design, NOT implemented` → **`IMPLEMENTED (M2-P0-1)`**，指向 `apps/server/src/persistence/**` |
+| `ARCHITECTURE` §7 标题与状态行 | 同上；并指向 §7.13 的集成期 scope 决定 |
+| `TASKS` M2 章节头 | `KICKOFF: architecture FROZEN, implementation NOT started` → **`M2-P0 Gate: PASS — reviewed by A7`** |
+| `TASKS` M2 范围表 | `M2-P0-1` / `M2-P0-3` 从 `FROZEN / NOT IMPLEMENTED` → **`COMPLETE` / `IMPLEMENTED`** |
+| `TASKS` 决策范围 | `D-040…D-052` → **`D-040…D-058`**（现已到 D-059） |
+| `TASKS` Gate 章节 | 新增**判定结果表**（六条判据逐项 PASS + 证据） |
+
+**为什么这属于 Gate 工作而不是"顺手改文案"**：里程碑 tag 一旦打出，这批文档就是该 tag 的说明。
+让 tag 里的权威文档断言"功能未实现"，比留一段没写的文档更糟。
+
+### P2（A0 的流程失误，已补记）
+
+A7 指出 A1 的 step 1/step 3 修改了未在 Owned Files 里枚举的文件：`packages/shared/src/index.ts`
+（版本常量）、`packages/shared/src/collab-session.test.ts`（负向类型测试），以及 step 3 删除了 A2
+测试替身里的 `as unknown as`（后者我在派发时已明确授权）。前两者是**我派发单的问题**，不是 A1 的：
+
+> 我的派发单写的是 `packages/shared/src/collab-session.ts`（仅 A0 预批准的那一处附加），
+> 但一次契约级变更必然要动版本常量与其契约测试。**枚举 Owned Files 时应按"这次变更最小完整面"
+> 写，而不是按"最不想被碰的那个文件"写。**
+
+留痕规则（本条之后生效）：契约级任务的 Owned Files 必须列全 `packages/shared/src/index.ts` 与
+对应 `*.test.ts`；跨域改动一律在决策记录里点名，不只在 commit message 里。
+
+### P3（措辞过强，已修正）
+
+D-056 原写"每个 WebSocket 帧是独立宏任务，因此 BINARY 帧抵达时房间**必然**已是 `READY`"。A7 指出
+这说过强：同一 TCP 读内的多帧会被 `ws` 在**同一宏任务**里同步 emit，而生命周期门在任何 `await`
+之前同步判定，因此一次性写入 `join-room` + 大量 BINARY 帧的客户端**可以**进入 `HYDRATING`——
+这也正是 K 的 Node 用例能稳定触发该分支的原因。
+
+**已改为"在 production 的同步 store 加常规浏览器客户端下，backlog 不可稳定构造"**，并明确：
+该分支**正确且被 Node 覆盖**，只是浏览器层难以稳定构造，**不是不可达**；不要因为难构造就当死代码删掉。
+**D-056 的结论与重评触发条件不变。**
+
+### P4（evidence note 过期，已修正）
+
+`tests/browser/suite/10-m2-durability.mjs` 的 no-edit-join 观察项 note 仍引用 §7.3 的旧措辞
+"on first write"，已改为指向 D-055 §3 与现行措辞 "the first join or write"。只改 evidence 文案，
+**未改任何断言**。
+
+**这条改动的 ownership 说明**：`tests/browser/**` 属 A6。为免为一个字符串再走一轮派发，A0 在 release
+commit 内直接修正，并在 commit message 点名（沿用 D-055 §1 的具名例外做法）。
+
+**后果。** 四项修正都不改变任何 Gate 判据，但让 release commit 里的文档与代码一致、审计链完整、
+且不会把"这个分支不可达"的错误印象留给后续里程碑。A7 的 P3 是一次**技术上正确**的纠错——它保护的是
+一个被 Node 用例覆盖、但观察者容易误判为死代码的分支。

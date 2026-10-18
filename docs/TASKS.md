@@ -369,19 +369,21 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 ---
 
-## M2 — Durable persistence & the two M1 gaps (KICKOFF: architecture FROZEN, implementation NOT started)
+## M2 — Durable persistence & the two M1 gaps (M2-P0 Gate: PASS — reviewed by A7)
 
-状态：**`FROZEN (design)` / `NOT IMPLEMENTED`。** 架构、契约、ownership 与验收面已冻结；
-没有任何 M2 生产代码。基线：从 immutable tag `m1-closed`（`f3c353e`）分出的
-决策：`docs/DECISIONS.md` **D-040…D-052**。
+状态：**三项 P0 全部 IMPLEMENTED 并合入 `m2-stabilization`。** M2-P0 Exit Gate 由 A7 独立评审判为
+**APPROVE**（判据与证据见下「M2-P0 Exit Gate vs M2 Milestone」）。基线：从 immutable tag
+`m1-closed`（`f3c353e`）分出。
+**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）尚未开始，M2 不得标 CLOSED。
+决策：`docs/DECISIONS.md` **D-040…D-058**。
 
 ### M2 范围
 
 | ID | 内容 | 本轮状态 | 代码状态 |
 | --- | --- | --- | --- |
-| `M2-P0-1` | 服务端 durable persistence | **FROZEN** | NOT IMPLEMENTED |
+| `M2-P0-1` | 服务端 durable persistence | **COMPLETE**（A–K 全部有证据；证据层按 D-056） | **IMPLEMENTED** —— `apps/server/src/persistence/**` + 房间生命周期 |
 | `M2-P0-2` | presence 写侧 seam | **COMPLETE**（三步齐备；`SHARED_CONTRACT_VERSION` = 4，wire 不变） | 见下「M2-P0-2 — presence 写侧 seam（3 步迁移）」 |
-| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **FROZEN** | NOT IMPLEMENTED |
+| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **COMPLETE**（D-046 的 5 个回归测试存在并通过） | **IMPLEMENTED** —— `collab/internal/persistence.ts` 租约栈 |
 
 **不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
 
@@ -417,6 +419,20 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 4. A6 的 restart / persistence / corruption / chaos 浏览器门禁全绿。
 5. A7 的 **P0 review** APPROVE，无 merge blocker。
 6. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿，浏览器套件在**合并后的最终 HEAD** 上重跑全绿。
+
+**判定结果：PASS（A7 · M2-P0 Exit Review）**
+
+| 判据 | 判定 | 证据 |
+| --- | --- | --- |
+| 1 · A–K 全部 PASS（证据分层） | **PASS** | 11/11；A/B/C/E/F/G/J 浏览器级，D/H/I Node 级，K 为 Node + 机制证明（D-056） |
+| 2 · M2-P0-2 三步 | **PASS** | step1 `6714ca2`+`054d87e`→`b40ba3c`；step2 `1a8c887`→`271fb4c`；step3 `9f8cfa2`→`a278ee8` |
+| 3 · M2-P0-3 | **PASS** | D-046 的 5 个回归测试在 318 内通过 |
+| 4 · A6 浏览器门禁 | **PASS** | A7 独立重跑 **36/36**（M1 27 + M2 9），exit 0，含 pid 变化 / SHA 一致 / 1011 / 未广播 |
+| 5 · A7 P0 review | **PASS** | **APPROVE**；4 项 pinned 均为文档/流程级，无 Gate 阻断项 |
+| 6 · 三项门禁 + 浏览器在最终 HEAD 重跑 | **PASS** | `typecheck` 0 / `test` **318 + 105** / `build` 0；浏览器 36/36 |
+
+**A7 pinned 缺陷的处理**：P1（契约/架构/TASKS 仍称 P0-1、P0-3 "未实现"）、P2（A1 step 3 跨域留痕）、
+P3（D-056 措辞过强）、P4（A6 evidence note 过期）均已在 release commit 内修正（`docs/DECISIONS.md` D-059）。
 
 **通过 Gate ≠ M2 关闭。** 顺序冻结为：
 
