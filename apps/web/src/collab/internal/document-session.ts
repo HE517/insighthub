@@ -5,6 +5,7 @@ import {
   DOCUMENT_TEXT_KEY,
   UNDO_TRACKED_ORIGINS,
   parsePresencePatch,
+  type AwarenessBinding,
   type AwarenessState,
   type CollaborativeSession,
   type CollaboratorInfo,
@@ -92,7 +93,16 @@ export class DocumentSession implements CollaborativeSession {
 
   readonly text: Y.Text;
 
-  readonly awareness: Awareness;
+  /**
+   * Narrowed to the binding surface (M2-P0-2 step 3).
+   *
+   * The class holds the wide `Awareness` in `awarenessManager.raw`, because the
+   * collaboration layer is the thing that is *allowed* to write presence. Everything
+   * outside this file — including A1's own tests — sees only `AwarenessBinding`, so
+   * `session.awareness.setLocalState(...)` does not compile anywhere. That is the
+   * point of the narrowing: the rule lives in the type, not in a comment.
+   */
+  readonly awareness: AwarenessBinding;
 
   private readonly awarenessManager: AwarenessManager;
 

@@ -159,7 +159,11 @@ export class FakeCollaborativeSession implements CollaborativeSession {
     this.doc = new Y.Doc();
     this.text = this.doc.getText(DOCUMENT_TEXT_KEY);
     this.fakeAwareness = new FakeAwareness(this.doc.clientID);
-    this.awareness = this.fakeAwareness as unknown as CollaborativeSession['awareness'];
+    // No cast (M2-P0-2 step 3): `FakeAwareness` exposes `clientID`, `getStates`, `on`
+    // and `off`, which is exactly `AwarenessBinding`. Its extra write helpers are
+    // reachable only through `fakeAwareness`, the test-control handle — never through
+    // the seam member.
+    this.awareness = this.fakeAwareness;
 
     this.undoManager = new Y.UndoManager(this.text, {
       trackedOrigins: new Set([

@@ -53,6 +53,18 @@ function countAwarenessUpdates(session: DocumentSession): () => number {
   return () => count;
 }
 
+/**
+ * This client's raw awareness entry, read through the **narrowed** binding surface.
+ *
+ * `getStates()` is part of `AwarenessBinding` and includes the local client's own
+ * entry, so tests do not need a write-capable handle to inspect what was published.
+ * That is the point of the narrowing: the read surface is sufficient for assertions,
+ * and reaching for `getLocalState()` would have required the wide type back.
+ */
+function rawLocalState(session: DocumentSession): unknown {
+  return session.awareness.getStates().get(session.localClientId);
+}
+
 describe('presence write seam', () => {
   it('is reachable through the public factory', async () => {
     context = createTestContext();
@@ -110,10 +122,10 @@ describe('presence write seam', () => {
     const session = await ctx().create();
 
     session.publishPresence({ cursor: { anchor: 0, head: 3 } });
-    expect(awarenessStateSchema.safeParse(session.awareness.getLocalState()).success).toBe(true);
+    expect(awarenessStateSchema.safeParse(rawLocalState(session)).success).toBe(true);
 
     session.publishPresence({ selection: { from: 0, to: 3 } });
-    expect(awarenessStateSchema.safeParse(session.awareness.getLocalState()).success).toBe(true);
+    expect(awarenessStateSchema.safeParse(rawLocalState(session)).success).toBe(true);
 
     session.publishPresence({ cursor: null, selection: null });
     const cleared = session.getLocalAwarenessState();
@@ -165,7 +177,7 @@ describe('presence write seam', () => {
     // Seed a non-trivial entry so "untouched" is a meaningful comparison.
     session.publishPresence({ cursor: { anchor: 3, head: 3 }, selection: { from: 1, to: 3 } });
     const before = session.getLocalAwarenessState();
-    const beforeRaw = session.awareness.getLocalState();
+    const beforeRaw = rawLocalState(session);
     const updates = countAwarenessUpdates(session);
 
     const invalid: unknown[] = [
@@ -187,7 +199,7 @@ describe('presence write seam', () => {
     // Nothing reached the local entry, and nothing reached the wire.
     expect(updates()).toBe(0);
     expect(session.getLocalAwarenessState()).toEqual(before);
-    expect(session.awareness.getLocalState()).toEqual(beforeRaw);
+    expect(rawLocalState(session)).toEqual(beforeRaw);
     session.destroy();
   });
 
@@ -225,15 +237,20 @@ describe('presence write seam', () => {
     expect(session.awareness.getStates().has(session.localClientId)).toBe(false);
   });
 
-  it('exposes the raw awareness instance only as a binding input', async () => {
+  it('exposes awareness only as a binding input', async () => {
     const session = await ctx().create();
-    // The instance is still exposed (the editor binding needs the live object), but the
-    // documented write path is the seam. This test records that both exist and that the
-    // seam is the one that stamps `updatedAt`.
+    // M2-P0-2 step 3: what the seam hands out is the binding surface, not the raw
+    // instance. The read members a cursor extension needs are there; the write members
+    // are not (the negative type tests prove that at compile time).
     expect(session.awareness).toBeDefined();
+    expect(session.awareness.getStates()).toBeInstanceOf(Map);
+    expect(typeof session.awareness.on).toBe('function');
+    expect(typeof session.awareness.off).toBe('function');
     vi.spyOn(Date, 'now').mockReturnValue(1_234);
     session.publishPresence({ cursor: { anchor: 0, head: 0 } });
-    expect((session.awareness.getLocalState() as { updatedAt: number }).updatedAt).toBe(1_234);
+    // The seam is the only thing that stamps `updatedAt`, and its result is visible
+    // through the binding read surface.
+    expect((rawLocalState(session) as { updatedAt: number }).updatedAt).toBe(1_234);
     session.destroy();
   });
 });
