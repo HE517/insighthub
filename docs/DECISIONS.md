@@ -1314,8 +1314,9 @@ document_update (document_id, seq INT, update_bytes BLOB, created_at, PK(documen
 3. **single-flight**：同一文档的并发 join 共享一次 hydration（一个 Promise），否则 N 个
    加入者会触发 N 次读盘。
 4. **hydration 期间到达的 BINARY 帧**进入有界队列（不应用、不回复），屏障放行后按序冲刷；
-   队列溢出则以 `FRAME_TOO_LARGE` 关闭连接。**不静默丢弃**（符合 §4 的"违规不该被奖励"，
-   但也不假装成功）。
+   **累计 backlog 溢出**是服务端内部条件，房间转 `UNHEALTHY`、参与者收 `INTERNAL_ERROR` 并由
+   服务端关闭——**不是** `FRAME_TOO_LARGE`（该码只表示单个 frame 超过帧大小契约）。
+   更正理由见 D-050；日志标签 `HYDRATION_BACKLOG_OVERFLOW` 不进入 wire 词表。
 5. **中途断开的 socket**：屏障完成后发现 `context.activeRoom` 已变或已断，结果直接丢弃，
    绝不给死 socket 发 `room-joined`。
 6. **hydration 失败**（snapshot 损坏/重放抛错）：房间标记 unhealthy，参与者收到
@@ -1416,3 +1417,127 @@ release()        → refCount-- ；归零时：仅当"当前全局仍是我们�
 
 **后果。** 修好的是一个"生产不受影响、注入环境会静默读错库"的缺陷；代价是引入一个模块级单例
 状态，必须靠上述 5 个测试守住，而不是靠注释。
+---
+
+## D-047 · 2026-10-18 · accepted · Project Owner decisions on the M2 freeze (M2-Patch)
+
+**背景。** M2 Kickoff / Architecture Freeze 提交后，项目负责人对五处开放项给出决定，并要求
+把"P0 收口"与"里程碑关闭"分开。本条记录这些决定本身；技术不变量见 D-048…D-052。
+
+| # | 决定 | 落地位置 |
+| --- | --- | --- |
+| 1 | **权限/认证 = Option A**：三项 P0 收口后进入 **M2 Phase 2 / P1（permission & authentication consistency）**。**M2-P0 Gate ≠ M2 Milestone Closed**。里程碑顺序冻结为 `M2-P0 → permission/auth Phase 2 → M2 final gate → M3 AI`，**AI（M3）不得先于权限上下文** | `docs/TASKS.md` M2、`docs/PROJECT.md` |
+| 2 | **durability = Option C**：`synchronous` 可配置。dev/test 默认 `NORMAL`；**production 允许配置 `FULL`**。发布说明必须说明两种 durability guarantee 的差别 | `docs/ARCHITECTURE.md` §7.10、`docs/CONTRACTS.md` §14.2 |
+| 3 | **持久化失败继续复用 `INTERNAL_ERROR`**，不新增 wire error code，**`PROTOCOL_VERSION` 不变** | `docs/CONTRACTS.md` §14.4 |
+| 4 | **压缩阈值先冻结 200 updates OR 1 MB log（先到者触发）**；A6 用真实负载校准，**若校准后修改阈值必须记录 decision** | `docs/ARCHITECTURE.md` §7.4、`docs/TASKS.md` M2 |
+| 5 | **Agent worktree 按派发时创建**，不提前批量创建 | `docs/TASKS.md` M2 |
+
+**为什么把 Gate 与 Milestone 分开（决定 1 的实质）。** 三项 P0 是"把 M1 的数据丢失窗口补上"，
+权限/认证是"谁能写这个文档"。二者混在一个 Gate 里会导致两种坏结果：要么持久化被权限工作
+拖住（继续丢数据），要么里程碑在没有任何授权的情况下被宣布完成（把 `viewer` 能改文档的
+状态当成已交付）。分开之后，每个 Gate 的判据单一、可独立验证。
+
+**后果。** M2 的完成路径变成两段，且 M3（AI）被显式排在权限之后。代价是 M2 看起来"更长"；
+收益是不会有任何一个阶段以"其他部分还没做"为由宣布完成。
+
+---
+
+## D-048 · 2026-10-18 · accepted · 每个文档的 durable mutation 必须经过单一 FIFO pipeline (M2-P0-1)
+
+**决策。** 同一 document 的 durable mutation 串行化，`apply → persist → broadcast` 三个阶段的
+生命周期**不得交错**；不同 document 可以并行。
+
+**为什么这不是"实现细节"。** 如果允许 U1 的 persist 与 U2 的 broadcast 交错，就存在这样的
+窗口：服务端已经把 U2 广播给对端，而自己的持久化顺序尚未确定（甚至 U1 落盘失败）。此时
+"对端看到的状态"与"服务端能恢复的状态"出现分叉，而分叉一旦产生就无法通过重连自动修复——
+重连只会把两边的差异当成并发编辑合并。
+
+**为什么明确写成 adapter-independent。** 当前 `node:sqlite` 的 `DatabaseSync` 天然同步，串行
+是"碰巧成立"的；一旦换成异步 adapter（或有人在 persist 里加 `await`），交错就会悄悄出现。
+把不变量写在 seam 上，任何后端都必须满足；写上"不得依赖当前后端恰好同步"这条，是为了防止
+未来有人用"现在是同步的"来反驳。
+
+**失败即停（point 4 是最容易漏的）。** 首个 persist 失败后：房间 `UNHEALTHY`、不再接受
+mutation、失败的那条**不广播**、**已排队但未执行的后续 mutation 也不广播**（不是"继续排空
+队列"）、参与者收 `INTERNAL_ERROR` 并被关闭、内存房间销毁、**已提交的历史不回滚**、作者
+客户端靠自己的 Yjs 副本在重连时重新补齐。如果继续排空队列，就等于对外发布服务端无法恢复
+的状态。
+
+---
+
+## D-049 · 2026-10-18 · accepted · Room 状态机 CREATED → HYDRATING → READY → UNHEALTHY → DESTROYED (M2-P0-1)
+
+**决策。** 房间生命周期显式建模为五个状态（正文见 `docs/ARCHITECTURE.md` §7.5），并冻结
+每个状态的行为边界：
+
+| 状态 | 关键约束 |
+| --- | --- |
+| `CREATED` | 只有身份与成员关系；`Y.Doc` 为空 |
+| `HYDRATING` | single-flight 加载；**不发 `room-joined`**；**不执行** Yjs 数据面；BINARY 帧只进有界队列 |
+| `READY` | 只有此时才发 `room-joined`、冲刷队列、开始正常握手机制 |
+| `UNHEALTHY` | hydration 或 persist 失败；不再接受 update；不广播；`INTERNAL_ERROR` + 关闭 |
+| `DESTROYED` | 终态；**不删除 durable state**；下次 join 新建房间并重新 hydrate |
+
+**两条容易写漏的义务：**
+
+1. **hydrate 期间断开的 socket 不得被重新接纳**——屏障完成后必须重新校验 `activeRoom` 与
+   socket 存活状态，否则会出现"迟到的 `room-joined`"发给一个已经离开的连接。
+2. **`UNHEALTHY` 不得回到 `READY`**——恢复只能靠销毁重建，否则内存会被"半修复"成 store 里
+   并不存在的状态。
+
+**为什么用状态机而不是注释。** 这些约束跨越 registry、room、transport 三层，靠注释守不住；
+写成状态机之后，每个转换点都必须回答"现在是哪个状态、允许做什么"，也就自然产生了 D-048 与
+D-050 的判据。
+
+---
+
+## D-050 · 2026-10-18 · accepted · hydration backlog overflow 是 `INTERNAL_ERROR`，不是 `FRAME_TOO_LARGE` (M2-P0-1)
+
+**背景。** Architecture Freeze 初版写的是"队列溢出 → `FRAME_TOO_LARGE` 关闭"。那是错的。
+
+**决策。** `FRAME_TOO_LARGE` 的语义**只**表示"单个 frame 超过 frame-size contract"。
+hydration 期间**累计 backlog** 溢出是服务端内部条件，因此：房间 `UNHEALTHY` → 参与者收
+`INTERNAL_ERROR` → 服务端关闭连接。内部日志可以打 `HYDRATION_BACKLOG_OVERFLOW` 标签，但
+**该标签不进入 wire error-code vocabulary**，也不改 `PROTOCOL_VERSION`。
+
+**为什么这个区分重要。** `FRAME_TOO_LARGE` 会让客户端得出"我发的东西太大"的结论，从而
+（合理的）去拆分或减小帧——但真正的问题是服务端还没准备好接收任何数据帧。用错错误码会把
+排查方向引向协议层，而问题在生命周期层。
+
+---
+
+## D-051 · 2026-10-18 · accepted · Server 启动时必须 capability-check `node:sqlite`，禁止 memory-only fallback (M2-P0-1)
+
+**决策。** 服务端在开始监听前，必须实际验证当前 Node runtime 提供被测试过的 `node:sqlite`
+API（`DatabaseSync`、`exec`、`prepare`、`StatementSync#run/#get/#all`、BLOB 参数与结果、
+`BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`、`PRAGMA journal_mode`）。验证方式是在数据目录开一个
+一次性库、**执行一条语句**、往返一个 BLOB。
+
+- 不支持 → **启动失败**，给出指名运行时要求的清晰诊断，**不启动 realtime server**。
+- **禁止**降级为 memory-only：静默降级正是 M1 的数据丢失模式。
+- **不新增第三方 SQLite 依赖**；缺 API 的答案是升级 Node，不是加包。
+- 最小运行时要求记录在 `docs/TASKS.md`。
+
+**为什么必须执行一条语句而不是只 `new DatabaseSync()`。** 实测（D-041）：损坏或不可读的
+文件在构造时**不一定抛**，要到第一条语句才抛。只构造不查询的"健康检查"证明不了任何事。
+
+---
+
+## D-052 · 2026-10-18 · accepted · `append` 的 sequence 分配与写入必须原子 (M2-P0-1)
+
+**决策（store 不变量，不规定具体 SQL 写法）。**
+
+1. `append(documentId, update)` 必须**原子地**：为该 document 分配**严格递增**的 sequence →
+   写入 update bytes → 返回 committed sequence。
+2. **两个并发 caller 不得得到相同 sequence**。
+3. `snapshot_seq` **只能**指向已经 durable committed 的 sequence。
+4. `compact()` 的"新 snapshot + `snapshot_seq` 前进 + 删除已消费日志行"必须在**同一 SQLite
+   事务**内完成（D-042 已实测可行）。
+
+**为什么把它写成不变量而不是实现方案。** 用 `MAX(seq)+1`、用独立计数表、还是用 SQLite 的
+`AUTOINCREMENT`，都属于实现选择；但"编号不重复、不复用、快照指针不越界、压缩原子"是正确性
+条件。写成不变量后，A3 可以自选写法，A6 也能据此设计并发测试（验收 H）。
+
+**与 D-048 的关系。** D-048 保证同一文档内不会有两个 mutation 同时进入 store，因此正常路径
+下并发分配根本不会发生；D-052 仍然要求 store 自身具备该性质，因为**不变量不应依赖调用方的
+良好行为**，否则一旦 pipeline 被重构，corruption 会以"偶发重复 seq"的形式出现。

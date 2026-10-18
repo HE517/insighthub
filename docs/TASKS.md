@@ -373,7 +373,7 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 状态：**`FROZEN (design)` / `NOT IMPLEMENTED`。** 架构、契约、ownership 与验收面已冻结；
 没有任何 M2 生产代码。基线：从 immutable tag `m1-closed`（`f3c353e`）分出的
-`m2-stabilization`。决策：`docs/DECISIONS.md` D-040…D-046。
+决策：`docs/DECISIONS.md` **D-040…D-052**。
 
 ### M2 范围
 
@@ -390,18 +390,42 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 > 本冻结按当前指令执行（M2 = 三项 P0），权限/认证**尚未排入任何里程碑**。
 > 选项见报告「Need Project Owner Decision」第 1 条。
 
-### Exit Criteria vs Backlog
+### M2-P0 Exit Gate vs M2 Milestone
 
-**Exit Criteria（M2 关闭必须全部满足）**
+**这两个不是同一个东西**（`docs/DECISIONS.md` D-047 决定 1）。
 
-1. `M2-P0-1` 的验收场景 **A–G** 全部通过（真实用例，非模拟），其中 B/C 必须包含**真实进程重启**。
-2. `M2-P0-2` 已实现，且 A2 不再自行生成 `updatedAt`；presence 写入前有 schema 校验。
-3. `M2-P0-3` 已实现，且 D-046 列出的 **5 个回归测试**全部存在并通过。
-4. A6 的 restart / persistence / corruption / chaos 浏览器门禁全绿（含 `dist/` 之外的 dev 栈）。
-5. A7 终审 **APPROVE**，无 merge blocker。
-6. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿，且浏览器套件在**合并后的最终 HEAD** 上重跑全绿。
+**M2-P0 Exit Gate（本 Gate 的判据）**
 
-**Backlog（不属于 Exit Criteria）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
+1. `M2-P0-1` 验收场景 **A–K** 全部通过；B/C 必须包含**真实进程重启**，H/I/J/K 必须包含并发
+   与状态机验证（见下）。
+2. `M2-P0-2` 已实现：A2 不再生成 `updatedAt`，写入前有 schema 校验。
+3. `M2-P0-3` 已实现：D-046 的 **5 个回归测试**存在并通过。
+4. A6 的 restart / persistence / corruption / chaos 浏览器门禁全绿。
+5. A7 的 **P0 review** APPROVE，无 merge blocker。
+6. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿，浏览器套件在**合并后的最终 HEAD** 上重跑全绿。
+
+**通过 Gate ≠ M2 关闭。** 顺序冻结为：
+
+```text
+M2-P0（本 Gate）
+  → M2 Phase 2 / P1：permission & authentication consistency
+  → M2 final gate
+  → M3 AI（不得先于权限上下文）
+```
+
+**M2 Milestone 关闭条件（在本 Gate 之外）**：Phase 2 的权限/认证一致性完成并通过 A7 的
+final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
+
+### M2 Phase 2 / P1 — permission & authentication consistency（NOT STARTED）
+
+| 项 | 内容 |
+| --- | --- |
+| 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
+| 触发条件 | M2-P0 Exit Gate 通过之后 |
+| Owner（预计） | A5（权限/认证）+ A3（服务端权威判定点） |
+| 状态 | **NOT STARTED**；本次冻结只锁定顺序，不确定其契约 |
+
+**Backlog（不属于任何 Gate）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。
 
@@ -414,8 +438,8 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 | Owned Files | `apps/server/src/persistence/**`（新建，含 store + hydrator + 测试）<br>`apps/server/src/rooms/room.ts`（仅 update 路径与 unhealthy 状态）<br>`apps/server/src/rooms/registry.ts`（hydration barrier、eviction 语义）<br>`apps/server/src/ws.ts`（`room-joined` 推迟到屏障之后）<br>`apps/server/src/config.ts`（`INSIGHTHUB_DATA_PATH`）<br>`apps/server/src/index.ts`（shutdown 时 `store.close()`）<br>`apps/server/src/rooms/test-harness.ts`（每测试独立临时库） |
 | Do Not Touch | `packages/shared/**`、`apps/web/**`、`tests/browser/**`、任何 `package.json`（本轮不新增依赖）、`docs/CONTRACTS.md` |
 | Dependencies | 无外部依赖：设计已冻结（ARCHITECTURE §7、CONTRACTS §14、D-041…D-044） |
-| 必须遵守 | `apply → persist → broadcast`；失败 fail-closed（D-044）；hydration barrier 不改 wire（D-043）；Markdown 不得成为服务端权威（D-042） |
-| Acceptance | 见下 A–G，全部需要真实执行 |
+| 必须遵守 | 每文档**单一 FIFO pipeline** 且失败即停（D-048）；`apply → persist → broadcast`（D-044）；房间状态机（D-049）；hydration 溢出用 `INTERNAL_ERROR` 而非 `FRAME_TOO_LARGE`（D-050）；启动 capability-check（D-051）；append/sequence 原子（D-052）；hydration barrier 不改 wire（D-043）；Markdown 不得成为服务端权威（D-042） |
+| Acceptance | 见下 **A–K**，全部需要真实执行 |
 
 **M2-P0-1 验收场景（冻结）**
 
@@ -428,6 +452,15 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 | E | 压缩 | 超过阈值产生日志 → compaction → 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言） |
 | F | 持久化失败 | 模拟写入失败 → 不得向其它 peer 宣称成功的状态 → 行为符合 D-044（error + 断开 + 房间移除） |
 | G | 文档隔离 | doc A 与 doc B 的持久状态完全隔离，互不可见、互不覆盖 |
+| H | 并发上送 | 两个 peer 几乎同时提交 update → durable append 顺序明确 → broadcast 只发生在各自 commit 之后 → 重启后完全收敛 |
+| I | 失败停止 pipeline | 强制第 N 次 append 失败 → N **不广播** → N+1 排队 mutation **不得继续成功** → room unhealthy/destroyed → 重启后 durable 只含 N 之前已提交数据 → 原作者重连后能补齐 |
+| J | hydration single-flight | 多个客户端同时 join 同一 cold document → `store.load` **只发生一次** → 所有人看到同一 hydrated `Y.Doc` → 不得出现两个竞争的 room document |
+| K | hydration backlog 溢出 | 故意阻塞 hydrate → 制造有界队列溢出 → 收 `INTERNAL_ERROR` + 关闭 → **不得误报 `FRAME_TOO_LARGE`** → server 不崩溃 |
+
+**运行时前置条件（D-051）**：server 需要 Node 运行时提供被验证过的 `node:sqlite` API
+（本轮实测于 Node **v22.14.0**，无需 flag，仅一条 experimental 警告）；启动时做 capability
+check，不满足则**启动失败**并给出清晰诊断，**禁止** memory-only fallback，**不新增**第三方
+SQLite 依赖。
 
 ### M2-P0-2 — presence 写侧 seam
 
@@ -457,7 +490,7 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 | Agent | M2 角色 | 说明 |
 | --- | --- | --- |
 | **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。需要能**真实重启 server 进程**、构造损坏库、注入写失败；M2-P0-1 的 A–G 必须在真实浏览器层再验一遍 |
-| **A7** | 最终架构 + 发布终审 | 只读；按 D-040 的 Exit Criteria 逐项判定；独立于 A0 |
+| **A7** | 最终架构 + 发布终审 | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层）逐项判定；独立于 A0 |
 | **A5** | **本轮不分配** | 文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证）；M2 不新增 HTTP 端点，授权面未变。若 M2 后续开放文档删除 API，再引入 A5 审授权 |
 | **A4** | **idle** | M3 才启动 |
 

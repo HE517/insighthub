@@ -594,8 +594,8 @@ other peer. Consequence: a persist failure is never visible to peers as an accep
 
 ### 14.4 Failure signalling on the wire
 
-No new error code. On a persist failure the server sends `INTERNAL_ERROR` (§7) and closes
-the socket. `INTERNAL_ERROR` is non-fatal by contract, which is what we want: the client
+No new error code. On a persist failure the server sends `INTERNAL_ERROR` (§7), closes
+the socket, and permanently stops that document's mutation pipeline (§14.6, §14.8). `INTERNAL_ERROR` is non-fatal by contract, which is what we want: the client
 keeps its reconnect loop and re-sends through the normal state-vector handshake. Making it
 fatal would permanently stop a client over a transient storage outage.
 
@@ -605,6 +605,37 @@ fatal would permanently stop a client over a transient storage outage.
 - It does not make Markdown the server's source of truth.
 - It does not permit a memory-only fallback: if the store cannot be opened, the server
   refuses to start (an explicit refusal, not a silent degradation).
+
+### 14.6 Per-document mutation serialization (normative)
+
+A document's durable mutations form one FIFO pipeline: `apply → persist → broadcast` for
+`U(n+1)` may not begin before `U(n)` completes. Independent documents may run in parallel.
+Adapters must preserve this ordering regardless of their own concurrency model — including an
+async adapter that could otherwise overlap two appends. See `docs/ARCHITECTURE.md` §7.7.
+
+### 14.7 `append` / sequence atomicity (normative)
+
+`append(documentId, update)` must, atomically: allocate a **strictly increasing** sequence for
+that document, write the update bytes, and return the committed sequence. Two concurrent
+callers must never receive the same sequence. `snapshot_seq` may only ever name a sequence
+that is durably committed. `compact()` must perform snapshot replacement, `snapshot_seq`
+advance and deletion of the consumed log rows inside **one transaction**.
+
+### 14.8 Pipeline stop on failure (normative)
+
+On any persist failure: the room becomes unhealthy; no further mutation is accepted; the
+failing update **and every already-queued update** are not broadcast; participants receive
+`INTERNAL_ERROR` and the server closes them; the in-memory room is destroyed; previously
+committed durable state stays valid and is never rolled back.
+
+### 14.9 Hydration backlog overflow is not a frame-size violation
+
+While a room is hydrating, inbound BINARY frames are held in a bounded queue. A **cumulative
+backlog** overflow is a server-side condition, not an oversized frame, so it must never be
+reported as `FRAME_TOO_LARGE` (reserved for a single frame exceeding the frame-size contract,
+§6.2). The room goes unhealthy, participants receive `INTERNAL_ERROR`, and the server closes
+them. The server log may tag the event `HYDRATION_BACKLOG_OVERFLOW`; that tag is **not** part
+of the wire error vocabulary (§7) and does not change `PROTOCOL_VERSION`.
 
 ## 15. Presence write seam (M2-P0-2 — FROZEN design, NOT implemented)
 
