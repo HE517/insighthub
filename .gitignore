@@ -26,3 +26,10 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# A6 browser suite evidence (regenerated on every run: see tests/browser/README.md)
+tests/browser/artifacts/
+
+# worktree-local agent role overlay: never committed (see docs/agent-governance/harness-setup.md).
+# Each agent worktree carries its own, untracked, so one worktree cannot leak its role into another.
+AGENTS.local.md

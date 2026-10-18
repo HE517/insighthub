@@ -113,6 +113,31 @@ describe('collectRemoteCursors', () => {
     expect(cursors[0]!.anchor).toBe(9);
   });
 
+  it('renders a published selection even while the caret stayed collapsed', () => {
+    // Two independent fields (`CONTRACTS.md` §9): a peer may update only
+    // `selection`. Deriving the range from `cursor` alone dropped it, so a remote
+    // selection never rendered.
+    const awareness = awarenessWith([
+      [PEER, { ...validState(0), cursor: { anchor: 5, head: 5 }, selection: { from: 2, to: 8 } }],
+    ]);
+    const cursors = collectRemoteCursors(awareness, [collaborator()], 100, SELF);
+
+    expect(cursors[0]!.head).toBe(5);
+    expect(cursors[0]!.selection).toEqual({ from: 2, to: 8 });
+  });
+
+  it('keeps the caret at the cursor head when a selection is published', () => {
+    const awareness = awarenessWith([
+      [PEER, { ...validState(0), cursor: { anchor: 8, head: 2 }, selection: { from: 2, to: 8 } }],
+    ]);
+    const cursors = collectRemoteCursors(awareness, [collaborator()], 100, SELF);
+
+    // `head` is where the caret is drawn, and it must not be normalised away.
+    expect(cursors[0]!.head).toBe(2);
+    expect(cursors[0]!.anchor).toBe(8);
+    expect(cursors[0]!.selection).toEqual({ from: 2, to: 8 });
+  });
+
   it('falls back to the selection when the peer published no cursor', () => {
     const awareness = awarenessWith([
       [PEER, { ...validState(0), cursor: null, selection: { from: 1, to: 4 } }],

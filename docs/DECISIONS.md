@@ -1071,9 +1071,74 @@ real. Cost: it is the slowest suite in the repo and it has needed two harness fi
 ordering, and an assertion that pinned a CRDT merge order) — both harness bugs, both fixed in
 the harness rather than by weakening the assertions.
 
-
-
 ---
 
+## D-039 · 2026-10-18 · accepted · M1-P0 集成审计：代为修改、pin 退场，以及两项带到 M2 的缺口 (M1-P0/C2)
 
+> 本条目以**中文**书写：项目负责人要求"给我看的工程报告要写中文"。D-001…D-038 保持既有英文体例，未做改动。
 
+**背景。** A6 的真实浏览器门禁钉住了三个产品缺陷（`P0-1`、`P0-2`、`P0-3`）。A1 与 A2 在各自分支上修好；A0 把两者集成进 `m1-stabilization`（`caa5376`、`0d04161`），并在"把一片红色的 pin 变成可信的绿色"这个过程中，改动了两个其他 Agent 拥有的文件、并把 pin 本身退场。随后 A7 独立复核，提出四项。其中两项无法在 M1-P0 内闭合而不重新打开冻结契约，因此在此**记录为已接受风险**——不悄悄修掉、不削弱、也不留空。
+
+**本条目的每项状态——记录一个风险不等于修复它：**
+
+| 事项 | 状态 | 落脚点 |
+| --- | --- | --- |
+| 集成期间 A0 改动了 A6 与 A1 拥有的文件 | **已处置并留痕** | §1；边界成立，提交信息点名例外 |
+| P0 pin 与 P0-1 workaround shim | **已修复** | §2；pin 删除、shim 移除、断言未动 |
+| 本地 presence 写路径不在冻结 seam 内 | **已接受——风险仍在** | §3；M2 用写侧 seam 收口 |
+| 全局 IndexedDB 工厂缺少引用计数 | **已接受——风险仍在且未验证** | §4；M2 加安装栈 + 重叠回归测试 |
+| A7 的复核报告未入库 | **已闭合——已归档** | §5；原文存于 `docs/agent-governance/A7-m1-p0-review.md` |
+
+### 1. A0 改动 A6 与 A1 拥有的文件（已处置，已留痕）
+
+集成期间 A0 改动了 `tests/browser/**`（属 A6）与 `apps/web/src/collab/tests/support/test-server.ts`、`sync.test.ts`（属 A1）。当时 A6、A1 均无活跃进程。
+
+**为什么必须改。** 替代方案是交出一份门禁不可信的基线：过期的 pin 什么也没断言；两条断言在产品**正确**时会失败；还有一条把"存活 socket 数"当证据（既抖动，又在两者都为 0 时变成空断言）。建立在那些之上的绿色比红色更糟。
+
+**授权依据，两案分述——因为性质不同。**
+- A6 这一侧是**项目负责人明确委派**：M1-P0 指令点名要求移除 P0-1 的 pin 与 workaround，并修正那两条断言。
+- A1 这一侧**没有被委派**。它记录为 A0 质量门职责下的 **ownership 例外**（`agent-prompts/A0-supervisor.md` §4：集成者必须验证测试是真的、不得接受抖动的门禁），而**不是**把它写成授权。A7 是对它的独立检查。
+
+**守住的边界。** A0 未触碰 A1/A2/A3 的任何生产代码、未改冻结契约、未改 `package.json`。每处改动要么删掉不再描述现实的标签，要么让断言**更强**（用 `viewId` + 挂载增量替代脆弱的绝对值；用归属校验替代"光标必须为零"；用单调计数替代存活计数）。两处例外在提交信息中点名（`19587fc`、`fc542f8`、`9be0e1a`），不埋在 diff 里。
+
+### 2. P0 pin 与 P0-1 shim 退场（已修复）
+
+**删除依据。** 只有契约要求的行为在**未修改**的生产路径上通过，pin 才可以删。这一点在删除之前就已证明：`defect-pin/P0-1`（按构造不加载 shim）在真实 Chromium 中通过，且删除前那次运行已报告 `pinnedFixed: [P0-1, P0-2, P0-3]`。删除后 27/27、无 shim、无 pin，说明每个修复的证据不再依赖 test-only workaround。
+
+**删除范围。** `suite/defect-pins.mjs`（真删文件，跑者的目录发现机制随之注销）、`P0_1_WORKAROUND` 与整条 `withWorkaround` 管线（含横幅与记录进 environment 的 `testOnlyWorkaround` 字段）、九个已过期的 `knownDefect` 标签。**没有任何断言被删除或放宽**；P0-2/P0-3 的场景变成普通的绿色场景。
+
+**A7 的独立结论（原文归档见 §5）。** A7 在 `9be0e1a` 上完成复核，未要求回滚修复。其结论为 **APPROVE WITH CONDITIONS（有条件放行）**，列两项阻塞：C1（让 fatal 重连不变量**可被观测**）、C2（补齐决策留痕并修掉对已删除 `defect-pins.mjs` 的悬空引用）。**两项均已满足**：C1 由 `dd36169` 提供、经 `f2dfe1a` 以真实 merge 集成；C2 由本条记录与 `a06b6ff` 完成。
+
+### 3. 本地 presence 写路径不在冻结 seam 内（已接受，M2 收口）
+
+**事实。** `CollaborativeSession`（`packages/shared/src/collab-session.ts:89`）只暴露 presence 的**读**——`getCollaborators()`、`getLocalAwarenessState()`——以及原始 `readonly awareness` 实例，**没有写方法**。因此 A2 经裸实例发布 presence：`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx:200-202` 调用 `session.awareness.setLocalStateField('cursor' | 'selection' | 'updatedAt', …)`。
+
+**为什么是问题。** 读侧经 `awarenessStateSchema` 校验，写侧没有。**客户端发布什么形状不由契约拥有**：A2 的一个 bug 就能发出"所有对端都必须拒绝"的状态，契约拦不住。R14 的"原始 `Awareness` 仅作绑定输入"在读侧成立、在写侧被拉伸——单通道不变量未被破坏，但写形状无人治理。
+
+**M1 为何接受。**（a）A2 写入的每个字段都在 `awarenessStateSchema` 内（含 `updatedAt`），今天的载荷合规，缺的是**护栏**而非已存在的缺陷；（b）真实浏览器已覆盖可观测行为（渲染、离开清除、切房不串台）；（c）增加写方法是**冻结契约变更**（版本号 + `docs/CONTRACTS.md` 修订）且 M1 无功能驱动，而 M1-P0 的职责是稳定基线，不是扩展契约。
+
+**M2 方向。** seam 增加 `publishPresence(patch: Pick<AwarenessState, 'cursor' | 'selection'>)`，写入前校验，并把 `readonly awareness` 收窄为"仅绑定输入"类型，使 A2 无法经它写入；提升 `SHARED_CONTRACT_VERSION` 并更新 `docs/CONTRACTS.md` §5/§9。
+
+### 4. 注入环境的全局 IndexedDB 工厂缺少引用计数（已接受，M2 处理，未验证）
+
+**事实。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
+
+**重叠场景的失败链。** A 安装 `FA`（存下 ambient descriptor），B 安装 `FB`（存下 A 的 descriptor）。`A.destroy()` 还原 **ambient**，而 B 仍在运行 → B 的 provider 静默读到 ambient 工厂，**写进错误的数据库且不报错**；`B.destroy()` 再还原 `FA` → **一个假工厂永久留在全局上**。
+
+**影响范围。** 仅当两个及以上**注入**工厂的会话在同一 realm 内重叠。生产不受影响：未传 `options.indexedDB` 时解析出的就是 `globalThis.indexedDB`，身份检查命中，安装根本不发生。所以这是测试支撑与"未来非浏览器宿主"的风险，不是用户可见风险。
+
+**M1-P0 为何不修。** 没有任何测试演练重叠注入，修了也是未验证；正确的修法会改变 P0-1 测试所钉住的 teardown 语义；且它不在 M1 退出条件内。**在集成收尾阶段写未验证的生命周期代码，正是本里程碑要消除的模式。**
+
+**M2 方向。** 以模块级安装栈 + 每工厂引用计数替掉单次快照；只在当前值仍是自己时才还原（身份保护的 pop）；新增"两个重叠注入会话"的回归测试，断言第二个会话仍用自己的工厂、且全局最终与初始完全一致。
+
+### 5. 审计链：A7 报告已逐字归档（已闭合）
+
+A7 的复核现已是仓库产物：`docs/agent-governance/A7-m1-p0-review.md`，即交付时的原文，未编辑。本条目不复述它，其判定措辞按 A7 所写为准。
+
+**为什么这一点在此重要。** 本文 §1–§4 写于报告归档之前，是**独立**得出的（重读代码与提交历史），因此它们是可独立核验的事实，而不是对 A7 叙述的摘要。两者重叠处——非引用计数的全局工厂、presence 写路径、代改范围、缺失的集成报告——结论一致。
+
+**归档不改变的一件事：** 报告内的相对 markdown 链接（如 `apps/web/src/collab/internal/persistence.ts#L127-L161`）是按仓库根书写的，从 `docs/agent-governance/` 下不能解析。它们**按原样保留**，未做改写；请以仓库根为基准解析。
+
+**状态。** A7 列出的两项阻塞均已满足：**C1** 由 `dd36169`（经 `f2dfe1a` 集成，把 120 ms 窗口换成接线的 20 ms / 60 ms 退避与 300 ms 观测窗口，并补上显式恢复与正向对照断言）；**C2** 由本条记录与 `a06b6ff` 中的引用修复完成。
+
+**后果。** M1-P0 基线现在可审计：每处代改都有陈述清楚的依据与应当复核它的具名 owner；pin 退场绑定在不依赖 shim 的证据上；两项剩余缺口有 owner、有里程碑、有具体方向，而不是一句含糊的"已知问题"。代价是两项被接受的风险带入 M2——这才是诚实的当前状态。这里没有为了让套件变绿而削弱任何断言，也没有为了让风险消失而改动任何冻结契约。

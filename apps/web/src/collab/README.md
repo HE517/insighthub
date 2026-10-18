@@ -117,6 +117,34 @@ The browser path must be confirmed by hand, by whoever has a browser and the dev
 Until that runbook is executed, the persistence claims in the completion report are
 scoped to the double.
 
+### Installing the IndexedDB global without breaking the page (DEFECT P0-1, fixed)
+
+`persistence.ts` has to put the resolved factory on `globalThis`, because `lib0` reads
+`indexedDB` as a bare global. In a real browser `window.indexedDB` is an **own accessor
+with a getter and no setter**, and every ES module is strict mode, so the original
+`globalThis.indexedDB = factory` threw
+
+```text
+TypeError: Cannot set property indexedDB of #<Window> which has only a getter
+```
+
+on the first line of the persistence path — `createCollaborativeSession` rejected in
+every real browser and no document could be opened. It was invisible to the Node
+suite, where the property is simply absent and assignment creates a new data property.
+
+The module now (a) installs **nothing** when the resolved factory already *is*
+`globalThis.indexedDB` — which is the production case, so Chromium's descriptor is
+never touched — and (b) replaces the property with `Object.defineProperty` (legal
+because the browser's accessor is `configurable`) when a genuinely different
+implementation is injected, restoring the **original descriptor** on teardown instead
+of writing the old value back. Never reintroduce a bare assignment here.
+
+Coverage: `tests/persistence.test.ts` reproduces the getter-only descriptor in Node
+(red before the fix, `TypeError` at `installGlobalIndexedDb`), and A6's real-Chromium
+pin `defect-pin/P0-1` drives the **unmodified** production path
+(`node tests/browser/run.mjs --filter defect-pin/P0-1`). Once that pin passes it should
+be deleted, not relaxed — `tests/browser/**` is A6-owned.
+
 ## Verifying this suite
 
 The collaboration suite runs as part of the **single** root gate:
