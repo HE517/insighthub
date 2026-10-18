@@ -23,14 +23,15 @@
  * Rebuilding on *every* update would also be correct but would put an awareness
  * read on the local keystroke path, which is exactly the hot-path work M1-A2 is
  * meant to avoid.
+ *
+ * ## Who decides *when* a rebuild happens
+ *
+ * `remoteCursorPresence.ts`. Nothing here dispatches from the plugin constructor:
+ * a `ViewPlugin` is constructed inside an update cycle, where `view.dispatch`
+ * throws, so the mount-time paint is deferred and coalesced there (DEFECT P0-3,
+ * `AGENTS.md` A2 invariant 4). This file only turns a cursor list into decorations.
  */
-import {
-  StateEffect,
-  StateField,
-  type EditorState,
-  type Extension,
-  type Range,
-} from '@codemirror/state';
+import { StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import {
   Decoration,
   EditorView,
@@ -41,12 +42,8 @@ import {
 } from '@codemirror/view';
 import type { CollaboratorInfo } from '@insighthub/shared';
 
-import {
-  collectRemoteCursors,
-  observeAwareness,
-  type AwarenessView,
-  type RemoteCursor,
-} from './remoteCursors.js';
+import { createRemoteCursorPresence, type RemoteCursorPresence } from './remoteCursorPresence.js';
+import { type AwarenessView, type RemoteCursor } from './remoteCursors.js';
 
 /** Redraws remote cursors. Carries nothing: the provider reads live awareness. */
 const refreshRemoteCursors = StateEffect.define<readonly RemoteCursor[]>();
@@ -185,35 +182,41 @@ export interface RemoteCursorExtensionOptions {
 export function remoteCursors(options: RemoteCursorExtensionOptions): Extension {
   const { awareness, getCollaborators, localClientId } = options;
 
-  const compute = (state: EditorState): readonly RemoteCursor[] =>
-    collectRemoteCursors(awareness, getCollaborators(), state.doc.length, localClientId);
-
   const plugin = ViewPlugin.fromClass(
     class {
-      private readonly unsubscribe: () => void;
+      private readonly presence: RemoteCursorPresence;
 
-      constructor(readonly view: EditorView) {
-        // Repaint on attach so collaborators already in the room are visible
-        // immediately, instead of waiting for their next movement.
-        this.view.dispatch({ effects: refreshRemoteCursors.of(compute(this.view.state)) });
-
-        this.unsubscribe = observeAwareness(awareness, () => {
-          // Dispatching from an awareness callback is safe: CodeMirror queues the
-          // update, and the effect carries the freshly computed cursors so the
-          // state field never has to read awareness itself.
-          this.view.dispatch({ effects: refreshRemoteCursors.of(compute(this.view.state)) });
+      constructor(view: EditorView) {
+        // Nothing is dispatched here on purpose. A `ViewPlugin` constructor runs
+        // inside an update cycle, where `view.dispatch` throws ("Calls to
+        // EditorView.update are not allowed while an update is in progress"), so
+        // the mount-time repaint once crashed the plugin and no remote cursor was
+        // ever drawn (DEFECT P0-3). The presence owns both the deferred first paint
+        // and the awareness subscription; see `remoteCursorPresence.ts`.
+        this.presence = createRemoteCursorPresence({
+          awareness,
+          getCollaborators,
+          localClientId,
+          repaint: {
+            documentLength: () => view.state.doc.length,
+            dispatch: (cursors) => {
+              view.dispatch({ effects: refreshRemoteCursors.of(cursors) });
+            },
+          },
         });
       }
 
       update(_update: ViewUpdate): void {
         // Position mapping for local document changes happens in the state field
-        // (`DecorationSet.map`). Awareness changes arrive through the observer
-        // above. Nothing to do per update, and deliberately so: this is the hot
-        // path and it must stay free of awareness reads.
+        // (`DecorationSet.map`). Awareness changes arrive through the presence
+        // subscription above. Nothing to do per update, and deliberately so: this
+        // is the hot path and it must stay free of awareness reads.
       }
 
       destroy(): void {
-        this.unsubscribe();
+        // Unsubscribes both awareness events and drops a first paint that has not
+        // run yet, so nothing is dispatched into a destroyed view.
+        this.presence.destroy();
       }
     },
   );
