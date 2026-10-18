@@ -327,3 +327,179 @@ Consequences worth stating explicitly:
 | AI suggestions | Server-issued, client-held | applied via Yjs transaction on accept |
 | Auth session | Server-issued token | never persisted in a shared doc |
 | Undo history | `Y.UndoManager`, local/AI origins | never a text snapshot |
+
+## 7. Durable persistence (M2 — FROZEN design, NOT implemented)
+
+> **Status: FROZEN (design) / NOT IMPLEMENTED.** This section fixes the shape `M2-P0-1`
+> must implement. M1 shipped none of it: a room was a purely in-memory `Y.Doc` that died
+> with its last participant. Nothing here changes the wire protocol (§5) or the client
+> seam (§8 of `docs/CONTRACTS.md`).
+
+### 7.1 Lifecycle: M1 vs M2
+
+M1 (implemented today):
+
+```text
+client join → joinRoom (synchronous) → in-memory Y.Doc → sync
+            → last peer leaves → room destroyed → content gone
+```
+
+M2 (frozen target):
+
+```text
+client join → joinRoom (still synchronous: membership only)
+            → room exists, hydration pending
+            → lazy hydrate: load snapshot → replay update log → Y.Doc ready
+            → room-joined is sent only now          ← the barrier
+            → realtime update: apply → persist → broadcast
+            → last peer leaves → memory room evicted; durable document retained
+            → future join / server restart → hydrate the same state
+```
+
+**The two-phase join is the load-bearing decision.** Membership stays synchronous, which is
+the invariant §5.1 and M1's atomic-replace tests depend on; only the *acknowledgement* is
+deferred behind an asynchronous content-readiness barrier. A naive "make `joinRoom` async"
+would reopen exactly the intermediate-state class of bug M1 closed (`docs/DECISIONS.md`
+D-043).
+
+### 7.2 Ownership
+
+| Layer | Owns | Never owns |
+| --- | --- | --- |
+| `RoomRegistry` | membership, room identity, eviction policy, the hydration barrier | file paths, SQL, byte formats |
+| `DocumentRoom` | the in-memory `Y.Doc`, awareness, relay decisions | durable bytes |
+| `DocumentStore` (new) | durable representation, append ordering, compaction, transactions, open/close | sockets, `Y.Doc` instances, membership |
+| `DocumentHydrator` (new) | turning stored bytes into a ready `Y.Doc` | membership, policy |
+
+The rule that keeps this testable: **`DocumentStore` never sees a socket and
+`DocumentRoom` never sees a file.** `RoomRegistry` is the only place that knows both exist.
+
+### 7.3 Storage adapter seam
+
+Persistence is reached through one interface, so no business layer depends on a specific
+SQLite/file API and the backend stays replaceable:
+
+```ts
+export interface DocumentStore {
+  /** Load the durable state, or `null` when this document has never been stored. */
+  load(documentId: string): Promise<StoredDocument | null>;
+  /** Append one already-applied update. Resolves only once it is durable. */
+  append(documentId: string, update: Uint8Array): Promise<void>;
+  /** Replace snapshot + truncate the consumed log, atomically. */
+  compact(documentId: string, snapshot: Uint8Array, throughSequence: number): Promise<void>;
+  /** Durably remove a document. Semantics frozen even though M2 exposes no UI for it. */
+  delete(documentId: string): Promise<void>;
+  /** Flush and release the backend. Idempotent; called on graceful shutdown. */
+  close(): Promise<void>;
+}
+
+interface StoredDocument {
+  readonly snapshot: Uint8Array;
+  readonly snapshotSequence: number;
+  readonly updates: readonly { sequence: number; update: Uint8Array }[];
+}
+```
+
+`load` returning `null` means "never stored", not "empty": a join for an unknown document
+creates a fresh empty document and persists it on first write. `delete` is frozen now so
+no caller has to guess later whether it is a soft flag or a real removal — it is a real
+removal, and callers must treat the document as gone.
+
+### 7.4 Durable representation
+
+**Snapshot + append-only update log, with the Yjs binary state as the authority.**
+
+```text
+document        (document_id PK, snapshot BLOB, snapshot_seq INT, updated_at INT)
+document_update (document_id, seq, update_bytes BLOB, created_at, PK(document_id, seq))
+```
+
+Why not store the rendered Markdown and treat it as the server's source of truth: a
+Markdown string loses everything the CRDT needs to merge correctly — client ids, clocks,
+deleted-item tombstones, formatting marks. Reconstructing a `Y.Doc` from text on every
+join would make two clients that were never offline look like concurrent writers and would
+resurrect deleted content. The Markdown rendering is a **projection**, derived when needed,
+never stored as the authority (the same one-source-of-truth rule as §0).
+
+### 7.5 Hydration barrier
+
+```text
+room missing from memory
+  → create the room (empty Y.Doc) synchronously   ← membership atomicity preserved
+  → single-flight hydrate:
+        snapshot ← store.load()
+        Y.applyUpdate(doc, snapshot, remote)
+        for each log row in sequence order: Y.applyUpdate(doc, update, remote)
+  → barrier released → room-joined is sent → normal SyncStep handshake
+```
+
+- **Single-flight per document**: concurrent joins for the same document await one load, not
+  one per socket. Otherwise N joiners produce N snapshots of the same reads.
+- **No sync before the barrier**: `room-joined` is the gate the contract already defines
+  (§4), so a conforming client never asks for sync early. A non-conforming client that sends
+  a BINARY frame while hydration is pending has its frames **held in a small bounded queue**
+  (not applied, not answered) and flushed after the barrier; a queue overflow closes the
+  socket with `FRAME_TOO_LARGE`. Nothing is silently dropped.
+- **A socket that disconnects mid-hydration** is detached normally; the barrier result is
+  discarded, never sent to a dead socket.
+- **Restart recovery needs no old client.** The snapshot plus the log are the whole
+  document; recovery is a fresh-server read, not a client replay (D-043).
+
+### 7.6 Write ordering and crash semantics
+
+For every inbound update the room performs, in this order:
+
+```text
+1. apply    Y.applyUpdate(doc, update, remote)     — in-memory state advances
+2. persist  store.append(documentId, update)       — await durable acknowledgement
+3. broadcast encodeSyncUpdate(update) to other peers
+```
+
+**Persist before broadcast.** If step 2 fails, no peer was ever told the update landed, so
+the server never claims a state it cannot recover.
+
+Failure policy (frozen):
+
+1. The room is marked **unhealthy** and refuses further updates.
+2. Every participant receives a typed error and the socket is closed server-side. The code
+   is `INTERNAL_ERROR`: it is the existing, non-fatal code for "server-side failure, details
+   in the log", and non-fatal is the correct client semantic — a transient storage outage
+   must **not** stop the client's reconnect loop the way a fatal code does (§7).
+3. The in-memory room is **destroyed**, so memory cannot drift from durable state.
+4. The author's client still holds the update locally (its IndexedDB), so on reconnect the
+   normal state-vector handshake re-sends it and the append is retried. Recovery is the
+   existing reconnect path, not a special case.
+5. If no client holds the update (author vanished simultaneously), it is lost — the same
+   exposure M1 had, and the reason this is a P0 rather than a nice-to-have.
+
+Nothing here catches an error and continues as if the write succeeded (D-044).
+
+### 7.7 Eviction is not deletion
+
+| Event | Memory | Durable |
+| --- | --- | --- |
+| Last peer leaves | room destroyed (evicted) | **unchanged — retained** |
+| Server shutdown | all rooms destroyed | **unchanged — retained** |
+| `store.delete(id)` | room destroyed if present | **removed** |
+
+`RoomRegistry` owns eviction; `DocumentStore` owns deletion. M2 exposes no deletion UI, but
+the store semantics are frozen so eviction can never be mistaken for deletion.
+
+### 7.8 Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `INSIGHTHUB_DATA_PATH` | `./.insighthub-data` (dev) | directory holding the durable store |
+
+Tests must pass a per-test temporary directory and must never touch a development database;
+the test harness creates and removes its own path per suite (D-041). The store refuses to
+start when the directory cannot be opened, rather than degrading to memory-only, because a
+silent memory-only fallback is exactly the data-loss mode M1 had.
+
+### 7.9 What does not change
+
+- **Wire protocol**: no new frame type, no new message type, no base64 anywhere (§5).
+- **Error vocabulary**: unchanged. Persistence failure reuses `INTERNAL_ERROR` (§7 of
+  `docs/CONTRACTS.md`), and `ROOM_NOT_FOUND` keeps its reserved meaning.
+- **Client seam**: `CollaborativeSession` is untouched by `M2-P0-1`.
+- **Awareness**: still never persisted (§9 of `docs/CONTRACTS.md`).

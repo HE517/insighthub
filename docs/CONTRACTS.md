@@ -560,3 +560,131 @@ An upgrade request on any other path is rejected.
 4. Run `pnpm typecheck && pnpm test`.
 5. If the change is breaking, bump `SHARED_CONTRACT_VERSION` **and**
    `PROTOCOL_VERSION` as appropriate, and record it in `docs/DECISIONS.md`.
+
+## 14. Durable persistence seam (M2 — FROZEN design, NOT implemented)
+
+> **Status: FROZEN (design).** No code exists yet; `packages/shared` is unchanged and the
+> wire protocol is unchanged. This section is normative for `M2-P0-1`, so the store cannot
+> be invented differently by each caller.
+
+### 14.1 The seam
+
+The server reaches durable state only through `DocumentStore`. Its shape is specified in
+`docs/ARCHITECTURE.md` §7.3. The normative parts:
+
+| Member | Meaning | Guarantee |
+| --- | --- | --- |
+| `load(documentId)` | read snapshot + log | `null` means *never stored*, never "empty document" |
+| `append(documentId, update)` | append one already-applied update | resolves **only after the bytes are durable**; rejects on failure |
+| `compact(documentId, snapshot, throughSequence)` | replace snapshot, drop consumed log | atomic: a crash mid-compaction leaves either the old state or the new one |
+| `delete(documentId)` | durable removal | idempotent; removal, not a flag |
+| `close()` | flush and release | idempotent; safe on a store that failed to open |
+
+### 14.2 Durability claim, stated precisely
+
+`append` resolving means the update survives **process death**. It is not an fsync-per-write
+promise about power loss, and it is not a replication promise. Stating the weaker guarantee
+is deliberate: claiming "durable" without naming the failure model is how persistence
+claims become marketing.
+
+### 14.3 Ordering (normative)
+
+`apply → persist → broadcast`. Persist must be awaited before the update is relayed to any
+other peer. Consequence: a persist failure is never visible to peers as an accepted update.
+
+### 14.4 Failure signalling on the wire
+
+No new error code. On a persist failure the server sends `INTERNAL_ERROR` (§7) and closes
+the socket. `INTERNAL_ERROR` is non-fatal by contract, which is what we want: the client
+keeps its reconnect loop and re-sends through the normal state-vector handshake. Making it
+fatal would permanently stop a client over a transient storage outage.
+
+### 14.5 What this section does **not** authorise
+
+- It does not change binary framing, message types, payload shapes or the error vocabulary.
+- It does not make Markdown the server's source of truth.
+- It does not permit a memory-only fallback: if the store cannot be opened, the server
+  refuses to start (an explicit refusal, not a silent degradation).
+
+## 15. Presence write seam (M2-P0-2 — FROZEN design, NOT implemented)
+
+> **Status: FROZEN (design) / NOT IMPLEMENTED.** `packages/shared` is unchanged this round.
+> Implementing it is a breaking contract addition and requires the version bump in §15.5.
+
+### 15.1 The gap
+
+Today A2 publishes presence by writing the raw instance
+(`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx` calls
+`session.awareness.setLocalStateField('cursor' | 'selection' | 'updatedAt', …)`), while
+`CollaborativeSession` (§8) exposes presence **reads** only. Two consequences:
+
+1. the shape a client publishes is not owned by the contract — only the read side is
+   validated against `awarenessStateSchema`;
+2. `updatedAt` is maintained by A2, duplicating bookkeeping A1 already implements
+   (`document-session.ts` `setCursor`/`setSelection` are not on the seam, so A2 cannot call
+   them through the type).
+
+### 15.2 Frozen design
+
+```ts
+export interface CollaborativeSession {
+  // ... existing members unchanged ...
+
+  /**
+   * Publish this client's presence. Validated before it is written; `updatedAt` is set by
+   * the collaboration layer, never by the caller.
+   */
+  publishPresence(patch: PresencePatch): void;
+}
+
+export interface PresencePatch {
+  readonly cursor?: { anchor: number; head: number } | null;
+  readonly selection?: { from: number; to: number } | null;
+}
+```
+
+Rules:
+
+1. **`updatedAt` is owned by the collab layer.** A2 stops computing it. This removes the
+   duplicate bookkeeping rather than documenting it away.
+2. **Validation happens before the write**, against the same schema the read side uses
+   (`awarenessStateSchema` and its cursor/selection sub-schemas). An invalid patch is a
+   programming error and throws; it must never reach the wire.
+3. **Awareness remains the only presence channel.** No control-plane presence message is
+   added; `docs/DECISIONS.md` D-021 still stands.
+4. **The raw `Awareness` instance may remain exposed only as a binding input.** It is not a
+   write path and not UI state (R14). The seam addition does not legitimise writing through
+   it; it exists so a caller never has to.
+5. **Partial patches are legal**: publishing only `cursor` must not clear `selection`.
+
+### 15.3 Migration order (frozen)
+
+The order matters because the two packages ship in one workspace but are reviewed as
+separate changes:
+
+1. **A1** adds `publishPresence` to the seam and implements it (additive, no callers yet).
+2. **A2** migrates the editor to call it and deletes its own `updatedAt` bookkeeping.
+3. **A1** narrows `readonly awareness` to a binding-input-only type (or keeps it with an
+   explicit write prohibition), now that no production caller writes through it.
+
+Doing step 3 before step 2 would break the editor; doing step 2 before step 1 is impossible.
+
+### 15.4 Scope restraint
+
+Only cursor and selection are covered. Collaborator identity (`user`) is already established
+by the session at construction and is not a per-keystroke write; adding it to the patch would
+invite callers to change identity mid-session, which nothing in M2 needs.
+
+### 15.5 Version impact
+
+| Constant | Change | Why |
+| --- | --- | --- |
+| `SHARED_CONTRACT_VERSION` | 2 → **3** when implemented | additive but interface-level change to a frozen seam |
+| `PROTOCOL_VERSION` | **unchanged** | the wire does not change: awareness fields already exist |
+
+## 16. Client-internal lifecycle fixes are not contract matters
+
+`M2-P0-3` (the injected IndexedDB factory lifecycle) is a client-internal implementation
+concern. It changes no seam, no message and no schema, so it is specified in
+`docs/DECISIONS.md` D-046 and `docs/ARCHITECTURE.md` §7.2 rather than here. Recording that
+explicitly keeps this document about the cross-boundary contract only.

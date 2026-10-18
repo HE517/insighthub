@@ -369,19 +369,118 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 ---
 
-## M2 — Permissions & state (sketch)
+## M2 — Durable persistence & the two M1 gaps (KICKOFF: architecture FROZEN, implementation NOT started)
 
-Auth, document RBAC enforced server-side, request cancellation, stale-response
-guards and document-switch race protection. Owner: A5.
+状态：**`FROZEN (design)` / `NOT IMPLEMENTED`。** 架构、契约、ownership 与验收面已冻结；
+没有任何 M2 生产代码。基线：从 immutable tag `m1-closed`（`f3c353e`）分出的
+`m2-stabilization`。决策：`docs/DECISIONS.md` D-040…D-046。
 
-### M2-P0 —— 从 M1 带出的项目（不可选）
+### M2 范围
 
-| ID | 任务 | Owner | 状态 | 为何是 P0 |
-| --- | --- | --- | --- | --- |
-| M2-P0-1 | 服务端文档持久化 | A3 | **未开始** | M1 的房间只在内存中：房间随最后一个成员销毁，**全新**设备无法恢复先前存在的内容。这是数据丢失窗口，不是锦上添花。**这是 M1 的已知 limitation，明确不是把 M1 合入 `main` 的阻塞项** |
-| M2-P0-2 | presence 写侧 seam（`publishPresence`），写入前校验；把 `readonly awareness` 收窄为仅绑定输入 | A1 + A0（契约） | **未开始** | 当前 A2 经裸 `Awareness` 写 presence，读侧有校验而写侧没有（`docs/DECISIONS.md` D-039 §3） |
-| M2-P0-3 | 引用计数的 IndexedDB 工厂安装（安装栈、身份保护还原）+ 重叠会话回归测试 | A1 | **未开始** | 两个重叠的注入会话可能把假工厂留在全局并静默读错数据库（`docs/DECISIONS.md` D-039 §4）。当前是**未验证**，不只是未修复 |
-| M2-P0-4 | 将 A7 复核报告归档为 `docs/agent-governance/A7-m1-p0-review.md` | A0 | **已完成**（已并入 M1-P0-9） | M1 收尾期间已逐字归档；保留此行只为避免 M2 列表静默丢掉一项曾承诺的事项 |
+| ID | 内容 | 本轮状态 | 代码状态 |
+| --- | --- | --- | --- |
+| `M2-P0-1` | 服务端 durable persistence | **FROZEN** | NOT IMPLEMENTED |
+| `M2-P0-2` | presence 写侧 seam | **FROZEN** | NOT IMPLEMENTED（需 `SHARED_CONTRACT_VERSION` 2→3） |
+| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **FROZEN** | NOT IMPLEMENTED |
+
+**不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
+
+> **范围位移，需要项目负责人确认。** `docs/PROJECT.md` 里 M2 的原蓝图是"Permissions & state
+> （认证 / RBAC / 请求取消 / 竞态）"，而现在 M2 被定义为三项 P0 收口。两者不能同时是 M2。
+> 本冻结按当前指令执行（M2 = 三项 P0），权限/认证**尚未排入任何里程碑**。
+> 选项见报告「Need Project Owner Decision」第 1 条。
+
+### Exit Criteria vs Backlog
+
+**Exit Criteria（M2 关闭必须全部满足）**
+
+1. `M2-P0-1` 的验收场景 **A–G** 全部通过（真实用例，非模拟），其中 B/C 必须包含**真实进程重启**。
+2. `M2-P0-2` 已实现，且 A2 不再自行生成 `updatedAt`；presence 写入前有 schema 校验。
+3. `M2-P0-3` 已实现，且 D-046 列出的 **5 个回归测试**全部存在并通过。
+4. A6 的 restart / persistence / corruption / chaos 浏览器门禁全绿（含 `dist/` 之外的 dev 栈）。
+5. A7 终审 **APPROVE**，无 merge blocker。
+6. `pnpm typecheck` / `pnpm test` / `pnpm build` 全绿，且浏览器套件在**合并后的最终 HEAD** 上重跑全绿。
+
+**Backlog（不属于 Exit Criteria）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
+`void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
+真实多机弱网浸泡。
+
+### M2-P0-1 — 服务端 durable persistence
+
+| 项 | 内容 |
+| --- | --- |
+| Owner | **A3** |
+| Branch / Worktree | `agent/a3-m2-persistence` / `Insighthub-wt-a3-m2` |
+| Owned Files | `apps/server/src/persistence/**`（新建，含 store + hydrator + 测试）<br>`apps/server/src/rooms/room.ts`（仅 update 路径与 unhealthy 状态）<br>`apps/server/src/rooms/registry.ts`（hydration barrier、eviction 语义）<br>`apps/server/src/ws.ts`（`room-joined` 推迟到屏障之后）<br>`apps/server/src/config.ts`（`INSIGHTHUB_DATA_PATH`）<br>`apps/server/src/index.ts`（shutdown 时 `store.close()`）<br>`apps/server/src/rooms/test-harness.ts`（每测试独立临时库） |
+| Do Not Touch | `packages/shared/**`、`apps/web/**`、`tests/browser/**`、任何 `package.json`（本轮不新增依赖）、`docs/CONTRACTS.md` |
+| Dependencies | 无外部依赖：设计已冻结（ARCHITECTURE §7、CONTRACTS §14、D-041…D-044） |
+| 必须遵守 | `apply → persist → broadcast`；失败 fail-closed（D-044）；hydration barrier 不改 wire（D-043）；Markdown 不得成为服务端权威（D-042） |
+| Acceptance | 见下 A–G，全部需要真实执行 |
+
+**M2-P0-1 验收场景（冻结）**
+
+| # | 场景 | 判据 |
+| --- | --- | --- |
+| A | 房间清空后恢复 | tab A 写文本 → A 离开 → 房间被驱逐 → **全新** tab B 打开 → 内容仍在 |
+| B | 进程重启恢复 | 写文本 → **终止 server 进程** → 启动新进程 → 新浏览器打开同一文档 → 内容完整 |
+| C | 离线客户端 + 重启 | 客户端离线编辑 → 服务端重启 → 客户端重连 → state-vector 对账 → 双方收敛 → 再开**全新**客户端 → 看到完整内容 |
+| D | 重复 update 重放 | 同一 update 重复进入持久化路径 → 重启 → 状态不重复、不损坏 |
+| E | 压缩 | 超过阈值产生日志 → compaction → 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言） |
+| F | 持久化失败 | 模拟写入失败 → 不得向其它 peer 宣称成功的状态 → 行为符合 D-044（error + 断开 + 房间移除） |
+| G | 文档隔离 | doc A 与 doc B 的持久状态完全隔离，互不可见、互不覆盖 |
+
+### M2-P0-2 — presence 写侧 seam
+
+| 项 | 内容 |
+| --- | --- |
+| Owner | **A1**（seam 实现）→ **A2**（编辑器迁移） |
+| Branch / Worktree | A1: `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence`<br>A2: `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（**在 A1 分支集成之后**再分叉） |
+| A1 Owned Files | `packages/shared/src/collab-session.ts`（**仅 A0 预批准的那一处附加**）、`apps/web/src/collab/internal/{document-session,awareness,public}.ts`、`apps/web/src/collab/tests/**` |
+| A2 Owned Files | `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx`、`apps/web/src/features/editor/**/*.test.ts` |
+| Do Not Touch（双方） | `apps/server/**`、`tests/browser/**`、wire framing、错误码词表 |
+| Dependencies | A2 依赖 A1 的 seam 先合入；A1 依赖 A0 对 `SHARED_CONTRACT_VERSION` 2→3 的批准 |
+| Acceptance | A2 不再写 `updatedAt`；非法 patch 在写入前抛错；裸 `Awareness` 不再有生产写入点；版本号提升并记录；`pnpm typecheck/test/build` 全绿 |
+
+### M2-P0-3 — 注入式 IndexedDB 工厂生命周期
+
+| 项 | 内容 |
+| --- | --- |
+| Owner | **A1** |
+| Branch / Worktree | `agent/a1-m2-idb-lifecycle` / `Insighthub-wt-a1-m2-idb` |
+| Owned Files | `apps/web/src/collab/internal/persistence.ts`、`apps/web/src/collab/tests/persistence.test.ts`、`apps/web/src/collab/tests/public-seam.test.ts` |
+| Do Not Touch | `packages/shared/**`、`apps/server/**`、`apps/web/src/features/**`、`tests/browser/**` |
+| Dependencies | 无（与 M2-P0-2 可并行，但两者都改 `collab/`，集成顺序由 A0 决定） |
+| Acceptance | D-046 的 5 个回归测试存在且通过；生产路径（未注入）全局零写入、getter 身份不变 |
+
+### 其他 Agent
+
+| Agent | M2 角色 | 说明 |
+| --- | --- | --- |
+| **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。需要能**真实重启 server 进程**、构造损坏库、注入写失败；M2-P0-1 的 A–G 必须在真实浏览器层再验一遍 |
+| **A7** | 最终架构 + 发布终审 | 只读；按 D-040 的 Exit Criteria 逐项判定；独立于 A0 |
+| **A5** | **本轮不分配** | 文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证）；M2 不新增 HTTP 端点，授权面未变。若 M2 后续开放文档删除 API，再引入 A5 审授权 |
+| **A4** | **idle** | M3 才启动 |
+
+### Branch / worktree plan
+
+```text
+m1-closed (tag, f3c353e, immutable)
+  └ m2-stabilization            ← 本 worktree：Insighthub-wt-m2
+      └ [Architecture Freeze commit]  ← 只有文档
+          ├ agent/a3-m2-persistence   → Insighthub-wt-a3-m2
+          ├ agent/a1-m2-idb-lifecycle → Insighthub-wt-a1-m2-idb
+          ├ agent/a1-m2-presence      → Insighthub-wt-a1-m2-presence
+          │    └ (集成后) agent/a2-m2-presence-ui → Insighthub-wt-a2-m2-presence
+          └ agent/a6-m2-chaos         → Insighthub-wt-a6-m2
+```
+
+规则：
+
+1. **所有 Agent worktree 都从 Architecture Freeze commit 分叉**，不从 `main`、不从 tag 直接分叉。
+2. `m2-stabilization` 只由 A0 写入（集成 + 文档），Agent 一律在自己的 worktree 里改。
+3. **presence seam 的顺序是硬约束**：A1 先合入 seam，A2 再从新的 `m2-stabilization` 分叉；
+   否则 A2 会基于一个不存在的 API 编码。
+4. `m1-closed` tag 保持不动；M2 不动 `main`。
 
 ## M3 — AI suggestions (sketch)
 

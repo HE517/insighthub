@@ -1160,3 +1160,259 @@ A1 执行的三组变异（临时修改生产代码 → 观察目标用例 → �
 **为什么这条更正必须写进决策记录。** "测试存在"与"测试能抓住它声称守护的回归"是两件事，后者只能靠变异证明。此前把"我没做这个实验"说成"证据链有空缺"，会让读者以为 C1 的证据强度不足；事实相反——实验做了，只是执行者是 A1 与 A7 的独立复核，而不是 A0 在合并阶段重做。
 
 **后果。** M1-P0 基线现在可审计：每处代改都有陈述清楚的依据与应当复核它的具名 owner；pin 退场绑定在不依赖 shim 的证据上；两项剩余缺口有 owner、有里程碑、有具体方向，而不是一句含糊的"已知问题"。代价是两项被接受的风险带入 M2——这才是诚实的当前状态。这里没有为了让套件变绿而削弱任何断言，也没有为了让风险消失而改动任何冻结契约。
+
+---
+
+## D-040 · 2026-10-18 · accepted · M2 范围与状态词：只冻结 P0 三项 (M2-Kickoff)
+
+**背景。** M1 已 CLOSED（`main` = `f3c353e`，tag `m1-closed`）。M2 不能一开工就发散到
+权限重设计、AI 编辑器或 UI 改版；它要先把 M1 遗留的三项 P0 收掉。
+
+**决策：M2 只做三项 P0。**
+
+| ID | 内容 | 归属本轮 |
+| --- | --- | --- |
+| `M2-P0-1` | 服务端 durable persistence | 架构冻结（本轮）/ 实现（下一轮） |
+| `M2-P0-2` | presence 写侧 seam | 设计冻结（本轮）/ 实现（下一轮） |
+| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | 设计冻结（本轮）/ 实现（下一轮） |
+
+明确**不属于** M2：AI 编辑器（M3）、权限模型重设计、UI 重设计、wire framing 变更。
+触发重新讨论的条件是出现与持久化正确性直接冲突的证据，而不是"顺手做"。
+
+**Exit Criteria（M2 完成的判据）** —— 只有 `M2-P0-1` 的 A–G 七个验收场景全部通过，
+**且** `M2-P0-2`/`M2-P0-3` 已实现并有其回归测试，**且** A6 的 restart/corruption 浏览器门禁
+全绿，**且** A7 终审 APPROVE。否则 M2 不关闭。
+
+**Backlog（不在 Exit Criteria 内）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
+`void persistence.destroy()` 的未处理拒绝（L5）、跨浏览器验证。
+
+**状态词，本里程碑强制使用**（此前 M1 多次出现"设计被读成已实现"）：
+
+| 词 | 含义 |
+| --- | --- |
+| `PROPOSED` | 有价值但未定，可能被否 |
+| `FROZEN` | 设计已定，实现方不得自行更改；代码可能还不存在 |
+| `IMPLEMENTED` | 代码已合入，测试通过 |
+| `VERIFIED` | 有真实运行证据（含浏览器/重启等），可对外声称 |
+
+**后果。** 本轮所有交付一律标注 `FROZEN (design) / NOT IMPLEMENTED`；任何文档不得把
+尚未存在的实现写成已具备。代价是文档里出现大量"设计已定但没代码"的段落，这是刻意的：
+M2 的第一风险不是设计错，而是设计与实现悄悄分叉。
+
+---
+
+## D-041 · 2026-10-18 · accepted · 服务端持久化后端选用 `node:sqlite` (M2-P0-1)
+
+**背景。** 需要一个能在本仓库既有条件下可靠工作的持久化后端：Windows、Node 22.14.0、
+pnpm workspace、无 CI 配置、`AGENTS.md` R3 要求新增生产依赖需 A0 批准。
+
+**决策：使用 Node 内置 `node:sqlite`（`DatabaseSync`），不新增任何依赖。**
+
+**实测证据**（本轮在本机实际执行，非查文档）：
+
+| 能力 | 实测结果 |
+| --- | --- |
+| 无需 flag 即可 `require('node:sqlite')` | 成功（仅一条 `ExperimentalWarning`） |
+| WAL 模式 | `PRAGMA journal_mode` → `wal` |
+| BLOB 往返（含 NUL 字节） | 逐字节一致 |
+| BEGIN / ROLLBACK | 回滚后行确实消失 |
+| 快照替换 + 日志截断同一事务 | `snapshot_seq=3`、`remaining_updates=0`（原子压缩可行） |
+| 关闭后重开 | 数据仍在（`snapshot_seq=3`，7 字节） |
+| 文件损坏 | 抛 `ERR_SQLITE_ERROR: file is not a database` |
+| 目录不存在 | 抛 `ERR_SQLITE_ERROR: unable to open database file` |
+
+**一个必须记住的细节**：损坏的文件在 `new DatabaseSync(path)` 时**不一定抛**，要执行第一条
+语句才抛。所以"打开成功"不是健康检查，健康检查必须是 `PRAGMA schema_version` 之类的实际查询。
+
+**被否决的方案与理由：**
+
+| 方案 | 否决理由 |
+| --- | --- |
+| `better-sqlite3` | 原生模块，Windows 需要 MSVC 构建工具链；新增生产依赖；CI 可移植性下降 |
+| `sqlite3` (node-sqlite3) | 原生、需构建、维护性差；异步 API 的收益抵不过部署成本 |
+| 手写文件（每文档一个目录 + append-only 文件） | 零依赖，但崩溃一致性、快照原子切换、截断检测都要自己实现；SQLite 免费给出事务 |
+| LevelDB / RocksDB | 原生依赖，M2 规模不需要 LSM |
+| 内存 + 定期落盘 | 正是 M1 的问题，直接否决 |
+
+**已知代价（写入 D-046 相邻风险清单）：**
+
+1. `node:sqlite` 在 Node 22 标记为 experimental，API 可能变化 → 由 `DocumentStore` 适配器隔离，
+   并在升级 Node 时按实测清单复验（见上表）。
+2. `DatabaseSync` 是**同步** API，会阻塞事件循环 → 单条 Yjs update 是几十到几百字节，
+   可以接受；**snapshot 压缩**可能写整篇文档，必须移出热路径（空闲或驱逐时执行），且要用
+   测量而不是猜测定阈值（见 D-042）。
+
+**后果。** M2-P0-1 可以在不新增依赖、不改 CI 的前提下实现，且后端仍可替换（适配器 seam）。
+代价是接受一个 experimental API 与同步 I/O 的约束，两者都写进了风险清单而不是被忽略。
+
+---
+
+## D-042 · 2026-10-18 · accepted · 持久化表示：snapshot + update log，Yjs 二进制为权威 (M2-P0-1)
+
+**决策。** 每个文档存 **一份 snapshot + 一条 append-only 的 Yjs update 日志**：
+
+```text
+document        (document_id PK, snapshot BLOB, snapshot_seq INT, updated_at INT)
+document_update (document_id, seq INT, update_bytes BLOB, created_at, PK(document_id, seq))
+```
+
+恢复 = `applyUpdate(snapshot)` → 按 `seq` 升序逐条 `applyUpdate(update)`。
+
+**为什么不用 Markdown 作为服务端 Source of Truth。** 渲染后的 Markdown 丢掉了 CRDT 合并
+所需的一切：client id、时钟、删除墓碑、格式标记。用它恢复会把"两个从未离线过的客户端"
+变成并发写者，并让已删除内容复活。Markdown 是**投影**，需要时生成，永不作为权威——
+与 §0 的单一真相一致。
+
+**去重与幂等（明确决定，不过度设计）。**
+
+- **允许重复 update**：Yjs update 本身是幂等的，重复 apply 不改变状态。
+- **不做内容 hash 去重**：为了省几行日志而引入哈希表与碰撞语义，收益不抵复杂度；重复
+  写入的代价只是日志里多几行，重放时被 Yjs 吸收。
+- **`seq` 的用途只有一个**：给日志一个确定的全序，使重放顺序稳定、压缩时能表达
+  "已消费到哪一条"（`snapshot_seq`）。它不是业务语义的版本号。
+- **重放最终一致**：因为只做 `applyUpdate`，且 update 之间可交换，重放顺序不影响收敛结果；
+  `seq` 只是让行为可重复、可测试。
+
+**压缩（compaction）。**
+
+| 项 | 决定 |
+| --- | --- |
+| 触发条件 | `document_update` 行数 > 200 **或** 日志字节 > 1 MB，先到者触发；两个阈值都是确定性常量 |
+| snapshot 生成 | `Y.encodeStateAsUpdate(doc)`（整个 state），`snapshot_seq` = 被消费的最大 seq |
+| 原子性 | 快照替换与日志删除在**同一事务**内完成（已实测可行） |
+| 失败恢复 | 事务未提交则快照与日志都保持旧状态，下次重放仍从旧快照开始，不会丢数据 |
+| 何时执行 | 不在 update 热路径上；在房间驱逐（最后成员离开）或空闲时执行，避免同步 API 阻塞打字路径 |
+
+阈值是 `FROZEN` 的，但**必须由测试证明**：M2-P0-1 的验收场景 E 要求在超过阈值后压缩、
+重启，文档与压缩前逐字节一致（对渲染文本与 `Y.Doc` 内容长度双重断言）。
+
+---
+
+## D-043 · 2026-10-18 · accepted · Hydration barrier：成员关系仍同步，只推迟确认 (M2-P0-1)
+
+**背景。** `joinRoom` 目前在 `RoomRegistry` 里是**同步**的，且 M1 把"单个同步状态转换"写成
+了显式不变量并有测试（原子替换、无中间态）。durable hydration 需要异步 I/O。
+
+**被否决的方案：把 `joinRoom` 改成 async。** 它会重新打开 M1 刚关闭的那一类 bug：在 await
+期间，socket 可能已经"离开 A 但还没进入 B"，而 `room-joined` 的语义、原子替换的测试和
+"一个 socket 最多一个房间"的推理都建立在"这一步不会中途让出"之上。
+
+**决策：两阶段 join。**
+
+```text
+阶段 1（同步，保持不变）
+  joinRoom 完成成员关系变更：原子替换、peers 计算、旧房驱逐
+阶段 2（异步，新增屏障）
+  room 需要 hydrate 时，room-joined 推迟到 hydrate 完成之后再发送
+```
+
+由此：
+
+1. **成员关系的不变量原样保留**，M1 的原子替换测试继续有效。
+2. `room-joined` 本来就是契约里"数据面之前"的那道门（CONTRACTS §4），把延迟放在这里
+   不需要改协议。
+3. **single-flight**：同一文档的并发 join 共享一次 hydration（一个 Promise），否则 N 个
+   加入者会触发 N 次读盘。
+4. **hydration 期间到达的 BINARY 帧**进入有界队列（不应用、不回复），屏障放行后按序冲刷；
+   队列溢出则以 `FRAME_TOO_LARGE` 关闭连接。**不静默丢弃**（符合 §4 的"违规不该被奖励"，
+   但也不假装成功）。
+5. **中途断开的 socket**：屏障完成后发现 `context.activeRoom` 已变或已断，结果直接丢弃，
+   绝不给死 socket 发 `room-joined`。
+6. **hydration 失败**（snapshot 损坏/重放抛错）：房间标记 unhealthy，参与者收到
+   `INTERNAL_ERROR` 并被断开，房间从内存移除；**不降级为空文档**——把"读不出来"变成
+   "看起来是空文档"是数据丢失的最坏形式。
+
+**Registry 与 persistence 的 ownership。** `RoomRegistry` 拥有 eviction 与屏障；
+`DocumentStore` 拥有字节与事务；`DocumentRoom` 拥有 `Y.Doc` 与 awareness。三者互不越界
+（ARCHITECTURE §7.2）。
+
+---
+
+## D-044 · 2026-10-18 · accepted · 写入顺序 `apply → persist → broadcast` 与 fail-closed 语义 (M2-P0-1)
+
+**决策。** 每条入站 update 固定三步，且 **persist 必须在 broadcast 之前完成**。
+
+**为什么不是 broadcast 优先。** 若先广播再落盘：落盘失败时对端已经应用了它，服务端却永远
+无法恢复——这正是"向 peer 宣称一个无法持久恢复的成功状态"。顺序反过来，失败时对端什么
+也没看到。
+
+**失败策略（冻结）：**
+
+1. 房间标记 **unhealthy**，拒绝后续 update。
+2. 向房内每个参与者发送 `INTERNAL_ERROR`，并由服务端**关闭连接**。
+   - 选择 `INTERNAL_ERROR` 而不是新增错误码：它已存在、语义就是"服务端内部故障，细节在日志"，
+     且按契约是 **non-fatal**——这正是我们要的客户端语义（临时存储故障不该像 fatal 那样
+     永久停掉重连循环）。
+   - **不新增错误码，wire 词表不变**（M1 已把 `ROOM_NOT_FOUND` 预留给 M2 的房间语义）。
+3. **销毁内存房间**，使内存不能与磁盘分叉：否则下一个加入者会拿到"磁盘上没有"的状态。
+4. 作者客户端本地仍持有该 update（它的 IndexedDB），重连后走**既有** state-vector 握手把它
+   重新发上来，append 重试。恢复复用既有路径，不写特例。
+5. 若同时没有任何客户端持有该 update（作者同时掉线且不再回来），它丢失——这与 M1 的暴露面
+   相同，也是这项必须是 P0 的原因。
+6. 日志记录错误（含 documentId 与 seq），**不发送**栈、路径或 SQL 给客户端（CONTRACTS §7）。
+
+**后果。** 代价是一次落盘失败会打断房内所有连接（比"只断一个"更重）。这是刻意的：
+持久化坏了就意味着整个房间的状态不可信，让所有人重连并从磁盘重新 hydrate，比让一部分人
+继续在一个不可恢复的状态上编辑更安全。
+
+---
+
+## D-045 · 2026-10-18 · accepted · presence 写侧 seam 设计冻结，实施需版本 +1 (M2-P0-2)
+
+**决策。** 冻结 `CollaborativeSession.publishPresence(patch)` 设计（正文见
+`docs/CONTRACTS.md` §15）：`updatedAt` 由协作层拥有、写入前校验、awareness 仍是唯一
+presence 通道、裸 `Awareness` 仅作 binding 输入、部分 patch 合法。
+
+**迁移顺序冻结为**：A1 加 seam（附加，无调用者）→ A2 迁移编辑器并删除自己的 `updatedAt`
+记账 → A1 收窄裸 `Awareness`。顺序颠倒会产生一个编辑器无法编译或无法写 presence 的窗口。
+
+**版本影响。** 实施时 `SHARED_CONTRACT_VERSION` 2 → 3；`PROTOCOL_VERSION` **不变**，因为
+awareness 字段早已存在，wire 无变化。
+
+**本轮不做的事。** **不改 `packages/shared`**，不实现 seam。理由：这是 breaking interface
+变更，必须单独一次改动 + 版本号 + 决策记录（CONTRACTS §13），而不是夹在架构冻结里。
+
+**后果。** M2 的契约变更被精确限定为"一次附加 + 一次收窄"，且客户端与协议各自的影响面
+写在文档里，实现方不需要再猜。
+
+---
+
+## D-046 · 2026-10-18 · accepted · IndexedDB 工厂改为 module-level 租约栈，而非单次快照 (M2-P0-3)
+
+**背景。** M1 的 `installGlobalIndexedDb` 只做"保存 descriptor → 还原 descriptor"，只有单个
+handle 的幂等（`destroyPromise`），没有跨 handle 的栈或引用计数。两个重叠会话注入不同工厂时：
+A 存 ambient、B 存 A 的 descriptor；`A.destroy()` 把全局还原成 ambient（B 仍活着，静默读到
+错的库）；`B.destroy()` 再还原成 A 的假工厂，**永久留在全局**。
+
+**决策：module-level 租约栈 + 每工厂引用计数。**
+
+```text
+install(factory) → 若 factory === 当前全局：返回 noop（生产浏览器路径，零改动）
+                 → 否则 push { factory, previousDescriptor, refCount }
+release()        → refCount-- ；归零时：仅当"当前全局仍是我们装的"才 pop 并还原 descriptor
+```
+
+必须回答的六个问题（设计冻结，逐条给结论）：
+
+| 问题 | 结论 |
+| --- | --- |
+| 嵌套工厂（nested） | 栈结构天然支持；只有栈顶租约释放时才回退到上一层 |
+| 同一工厂多引用 | 同 factory 的 install 递增 `refCount`，不重复 push |
+| 非 LIFO 销毁 | 归零的租约若不在栈顶，只标记失效、不立即还原；等它成为栈顶再回退，避免打乱其它层 |
+| destroy 幂等 | 每租约一个 `released` 标志；重复 release 是 no-op（不是抛错） |
+| 构造失败回滚 | `createProviderConstructor()` 抛错时立即 release 本次租约，恢复原状 |
+| ambient 浏览器工厂 | `factory === globalThis.indexedDB` 时**完全不动**全局，返回 noop——生产路径零退化 |
+
+**必须新增的回归测试**（M2-P0-3 的验收）：
+
+1. 两个重叠会话注入**不同**工厂 → 第二个会话在其生命周期内始终读到自己的工厂；
+2. 非 LIFO 销毁（先销毁先装的）→ 全局最终与初始完全一致（descriptor 比较，不比值）；
+3. 同一工厂两次 install → 一次 release **不**还原（refCount 仍为 1）；
+4. 构造失败 → 全局与初始一致；
+5. 生产路径（未注入）→ 全程不写全局，`window.indexedDB` 的 getter 身份不变。
+
+**不是契约问题。** 这条不改 seam、不改消息、不改 schema（CONTRACTS §16 已注明），因此不需要
+`SHARED_CONTRACT_VERSION` 变更。
+
+**后果。** 修好的是一个"生产不受影响、注入环境会静默读错库"的缺陷；代价是引入一个模块级单例
+状态，必须靠上述 5 个测试守住，而不是靠注释。
