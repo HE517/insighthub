@@ -25,7 +25,7 @@
  * ## Feedback loop prevention
  *
  * ```
- * editor -> Y.Text : handleLocalChanges() queues, flushLocalEdits() transacts
+ * editor -> Y.Text : handleLocalChanges() transacts immediately
  * Y.Text -> editor : observer reconciles inside an `applyingRemote` guard
  * ```
  *
@@ -69,16 +69,21 @@ import type { EditorTextSurface } from './editorTextSurface.js';
 import { REMOTE_SYNC_ORIGIN } from './syncOrigin.js';
 import { singleRangeChange, type TextChange } from './textDiff.js';
 
-/**
- * One accessor per keystroke avoided: local changes are batched and flushed with a
- * single `Y.Text` transaction, so a burst of local edits produces one Yjs update
- * (and therefore one network frame) rather than one per change.
+/*
+ * ## Delivery rule: one editor update, one transaction, immediately
  *
- * This is a bound, not a debounce: past it the batch flushes early, so typing
- * latency stays flat and the queue cannot grow while a key is held down. Nothing
- * is ever dropped; the queue flushes on the next local change or on demand.
+ * `Y.Text` is the document. An edit that has not reached it does not exist: peers
+ * never see it, nothing persists it, and a remote update reconciled in the
+ * meantime is diffed against content that is missing the user's keystrokes. So a
+ * local change is written before `handleLocalChanges` returns - no queue, no
+ * threshold, no timer.
+ *
+ * Batching survives where it is real: CodeMirror reports every change of one
+ * update (multi-cursor input, IME commit, paste) in a single call, and those are
+ * merged into one Yjs transaction - one update, one network frame. Separate
+ * updates are separate transactions, which is also what `Y.UndoManager` expects:
+ * its own capture window, not a queue here, decides where an undo step ends.
  */
-export const MAX_PENDING_LOCAL_CHANGES = 64;
 
 /** The seam between `Y.Text` and whatever is rendering it. */
 export interface CollabTextTarget {
@@ -109,9 +114,15 @@ export interface CollabTextBinding {
   /**
    * Report editor-originated changes. Offsets must be against the document as it
    * was when the editor update began, which is CodeMirror's own convention.
+   *
+   * The change is in `Y.Text` when this returns.
    */
   handleLocalChanges(changes: readonly TextChange[]): void;
-  /** Push any queued local editor edits into `Y.Text`. Safe to call anytime. */
+  /**
+   * Barrier meaning "everything the surface reported is in `Y.Text`". Kept because
+   * teardown and callers use one explicit name for it; delivery is immediate, so
+   * there is never anything pending to write.
+   */
   flushLocalEdits(): void;
   /**
    * Re-align the surface with `Y.Text`. Used when the editor attaches to a
@@ -137,9 +148,6 @@ export function createCollabTextBinding(
    */
   let applyingRemote = 0;
 
-  /** Local edits observed on the surface and not yet written into `Y.Text`. */
-  let pending: TextChange[] = [];
-
   let destroyed = false;
 
   const observer = (_event: Y.YTextEvent, transaction: Y.Transaction): void => {
@@ -157,27 +165,17 @@ export function createCollabTextBinding(
 
   text.observe(observer);
 
-  const handleLocalChanges = (changes: readonly TextChange[]): void => {
-    if (destroyed || changes.length === 0) return;
-    pending.push(...changes);
-    if (pending.length >= MAX_PENDING_LOCAL_CHANGES) flushLocalEdits();
-  };
-
-  function flushLocalEdits(): void {
-    if (destroyed || pending.length === 0) return;
-
-    // Take ownership of the queue before opening the transaction: Yjs runs
-    // observers synchronously, so a queued change must not be flushed twice.
-    const batch = pending;
-    pending = [];
-
-    // One transaction for the whole batch: one Yjs update, one frame.
+  /**
+   * Write one editor update into `Y.Text`, in exactly one transaction.
+   *
+   * Offsets in a single call are expressed against the document as it was when the
+   * update began, so the merged changes are applied back to front; only then do
+   * the earlier offsets stay valid. Nothing can interleave with this work: it is
+   * synchronous, and no remote transaction can start mid-call.
+   */
+  function writeLocalChanges(changes: readonly TextChange[]): void {
     target.transact((target_) => {
-      // Offsets in a batch are expressed against the document as it was when the
-      // batch began, so merges come first and application runs back to front; only
-      // then do earlier offsets stay valid. Nested transactions do not affect this:
-      // inside the batch there is no remote interleaving.
-      const merged = mergeAdjacentChanges(batch);
+      const merged = mergeAdjacentChanges(changes);
       for (let index = merged.length - 1; index >= 0; index -= 1) {
         const change = merged[index]!;
         if (change.to > change.from) {
@@ -188,6 +186,28 @@ export function createCollabTextBinding(
         }
       }
     }, localOriginToken);
+  }
+
+  /**
+   * Report an editor-originated change and put it in `Y.Text` before returning.
+   *
+   * See the delivery rule at the top of this file. There is deliberately no queue
+   * and no threshold: a queue decouples "the editor shows X" from "the document
+   * contains X", and the offsets it holds describe a document that a remote update
+   * may already have moved.
+   */
+  const handleLocalChanges = (changes: readonly TextChange[]): void => {
+    if (destroyed || changes.length === 0) return;
+    writeLocalChanges(changes);
+  };
+
+  /**
+   * Nothing is ever deferred, so this has nothing to write. It stays part of the
+   * interface as the single named barrier teardown uses, so callers do not have to
+   * know whether delivery is currently immediate or batched.
+   */
+  function flushLocalEdits(): void {
+    // Intentionally empty: see the delivery rule above.
   }
 
   /**
@@ -259,7 +279,6 @@ export function createCollabTextBinding(
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
-      pending = [];
       text.unobserve(observer);
     },
     get destroyed(): boolean {
@@ -300,7 +319,7 @@ export function hasNonStringContent(text: Y.Text): boolean {
  *
  * Contiguous-but-distinct offsets (0->0 then 1->1, i.e. typing `ab`) are *not*
  * merged: they are already valid against the pre-change document and are applied
- * back to front by `flushLocalEdits`, which is cheaper and does not risk
+ * back to front by `writeLocalChanges`, which is cheaper and does not risk
  * mis-joining two genuinely separate edits.
  */
 export function mergeAdjacentChanges(changes: readonly TextChange[]): TextChange[] {
