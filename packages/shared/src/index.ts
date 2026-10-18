@@ -35,6 +35,14 @@ export * from './collab-session.js';
  * untouched** (awareness already carried cursor and selection), so `PROTOCOL_VERSION`
  * stays at 2.
  *
- * See `docs/CONTRACTS.md` §15, `docs/DECISIONS.md` D-045 (design) and D-057 (3 steps).
+ * v5 (M2 Phase 2): `WS_ERROR_CODES` gained `FORBIDDEN` (`docs/CONTRACTS.md` §17.6) — a
+ * **closed vocabulary grew**, which `docs/CONTRACTS.md` §13 and `AGENTS.md` §6 both
+ * require to be versioned explicitly. Additive in every other respect: no member was
+ * removed or narrowed, no payload shape changed, no new frame type, and `PROTOCOL_VERSION`
+ * stays **2** — the code travels inside the existing `error` message, and the workspace
+ * ships a single client build, so there is no older client to confuse (§17.6).
+ *
+ * See `docs/CONTRACTS.md` §15, §17 and `docs/DECISIONS.md` D-045 (design), D-057 (3 steps)
+ * and D-061 (M2 Phase 2 freeze).
  */
-export const SHARED_CONTRACT_VERSION = 4;
+export const SHARED_CONTRACT_VERSION = 5;

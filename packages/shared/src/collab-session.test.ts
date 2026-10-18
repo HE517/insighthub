@@ -137,8 +137,12 @@ describe('presence seam shape', () => {
 
   it('bumps the shared contract version but not the protocol version', () => {
     // v4: narrowing is a **breaking** seam change (v3 code that wrote through
-    // `awareness` no longer compiles), so the surface version moves again.
-    expect(SHARED_CONTRACT_VERSION).toBe(4);
+    // `awareness` no longer compiles), so the surface version moved again.
+    // v5 (M2 Phase 2): `WS_ERROR_CODES.FORBIDDEN` grew the closed error vocabulary
+    // (`docs/CONTRACTS.md` §17.6). The seam asserted here is unchanged by that bump —
+    // its own version pin now lives in `index.test.ts`; this one keeps proving that the
+    // **wire** did not move with it.
+    expect(SHARED_CONTRACT_VERSION).toBe(5);
     // The wire is untouched: awareness already carried cursor and selection.
     expect(PROTOCOL_VERSION).toBe(2);
   });
