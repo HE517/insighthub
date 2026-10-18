@@ -1,22 +1,110 @@
 /**
  * Express HTTP application.
  *
- * M0 scope: a single `/health` probe. Document APIs, auth and permissions
- * arrive in M1+ (see docs/TASKS.md).
+ * ## Division of labour (why there are no `if (role === ...)` here)
+ *
+ * This file maps **decisions** to HTTP responses. It does not make them. Every authorization
+ * question is answered by `apps/server/src/authz/**` (`docs/ARCHITECTURE.md` §8.2), and the
+ * mapping is mechanical:
+ *
+ * | Decision (`authz/**`) | Response |
+ * | --- | --- |
+ * | `unauthenticated` | `401 { error: "unauthenticated" }` |
+ * | `not_found` | `404 { error: "not_found" }` |
+ * | `forbidden` | `403 { error: "forbidden" }` |
+ * | `granted` | `200` + `DocumentMeta` |
+ *
+ * That is the whole of the §17.4 status table. Keeping the non-disclosure rule in one branch in
+ * `authz.ts` — instead of three `if`s here — is what makes "the three 404s are byte-identical" a
+ * structural property rather than a promise.
+ *
+ * ## M2 Phase 2 surface
+ *
+ * `POST /api/session/bootstrap`, `GET /api/session`, `DELETE /api/session`, `GET /api/documents`,
+ * `GET /api/documents/:id` (`docs/CONTRACTS.md` §12 + §17.4). `GET /health` and `GET /api/meta`
+ * are unchanged from M0.
+ *
+ * ## CORS
+ *
+ * The API is served on a different port than the Vite dev server, so the browser needs
+ * `credentials: true` and an **explicit** origin — `Access-Control-Allow-Origin: *` is illegal
+ * together with credentials, and would also mean "any site may call the API with the user's
+ * cookie". A `*` configuration is therefore refused at startup rather than quietly weakened.
  */
 import cors from 'cors';
-import express, { type Express, type Request, type Response } from 'express';
+import express, {
+  type Express,
+  type NextFunction,
+  type Request,
+  type RequestHandler,
+  type Response,
+} from 'express';
 
-import { PROTOCOL_VERSION } from '@insighthub/shared';
+import { PROTOCOL_VERSION, type DocumentCapability } from '@insighthub/shared';
 
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_MS,
+  type AuthzService,
+  type DocumentAccessDecision,
+} from './authz/public.js';
 import { type ServerConfig } from './config.js';
 
-export function createApp(config: ServerConfig): Express {
+/**
+ * The frozen response bodies.
+ *
+ * Declared once, and reused for every call site, so "the same body" is not a coincidence of two
+ * template literals agreeing. `not_found` in particular must be identical for an unknown
+ * document, a caller with no membership and a caller without `canRead` (§17.4).
+ */
+const RESPONSE_BODIES = {
+  unauthenticated: { error: 'unauthenticated' },
+  notFound: { error: 'not_found' },
+  forbidden: { error: 'forbidden' },
+  invalidDemoIdentity: { error: 'invalid_demo_identity' },
+  /**
+   * HTTP counterpart of `WS_ERROR_CODES.INTERNAL_ERROR`.
+   *
+   * §12 lists no 500 shape. This body exists for one reason: without an error handler Express's
+   * default responds with a **stack trace** in development, and §7 forbids sending a stack, a
+   * path or a SQL fragment to a client. Nothing here is a contract addition a client should
+   * branch on; recorded in the task report as a documentation gap for A0.
+   */
+  internalError: { error: 'internal_error' },
+} as const;
+
+/** The only body a bootstrap request may carry (§17.3/§17.4). */
+interface BootstrapBody {
+  readonly demoUserId?: unknown;
+}
+
+/**
+ * Build the Express application.
+ *
+ * ## Why `authz` is optional, and why that cannot widen access
+ *
+ * The parameter is optional for exactly one reason: `apps/server/src/rooms/test-harness.ts`
+ * (A3-owned, off-limits to this change) constructs a **realtime-only** app for the WebSocket
+ * integration suites. Making the parameter required would have forced an edit in a file this
+ * round must not touch.
+ *
+ * The important part is the failure direction. Absence of `authz` does **not** mean "skip the
+ * check and allow the request": the session and document routes are simply **not mounted**, so
+ * every one of them falls through to the `404` catch-all. A misconfiguration therefore denies,
+ * which is the safe direction, and it is visibly broken rather than quietly permissive. Every
+ * production call site (`index.ts`) passes a real `authz`.
+ */
+export function createApp(config: ServerConfig, authz?: AuthzService): Express {
+  if (config.corsOrigin.trim() === '*') {
+    // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
+    // rejects, and "fix it by dropping credentials" would silently turn cookies off.
+    throw new Error('CORS_ORIGIN must be an explicit origin: "*" is not allowed with credentials');
+  }
+
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(cors({ origin: config.corsOrigin }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(cors({ origin: config.corsOrigin, credentials: true }));
 
   /** Liveness probe. Must return 200 for the M0 acceptance criteria. */
   app.get('/health', (_req: Request, res: Response) => {
@@ -32,9 +120,205 @@ export function createApp(config: ServerConfig): Express {
     });
   });
 
+  if (authz !== undefined) mountAuthorizationRoutes(app, authz);
+
+  /* ---------------------------------------------------------------- *
+   * Fallbacks
+   * ---------------------------------------------------------------- */
+
+  // Unknown paths keep the M0 shape (§12): `404 { error: "not_found" }`.
   app.use((_req: Request, res: Response) => {
-    res.status(404).json({ error: 'not_found' });
+    res.status(404).json(RESPONSE_BODIES.notFound);
+  });
+
+  // Last, and four-argument so Express recognises it as an error handler. Never a stack, a path
+  // or a SQL fragment on the wire (§7); the detail goes to the server log only.
+  app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    console.error(
+      '[http] unhandled request failure:',
+      error instanceof Error ? error.message : String(error),
+    );
+    res.status(500).json(RESPONSE_BODIES.internalError);
   });
 
   return app;
+}
+
+/** Session + document endpoints (§12, §17.4). Mounted only when an authorization seam exists. */
+function mountAuthorizationRoutes(app: Express, authz: AuthzService): void {
+  /* ---------------------------------------------------------------- *
+   * Session (§17.2, §17.4)
+   * ---------------------------------------------------------------- */
+
+  app.post(
+    '/api/session/bootstrap',
+    parseBootstrapBody,
+    (req: Request, res: Response) => {
+      const demoUserId = readDemoUserId(req.body);
+      const outcome = authz.bootstrap(demoUserId, req.headers.cookie);
+
+      if (outcome.kind === 'invalid_demo_identity') {
+        res.status(400).json(RESPONSE_BODIES.invalidDemoIdentity);
+        return;
+      }
+
+      // The token exists only in this header. It is never put in the body: P2-9 requires that
+      // no JS-reachable place can read it, and a body would be readable by `fetch`.
+      res.cookie(SESSION_COOKIE_NAME, outcome.token, sessionCookieOptions(req));
+      res.status(200).json(outcome.session);
+    },
+  );
+
+  app.get('/api/session', (req: Request, res: Response) => {
+    const session = authz.resolveSession(req.headers.cookie);
+    if (session === null) {
+      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+      return;
+    }
+    res.status(200).json(session);
+  });
+
+  app.delete('/api/session', (req: Request, res: Response) => {
+    const destroyed = authz.destroySession(req.headers.cookie);
+    if (!destroyed) {
+      // A destroyed or expired token is `401` everywhere (§17.2) — including here, where a
+      // second DELETE must not look like a success.
+      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+      return;
+    }
+    res.clearCookie(SESSION_COOKIE_NAME, sessionCookieOptions(req));
+    res.status(204).end();
+  });
+
+  /* ---------------------------------------------------------------- *
+   * Documents (§17.4)
+   * ---------------------------------------------------------------- */
+
+  app.get('/api/documents', async (req: Request, res: Response) => {
+    const decision = await authz.listReadableDocuments(req.headers.cookie);
+    if (decision.kind === 'unauthenticated') {
+      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+      return;
+    }
+    res.status(200).json({ documents: decision.documents });
+  });
+
+  /**
+   * The production document read.
+   *
+   * Built by `createDocumentAccessHandler` with `canRead` — the same factory the table-driven
+   * capability matrix uses with the other three capabilities, so the 403 mapping is exercised
+   * through production code rather than through a mock.
+   */
+  app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead'));
+}
+
+/**
+ * Handle `GET /api/documents/:id` for one required capability.
+ *
+ * Exported because the capability matrix needs the **production** mapper for capabilities no
+ * production route requires yet: Phase 2 has no endpoint that needs more than `canRead`
+ * (`docs/TASKS.md` P2-6 is a decision-core property, and §17.3 forbids inventing a member
+ * management endpoint to make a 403 observable). Mounting this factory with `canEdit` or
+ * `canManageMembers` therefore proves the refusal path without inventing a product surface.
+ */
+export function createDocumentAccessHandler(
+  authz: AuthzService,
+  capability: DocumentCapability,
+): RequestHandler {
+  return async (req: Request, res: Response) => {
+    const documentId = readDocumentIdParameter(req.params);
+    const decision = await authz.authorizeDocument(documentId, req.headers.cookie, capability);
+    respondToDocumentAccess(res, decision);
+  };
+}
+
+/** Map one authorization decision to the frozen response (§17.4). */
+export function respondToDocumentAccess(res: Response, decision: DocumentAccessDecision): void {
+  switch (decision.kind) {
+    case 'unauthenticated':
+      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+      return;
+    case 'not_found':
+      res.status(404).json(RESPONSE_BODIES.notFound);
+      return;
+    case 'forbidden':
+      res.status(403).json(RESPONSE_BODIES.forbidden);
+      return;
+    case 'granted':
+      res.status(200).json(decision.document);
+      return;
+    default: {
+      // Exhaustiveness guard: adding a decision kind without a response must fail the typecheck,
+      // not fall through to a silent 200.
+      const never: never = decision;
+      throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+    }
+  }
+}
+
+/**
+ * Parse a bootstrap body, scoped to this route.
+ *
+ * A malformed body never reaches the handler: it is answered with the endpoint's own `400`
+ * (§17.4 has exactly one 400 for bootstrap), because a body Express could not parse cannot carry
+ * a roster identity. The parser is mounted here rather than globally so no other route can
+ * produce a body-parse failure the contract has no code for.
+ */
+const parseBootstrapBody: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
+  express.json({ limit: '16kb' })(req, res, (error?: unknown) => {
+    if (error !== undefined && error !== null) {
+      res.status(400).json(RESPONSE_BODIES.invalidDemoIdentity);
+      return;
+    }
+    next();
+  });
+};
+
+/**
+ * Read `demoUserId` out of an untrusted body.
+ *
+ * Only `demoUserId` is read. A body carrying `userId` (or any other identity field) is therefore
+ * *ignored* — it becomes "no valid demo identity" and yields `400` — which is P2-2 at the only
+ * place a client is allowed to name an identity at all.
+ */
+function readDemoUserId(body: unknown): unknown {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
+  return (body as BootstrapBody).demoUserId;
+}
+
+/** `req.params.id`, without trusting that Express gave us a string. */
+function readDocumentIdParameter(params: unknown): string {
+  if (typeof params !== 'object' || params === null) return '';
+  const value = (params as Record<string, unknown>)['id'];
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Cookie attributes frozen by §17.2: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` when the
+ * request arrived over TLS, and a lifetime that matches the server-side expiry exactly.
+ *
+ * `secure: req.secure` is deliberately literal — "served over TLS" means this request, not a
+ * header a client could set. Behind a TLS-terminating proxy Express must be told
+ * (`trust proxy`) before `req.secure` is meaningful; guessing from `X-Forwarded-Proto` here
+ * would let any client decide whether a cookie is flagged `Secure`.
+ */
+function sessionCookieOptions(req: Request): {
+  httpOnly: boolean;
+  sameSite: 'lax';
+  path: string;
+  secure: boolean;
+  maxAge: number;
+} {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: req.secure,
+    maxAge: SESSION_TTL_MS,
+  };
 }
