@@ -261,6 +261,5 @@ export function register(runner) {
         oracle.close();
       }
     },
-    { knownDefect: 'P0-2' },
   );
 }

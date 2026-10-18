@@ -57,49 +57,6 @@ export async function loadInstrumentSource() {
   return instrumentSource;
 }
 
-/**
- * Test-only workaround for **DEFECT P0-1**.
- *
- * `apps/web/src/collab/internal/persistence.ts` does `globalThis.indexedDB = factory`.
- * In a real browser `window.indexedDB` is an own accessor with a getter and **no
- * setter**, and an ES module is strict mode, so that assignment throws:
- *
- * ```text
- * TypeError: Cannot set property indexedDB of #<Window> which has only a getter
- *   at installGlobalIndexedDb (src/collab/internal/persistence.ts:17:18)
- * ```
- *
- * The result is that `createCollaborativeSession` rejects on every real browser and
- * no document can be opened at all. `tests/browser/suite/defect-pins.mjs` pins that
- * behaviour and is expected to stay red until A1 fixes the module (A6 may not edit
- * A1's production files — `AGENTS.md` R2).
- *
- * This shim installs `window.indexedDB` as a writable own data property holding the
- * browser's own factory. It changes **no** application behaviour other than making
- * the assignment `persistence.ts` already intends succeed — i.e. it emulates the
- * fix, it does not weaken the test. Every functional scenario that runs with it is
- * labelled in the report, because its result is conditional on that one-line fix.
- */
-export const P0_1_WORKAROUND = `
-/* A6 test-only workaround for DEFECT P0-1 — see tests/browser/README.md */
-(() => {
-  try {
-    const factory = window.indexedDB;
-    if (factory !== undefined && factory !== null) {
-      Object.defineProperty(window, 'indexedDB', {
-        value: factory,
-        configurable: true,
-        writable: true,
-      });
-    }
-  } catch (error) {
-    window.__qa?.errors?.push?.('P0-1 workaround failed: ' + String(error));
-  }
-})();
-`;
-
-/** The identifier used in reports and defect pins. */
-export const P0_1_DEFECT_ID = 'P0-1';
 
 /** Install the instrumentation on a fresh page and open the application. */
 export async function openApp(page, { url, documentId } = {}) {

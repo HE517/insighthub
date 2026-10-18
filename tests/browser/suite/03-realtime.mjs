@@ -4,7 +4,8 @@
  * The receive path (Yjs update in → editor updated) and the presence read path
  * (`getCollaborators()` → collaborator list) are exercised against an independent
  * Yjs peer on the real server. The send path and the remote-cursor *renderer* are
- * pinned defects; see `suite/defect-pins.mjs` for the unmodified-path proofs.
+ * ordinary green scenarios (the `P0-2` / `P0-3` pins were deleted once the defects were
+ * fixed).
  */
 import {
   editorState,
@@ -100,7 +101,6 @@ export function register(runner) {
         `the two tabs must converge (${describeDivergence(stateA.text, stateB.text)})`,
       );
     },
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -227,7 +227,6 @@ export function register(runner) {
         oracle.close();
       }
     },
-    { knownDefect: 'P0-3' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -257,11 +256,9 @@ export function register(runner) {
         });
         const afterDisconnect = await readRemoteCursorDom(page);
         ctx.note('after departure', afterDisconnect);
-        // While DEFECT P0-3 is open no remote caret renders at all, so this count is
-        // satisfied without proving the cleanup. The collaborator-list assertion above
-        // is the load-bearing one; the caret count starts being meaningful once P0-3
-        // is fixed.
-        ctx.note('caret count is vacuous while P0-3 is open', true);
+        // P0-3 is fixed, so this caret count is real evidence: no caret may survive
+        // the departure. The collaborator-list wait above and this assertion now both
+        // prove the cleanup.
         assertEqual(afterDisconnect.caretCount, 0, 'a departed peer must leave no ghost caret (§9.1)');
 
         // A second peer in a different room must never appear here.
@@ -281,15 +278,41 @@ export function register(runner) {
             'a peer in another document room must never appear in this room (isolation)',
           );
 
-          // Switching rooms must clear this room's presence entirely.
+          // A room switch must not carry the *previous* room's presence into the new
+          // one. The new room legitimately has its own participant - `other-peer`
+          // lives here - so the invariant is attribution, not an empty cursor set:
+          //   * nothing from the old room may survive the switch;
+          //   * every rendered caret must belong to a collaborator this room has.
+          // Asserting `caretCount === 0` was wrong: it failed exactly when the new
+          // room rendered its own peer, i.e. when the product was behaving correctly.
           await setDocumentId(page, otherDocument);
           const afterSwitch = await readCollaborators(page);
           const cursorsAfterSwitch = await readRemoteCursorDom(page);
-          ctx.note('after switching rooms', { collaborators: afterSwitch, cursors: cursorsAfterSwitch });
-          assertEqual(
-            cursorsAfterSwitch.caretCount,
-            0,
-            "a room switch must not carry remote cursors into the new document's editor",
+          ctx.note('after switching rooms', {
+            collaborators: afterSwitch,
+            cursors: cursorsAfterSwitch,
+          });
+
+          assert(
+            !cursorsAfterSwitch.labels.includes('Ghost Peer'),
+            "a room switch must not leave the previous room's caret in the new editor",
+          );
+          // Attribution: a caret may only be rendered for a peer this room has.
+          const newRoomRows = afterSwitch.rows;
+          for (const label of cursorsAfterSwitch.labels) {
+            assert(
+              newRoomRows.some((row) => row.text.includes(label)),
+              `every rendered caret must belong to a collaborator of this room: "${label}" is not in [${newRoomRows
+                .map((row) => row.text)
+                .join(' | ')}]`,
+            );
+          }
+          // Positive half: this room publishes a cursor, so a caret must be rendered.
+          // Without it, "correctly scoped" and "never renders" (the P0-3 symptom) would
+          // be indistinguishable.
+          assert(
+            cursorsAfterSwitch.caretCount >= 1,
+            'the new room must render the caret of the peer that is actually in it',
           );
         } finally {
           otherOracle.close();

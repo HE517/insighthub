@@ -27,7 +27,6 @@ import {
   clearEditorTransactions,
   installEditorProbe,
   loadInstrumentSource,
-  P0_1_WORKAROUND,
   waitForSessionActive,
 } from './lib/app.mjs';
 import { newPage } from './lib/cdp.mjs';
@@ -83,11 +82,10 @@ async function main() {
    * Open the application in a fresh browser tab.
    *
    * `documentId` switches the workspace the same way a user does (focus the field,
-   * replace it, press Enter). `withWorkaround: false` runs the **unmodified**
-   * production path — that is how the P0-1 defect is pinned.
+   * replace it, press Enter).
    */
-  async function newAppPage({ documentId, withWorkaround = true } = {}) {
-    const page = await openInstrumentedPage({ withWorkaround });
+  async function newAppPage({ documentId } = {}) {
+    const page = await openInstrumentedPage();
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
@@ -99,11 +97,10 @@ async function main() {
   }
 
   /** Instrumented page on the app URL, without waiting for a usable session. */
-  async function openInstrumentedPage({ withWorkaround = true } = {}) {
+  async function openInstrumentedPage() {
     const page = await newPage(browser.connection);
     openPages.push(page);
     await page.addInitScript(instrumentSource);
-    if (withWorkaround) await page.addInitScript(P0_1_WORKAROUND);
     await page.goto(stack.appUrl);
     return page;
   }
@@ -138,22 +135,10 @@ async function main() {
     node: process.version,
     appUrl: stack.appUrl,
     backendUrl: `http://127.0.0.1:${stack.serverPort}`,
-    testOnlyWorkaround:
-      'P0-1: window.indexedDB is installed as a writable own data property, because ' +
-      'apps/web/src/collab/internal/persistence.ts assigns to it and the real property is ' +
-      'getter-only. Functional results are conditional on that one-line fix; ' +
-      'suite/defect-pins.mjs runs the unmodified path and stays red until it is fixed.',
   };
 
   let exitCode = 0;
   try {
-    console.log('');
-    console.log('='.repeat(78));
-    console.log('  NOTE — functional scenarios run with a TEST-ONLY workaround for DEFECT P0-1');
-    console.log('  apps/web/src/collab/internal/persistence.ts:17 assigns window.indexedDB,');
-    console.log('  which is getter-only in every real browser, so no document opens at all.');
-    console.log('  suite/defect-pins.mjs runs the unmodified path and is expected to be RED.');
-    console.log('='.repeat(78));
     console.log('');
 
     console.log('starting the dev stack…');

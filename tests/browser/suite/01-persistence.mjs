@@ -123,7 +123,6 @@ export function register(runner) {
       ctx.note('backend restarted', `port ${ctx.stack.serverPort} ready`);
     },
     // "Typing survives a reload" requires the keystroke to reach Y.Text at all.
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -185,7 +184,6 @@ export function register(runner) {
       });
     },
     // Offline edits are only durable if they reach Y.Text (DEFECT P0-2).
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -203,6 +201,17 @@ export function register(runner) {
         label: 'text before the drop',
       });
       await waitForPersisted(page, { documentId: DOC });
+
+      // Baseline for the remount invariant. The assertion has to be "reconnecting adds
+      // no mount", not "the page mounts exactly one editor": dev React StrictMode
+      // double-invokes mount effects, so the absolute count is already 2 before any
+      // outage. `chaos/offline-reconnect` asserts the same invariant the same way.
+      const beforeOutage = await editorState(page);
+      const mountsBeforeOutage = await page.evaluate(() => window.__qa.summary().editorMounts);
+      ctx.note('baseline before the outage', {
+        viewId: beforeOutage.viewId,
+        mounts: mountsBeforeOutage,
+      });
 
       // A real, client-side outage: the socket dies and cannot be re-established
       // until the client is put back online.
@@ -254,11 +263,16 @@ export function register(runner) {
         oracle.close();
       }
 
-      const mounts = await page.evaluate(() => window.__qa.summary().editorMounts);
-      ctx.note('editor mounts', mounts);
-      assertEqual(mounts, 1, 'a reconnect must not remount the editor');
+      const after = await editorState(page);
+      const mountsAfter = await page.evaluate(() => window.__qa.summary().editorMounts);
+      ctx.note('after reconnecting', { viewId: after.viewId, mounts: mountsAfter });
+      assertEqual(after.viewId, beforeOutage.viewId, 'a reconnect must keep the same EditorView');
+      assertEqual(
+        mountsAfter,
+        mountsBeforeOutage,
+        'a reconnect must not mount a second .cm-editor',
+      );
     },
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -340,6 +354,5 @@ export function register(runner) {
         `tab A emitted ${framesA2 - framesA} frames while idle — suspected update loop`,
       );
     },
-    { knownDefect: 'P0-2' },
   );
 }

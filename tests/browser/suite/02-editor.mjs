@@ -194,7 +194,6 @@ export function register(runner) {
         oracle.close();
       }
     },
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -239,7 +238,6 @@ export function register(runner) {
         oracle.close();
       }
     },
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *
@@ -268,7 +266,6 @@ export function register(runner) {
         'a local edit must become undoable (DEFECT P0-2: the edit never enters Y.Text)',
       );
     },
-    { knownDefect: 'P0-2' },
   );
 
   /* ------------------------------------------------------------------ *

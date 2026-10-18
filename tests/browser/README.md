@@ -84,26 +84,24 @@ Vite's HMR socket is deliberately **excluded** from the offline simulation: clos
 makes Vite reload the page, which resets the instrumentation and would silently make an
 offline test meaningless.
 
-## Known defects this suite pins
+## Defect pins: none outstanding
 
-`suite/defect-pins.mjs` and the scenarios tagged `knownDefect` assert the behaviour the
-contract requires against the **unmodified** production path. They are expected to be
-red, they still fail the run, and they must be deleted (not relaxed) once fixed.
+Earlier revisions of this suite pinned three product defects (`P0-1`, `P0-2`, `P0-3`) by
+asserting the contract's required behaviour against the unmodified production path and
+letting the scenario stay red. All three are now **fixed**, so the pins are gone: those
+scenarios are ordinary green ones, every `knownDefect` tag was deleted (never the
+assertion), and the `P0-1` test-only shim was removed so every scenario runs the real
+path. No assertion was weakened to reach this state.
 
-| Id | Summary |
-| --- | --- |
-| `P0-1` | `collab/internal/persistence.ts` assigns `globalThis.indexedDB`, which is a getter-only accessor in a real browser → no document opens at all |
-| `P0-2` | `features/editor/collabTextBinding.ts` only flushes queued local edits at 64 changes → keystrokes never reach `Y.Text` |
-| `P0-3` | `features/editor/remoteCursorExtension.ts` dispatches from a `ViewPlugin` constructor → the plugin crashes on mount, so remote cursors never render |
+| Id | Was | Now |
+| --- | --- | --- |
+| `P0-1` | `collab/internal/persistence.ts` assigned `globalThis.indexedDB`, a getter-only accessor in a real browser → no document opened at all | Installs by descriptor, skips the write when the factory already *is* the global, and restores the original descriptor on teardown |
+| `P0-2` | `features/editor/collabTextBinding.ts` flushed only at 64 queued changes → keystrokes never reached `Y.Text` | Every editor update is written in one transaction before the call returns |
+| `P0-3` | `features/editor/remoteCursorExtension.ts` dispatched from a `ViewPlugin` constructor → the plugin crashed on mount | Rebuild scheduling moved to `remoteCursorPresence.ts`; the constructor dispatches nothing |
 
-### The P0-1 workaround
-
-Functional scenarios install one shim (`P0_1_WORKAROUND` in `lib/app.mjs`) that makes
-`window.indexedDB` a writable own data property holding the browser's own factory. It
-changes no application behaviour other than making the assignment `persistence.ts`
-already intends succeed, and every result that depends on it is labelled in the report.
-`defect-pin/P0-1` runs **without** the shim and is permanently red until A1 fixes the
-module.
+To pin a *future* defect: add a scenario that asserts the behaviour the contract
+requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete the tag
+(never the assertion) once the owner fixes it.
 
 ## Scenario map
 
@@ -117,7 +115,6 @@ module.
 | `05-performance.mjs` | 5 000-line invariants and latency measurements |
 | `06-lifecycle.mjs` | 20 open/switch/disconnect cycles; navigation teardown |
 | `07-robustness.mjs` | frozen error codes for malformed/oversized/unsigned traffic, and browser survival |
-| `defect-pins.mjs` | the unmodified-path regression pins |
 
 ## Conventions that keep the results honest
 
@@ -126,4 +123,4 @@ module.
 - Counts are read from the page (live sockets, live `setInterval` handles, live
   `.cm-editor` nodes) — never assumed.
 - Latency is reported as median/p95/max with the method stated, and is labelled when a
-  leg of the path is not exercised (for example because `P0-2` is open).
+  leg of the path is not exercised.
