@@ -119,7 +119,7 @@ Rules:
 | --- | --- | --- | --- |
 | `connected` | server → client | `ConnectedPayload` | M0 |
 | `join-room` | client → server | `JoinRoomPayload` | **M1 (frozen)** |
-| `room-joined` | server → client | `RoomJoinedPayload` | **M1 (frozen)** |
+| `room-joined` | server → client | `RoomJoinedPayload` | **M1 (frozen)**; `role` added in M2 Phase 2 |
 | `leave-room` | client → server | `LeaveRoomPayload` | **M1 (frozen)** |
 | `error` | server → client | `WsErrorPayload` | M0 |
 
@@ -140,13 +140,14 @@ type ConnectedPayload = {
 type JoinRoomPayload = {
   documentId: string;
   protocolVersion: 2;        // literal; a mismatch is PROTOCOL_VERSION_MISMATCH
-  mode: 'readonly' | 'readwrite'; // defaults to 'readwrite'; readonly reserved for M2
+  mode: 'readonly' | 'readwrite'; // defaults to 'readwrite'; ADVISORY ONLY since §17.5
 };
 
 type RoomJoinedPayload = {
   documentId: string;
   connectionId: string;      // the server's id for THIS socket
   peers: string[];           // INITIAL roster of other connection ids in the room
+  role: DocumentRole;        // the caller's role in this document (§17.5, added in M2 Phase 2)
 };
 
 type LeaveRoomPayload = { documentId: string };
@@ -160,6 +161,19 @@ type WsErrorPayload = {
 
 `RoomJoinedPayload.peers` is a one-shot roster delivered at join time. Ongoing
 collaborator presence is **not** a control-plane concern — see §9.
+
+**`RoomJoinedPayload.role`** is the **only** channel through which the client learns its own
+role, and it exists for UI gating alone (§17.5). It is required, not optional: the server has
+already resolved a membership before it admits the caller, so there is no case where a successful
+`join-room` leaves the role unknown. It carries **no** authority — a client that rewrites it in
+memory only changes which controls it shows itself; every enforcement point asks the server.
+Adding it is additive to the payload (no field removed or retyped), and it bumps
+`SHARED_CONTRACT_VERSION` **5 → 6**; `PROTOCOL_VERSION` stays **2**.
+
+Why here rather than in an HTTP response: `GET /api/documents/:id` returns `DocumentMeta`
+(§1) and has no membership field, and the document switch is a WS transition. Putting the role
+where membership is established avoids a second round trip and a second place for the two
+answers to disagree.
 
 ### 5.3 Helpers
 
@@ -553,6 +567,12 @@ a proposal object and must never be treated as document state
 Unknown paths return `404 { "error": "not_found" }`. The non-disclosure rule for
 `/api/documents/:id` (§17.4) governs which of `403` and `404` a caller may see.
 
+**Unhandled failures.** Any route may answer `500 { "error": "internal_error" }` when its handler
+throws. That shape is part of the contract rather than an implementation detail, because the
+alternative is Express's default error handler putting a **stack trace on the wire**, which §7
+forbids. The body carries no detail — no message, no path, no SQL — and the detail goes to the
+server log only. `internal_error` is the HTTP counterpart of the WebSocket `INTERNAL_ERROR` code.
+
 WebSocket endpoint: `ws://<host>:<port>/ws` (configurable via `WS_PATH`).
 An upgrade request on any other path is rejected.
 
@@ -862,7 +882,8 @@ origin (never `*`), and the web client must send `credentials: 'include'`.
 | Join denial | unknown document and read-denied document both answer **`ROOM_NOT_FOUND`** (non-disclosure, same rule as §17.4). A denied join **must not** evict or replace a room the socket already holds (atomic replace applies only to a successful join) |
 | BINARY `SYNC` | requires `canEdit`. Otherwise: reply `FORBIDDEN`, **do not apply, do not persist, do not broadcast**, and keep the socket open (a reader stays a reader) |
 | BINARY `AWARENESS` | requires `canRead` only; a viewer may publish its cursor |
-| Framing | unchanged. No new frame type, no identity field added to any payload; `PROTOCOL_VERSION` stays **2** |
+| Join reply | `room-joined` carries the caller's `role` (§5.2). It is the **only** channel that tells the client its own role, it is for UI gating only, and it carries no authority |
+| Framing | unchanged. No new frame type; the only payload addition is `room-joined.role`; `PROTOCOL_VERSION` stays **2** |
 
 ### 17.6 Error vocabulary addition
 
@@ -870,7 +891,7 @@ origin (never `*`), and the web client must send `credentials: 'include'`.
 | --- | --- |
 | `WS_ERROR_CODES.FORBIDDEN` | **new** code, non-fatal, for "you are in this room but may not perform this mutation". `FATAL_CODES` unchanged |
 | `PROTOCOL_VERSION` | **unchanged (2)** — additive within the existing `error` message; the workspace ships a single client build, so there is no older client to confuse |
-| `SHARED_CONTRACT_VERSION` | 4 → **5** (A5 implements the bump together with `errors.ts`; recorded here because a closed vocabulary grew) |
+| `SHARED_CONTRACT_VERSION` | 4 → **5** (A5 implemented the bump together with `errors.ts`; recorded here because a closed vocabulary grew) |
 
 `ROOM_NOT_FOUND` is reused rather than adding a second "denied" code, because one code for
 both cases is exactly what the non-disclosure rule needs.
@@ -887,5 +908,6 @@ or space role**. Space authorization is deferred until a real space domain exist
 
 | Constant | Change | Why |
 | --- | --- | --- |
-| `SHARED_CONTRACT_VERSION` | 4 → **5** | `WS_ERROR_CODES` gained `FORBIDDEN` (a closed vocabulary grew) |
-| `PROTOCOL_VERSION` | **unchanged (2)** | framing, message types and payload shapes are untouched |
+| `SHARED_CONTRACT_VERSION` | 4 → **5** | `WS_ERROR_CODES` gained `FORBIDDEN` (a closed vocabulary grew) — implemented by A5 |
+| `SHARED_CONTRACT_VERSION` | 5 → **6** | `RoomJoinedPayload` gained the required `role` field (§5.2) — implemented by A3 |
+| `PROTOCOL_VERSION` | **unchanged (2)** | framing, message types and every other payload shape are untouched |

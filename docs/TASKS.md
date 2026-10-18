@@ -457,7 +457,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060） |
 | Owner | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据 |
-| 状态 | **FROZEN，可派发** —— 架构与契约已冻结（`docs/DECISIONS.md` D-061、`docs/CONTRACTS.md` §17、`docs/ARCHITECTURE.md` §8）；P1 第一棒（A5：判定核心 + HTTP 层）**已在分支上实现**，等 A0 集成；WS 执行点仍为 A3 下一棒 |
+| 状态 | **A5 已合入 `main`**（merge `e718568` + 集成硬化 `cd18eb1`，见 D-062）→ **A3 WS 执行点：本轮派发** → A6/A7 未开始 |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -494,10 +494,10 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 #### Phase 2 — 依赖顺序（硬约束）
 
 ```text
-A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）
-   → A0 integrate
-   → A3 接线（registry.ts / ws.ts：join 拒绝、BINARY 帧闸门、close code）
-   → A6 浏览器/chaos 证据
+A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE（e718568 / cd18eb1）
+   → A0 integrate                                       ← DONE（D-062）
+   → A3 接线（ws.ts / registry.ts：升级 401、join 拒绝、BINARY 闸门、`room-joined.role`、documents 源）
+   → A6 浏览器 / 负向路径证据
    → A7 Phase 2 review
 ```
 

@@ -2046,3 +2046,60 @@ A5 authz/session/permission seam（含 shared 判据、session store、HTTP 中�
 **后果。** Phase 2 从"待决"变成"已冻结、可派发"：安全承诺被限定在 session authentication 能兑现的
 范围内，demo bootstrap 的真实弱点写在契约里而不是藏在措辞里；space 明确不做，避免用假实体换表格完整性。
 代价是 `SHARED_CONTRACT_VERSION` 再到 5，以及 session 非持久这一条 limitation 需要一路带到 M2 关闭。
+
+---
+
+## D-062 · 2026-10-18 · accepted · A5 Phase 2 seam 合入：四处集成决定、跨域留痕与 A3 交接 (M2 Phase 2)
+
+**背景。** A5 在 `agent/a5-m2-phase2-authz` 交付 session/授权判定核心（3 个提交：`035d911` shared、
+`b894282` server、`d30a634` web），并在报告里点名四处需要 A0 定性或处理的事项。A0 复核代码后
+以 `--no-ff` merge commit `e718568` 合入 `main`，然后做了一次集成硬化提交 `cd18eb1`。
+
+### 1. 四处决定
+
+| # | A5 提出 | A0 决定 |
+| --- | --- | --- |
+| 1 | 客户端没有角色传输通道，UI 门控代码就位但不生效 | **由 A3 在 `room-joined` 里带 `role`**，不在 HTTP 上加字段。契约先由 A0 写进 `CONTRACTS` §5.2 / §17.5（`room-joined.role` 必需、仅 UI 门控、无权威），再由 A3 实现；`SHARED_CONTRACT_VERSION` **5 → 6**，`PROTOCOL_VERSION` 仍为 2 |
+| 2 | HTTP `500 {error:"internal_error"}` 不在 §12 列表内 | **补进契约**（§12）。它存在的原因不是风格，而是**阻止 Express 默认错误处理把栈发到 wire**（§7 禁止）；body 不含任何细节，细节只进服务端日志 |
+| 3 | `vitest.config.ts` 加了一行 `apps/web/src/session/**` | **批准**。"gate 不跑的测试不是测试"；同时要求该行带注释说明归属与理由（已做到） |
+| 4 | `createApp(config, authz?)` 是可选参数 | **改为必选**（`cd18eb1`）。可选参数意味着生产接线漏了会**静默卸载所有 session/document 路由**，服务器对一切回答 `404` —— 看起来像数据问题的故障。必选把同一个错误变成编译错误 |
+
+### 2. 具名 ownership 例外（A3 的文件由 A0 改）
+
+决定 4 需要改 `apps/server/src/rooms/test-harness.ts`（A3 所有）。沿用 D-055 §1 的做法：A0 在集成
+提交内直接改，并在 commit message 点名。改动是：harness 构造一个真实 `createAuthz`（store 被注入时
+用自己的临时目录），关闭时释放，并清理自己拥有的目录；同时 A5 的 wildcard-CORS 测试改为 `await`
+一个 harness 并传入真实 `authz`（守卫在 `authz` 被使用之前抛出，所以测试强度不变）。
+
+**为什么不在 A5 的分支上改**：agent 分支只属于 agent。集成期的跨域修补属于 A0，且必须能在
+`git log` 上被单独看见——这正是本条记录存在的原因。
+
+### 3. A5 触碰了未在 Owned Files 里枚举的文件（再次，按 D-059 §P2 处理）
+
+| 文件 | 为什么必须动 | 定性 |
+| --- | --- | --- |
+| `apps/web/src/api.ts` | 只有 `getJson`；bootstrap 需要 `POST` + `credentials: 'include'` | **必要且最小**：新增 `requestJson`，`getJson` 保留为包装，未把 `include` 铺到所有请求 |
+| `apps/web/src/features/editor/DocumentWorkspace.tsx` | 用 `role` prop 显示只读提示 | 落在"`features/**` 仅权限门控"的**已声明范围内**，但该文件属 A2，**在此点名** |
+| `apps/server/src/server.test.ts` | `createApp` 签名变化 | 测试跟随签名，无需单独授权 |
+
+**教训（补进 D-059 §P2 的规则）**：枚举 Owned Files 时，契约级任务必须列全 `packages/shared/src/index.ts`
+与对应 `*.test.ts`（D-059 已定），**再加两条**：web 侧 API 客户端与任何要被传参的既有组件，
+都属于"改动的最小完整面"，应在派发单里写明，而不是靠 agent 自觉。
+
+### 4. A5 留下的 seam 与 A3 的交接面
+
+- `authz/public.ts` 是唯一可被其他模块 import 的入口，文件头用表格写清 A3 的三次调用与语义。
+- `authz/documents.ts` 的 `DocumentCatalog` 是**注入 seam**：Phase 2 目前挂 `DemoDocumentCatalog`。
+  真实来源（A3 的持久化 documents 只读源）由 A3 实现并在 `index.ts` 一处接线替换——这是 A3 范围，
+  不是 A5 的遗留缺陷。
+- `authz.db`（A5 自有文件）与 `insighthub.db`（A3 的 store）**物理分离**，理由写在
+  `membership-store.ts` 头注释：不耦合 schema、不与热路径写竞争、删掉文档库不会静默孤立授权决定。
+
+### 5. 已知限制（带入 A6/A7，不得在报告里省略）
+
+- `authz.db` **不随文档删除级联**（Phase 2 没有文档删除 API，因此当前不可观测）。
+- session **process-scoped**：重启后必须重新 bootstrap。
+- WS 执行点在本条合入时**尚未接线**，因此 P2-1 / P2-5 仍无证据；P2-8 待 A6/A7 复核。
+
+**后果。** A5 的判定核心成为 `main` 上可依赖的基线，A3 可以只按 `authz/public.ts` 接线而无需读内部实现；
+代价是 `SHARED_CONTRACT_VERSION` 将在 A3 手里再到 6，且 `createApp` 的签名变化扩散到 harness 与一个测试。
