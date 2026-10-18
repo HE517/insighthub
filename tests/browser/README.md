@@ -1,9 +1,17 @@
 # `tests/browser` — real-browser validation and chaos suite (owner: A6)
 
-This directory is the M1-A6 real-browser gate. It drives a **real Chromium** over the
-DevTools Protocol, against a **real** backend, a **real** Vite dev server and a
-**real** browser IndexedDB. Nothing here is jsdom, and no scenario substitutes a
+This directory is the A6 real-browser gate. It drives a **real Chromium** over the
+DevTools Protocol, against a **real** backend process, a **real** Vite dev server, a
+**real** browser IndexedDB and — since M2 — a **real** SQLite store on disk that
+survives a real process crash. Nothing here is jsdom, and no scenario substitutes a
 simulated call for a real one.
+
+It covers two milestones:
+
+| Area | Suite | What it proves |
+| --- | --- | --- |
+| M1 collaboration | `suite/00…07` | editor, IndexedDB, realtime, presence, offline/reconnect, chaos, performance, lifecycle, wire robustness |
+| M2 durable persistence | `suite/10-m2-durability.mjs` | the server's document survives room eviction, a hard process kill, compaction, and is never faked on a failed write |
 
 ## Why there is no Playwright
 
@@ -15,6 +23,7 @@ adding one without Supervisor approval. Everything this suite needs already exis
 | Browser control | Node 22's global `WebSocket` speaking CDP to a locally installed Chrome/Edge |
 | Readiness probes | Node's global `fetch` |
 | Yjs peer / codec | the workspace's own `yjs`, `y-protocols` and `@insighthub/shared` |
+| Durable-store inspection | Node 22's built-in `node:sqlite` |
 
 So the harness adds **zero** dependencies and changes **no** `package.json`.
 
@@ -29,6 +38,7 @@ Useful switches:
 
 ```bash
 node tests/browser/run.mjs --list                 # every scenario id
+node tests/browser/run.mjs --filter m2/           # only the durability scenarios
 node tests/browser/run.mjs --filter indexeddb     # substring match on id or title
 node tests/browser/run.mjs --headed               # watch the browser
 node tests/browser/run.mjs --keep-open            # leave the stack and browser up
@@ -37,6 +47,34 @@ node tests/browser/run.mjs --keep-open            # leave the stack and browser 
 Exit code is `0` only when every scenario passes. A failing scenario is never retried
 and is never skipped. Results land in `artifacts/results.md` and
 `artifacts/results.json`; screenshots go to `artifacts/`.
+
+The suite runs **serially** and owns ports `5173`/`3101`: it refuses to start when
+either is occupied, and its postflight prints whether both were released again.
+
+## Durable-storage isolation (M2)
+
+Server persistence outlives the process, so a test that reused a data directory would
+be measuring the previous scenario. The stack therefore:
+
+- creates a **new temporary directory** for every scenario that needs a clean store and
+  passes it to the server as `INSIGHTHUB_DATA_PATH` (`stack.restartServerOnFreshDataPath`);
+- **reuses** the current directory for a restart scenario — that is what makes
+  "restart and the content is still there" meaningful (`stack.restartServer`);
+- removes every directory it created on exit (`stack.dispose`), and never touches the
+  development default `.insighthub-data`.
+
+`stack.crashServer()` kills the process tree **without** a graceful shutdown, so
+`store.close()` never runs and the WAL is left exactly as the last committed
+transaction wrote it. A "reload the page" or "reconnect the socket" is never accepted
+as a substitute for that, and the scenarios record both pids.
+
+## Why a "brand-new device" is a separate browser
+
+A durability claim is about the **server**. A new tab in the writer's own browser
+would be answered by that browser's IndexedDB replica, so the test would silently
+prove client persistence instead. Every "the content survived" check therefore opens a
+browser with an empty profile (`context.withFreshBrowser` / `context.launchBrowser`):
+no replica, no storage, nothing to fall back on.
 
 Set `INSIGHTHUB_BROWSER` to an executable path to choose the browser explicitly.
 
@@ -115,6 +153,33 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `05-performance.mjs` | 5 000-line invariants and latency measurements |
 | `06-lifecycle.mjs` | 20 open/switch/disconnect cycles; navigation teardown |
 | `07-robustness.mjs` | frozen error codes for malformed/oversized/unsigned traffic, and browser survival |
+| `10-m2-durability.mjs` | M2-P0-1: room emptied, real process restart, offline client + restart, compaction, persist failure, document isolation, concurrent cold joins, backlog-overflow constructibility |
+
+### M2 durability scenarios and the acceptance IDs they map to
+
+| Scenario id | M2-P0-1 | What is asserted |
+| --- | --- | --- |
+| `m2/A-room-emptied-then-recovered` | A | after every peer leaves, a brand-new device hydrates the stored document; the durable row still exists |
+| `m2/B-real-process-restart` | B | a hard kill (no graceful shutdown, no `store.close()`) followed by a new pid on the same directory still serves the document |
+| `m2/C-offline-client-survives-restart` | C | offline edit + restart + reconnect reconciles through the state-vector handshake; store, client and a new device all converge |
+| `m2/E-compaction-survives-restart` | E | crossing the update threshold then evicting folds the log into the snapshot; text **and** `encodeStateAsUpdate` SHA are unchanged after restart |
+| `m2/F-persist-failure-is-honest` | F | holding SQLite's write lock makes an append fail: 1011 close, no "connected" claim, no broadcast to peers, nothing durable, committed data intact |
+| `m2/G-document-isolation` | G | two documents keep separate rows and never cross, before and after a restart |
+| `m2/J-concurrent-cold-joins` | J | three brand-new devices joining a cold document simultaneously all hydrate the same content; one row per document |
+| `m2/K-backlog-overflow-constructibility` | K | attempts a 400-frame burst during hydration and records whether the bounded backlog is reachable (see the report for the measured answer) |
+
+`docs/TASKS.md` acceptance **D / H / I** are *not* browser-covered by this suite; they
+have Node-level coverage in `apps/server/src/persistence/acceptance.test.ts`. Do not read
+a green browser run as covering them.
+
+## Failure injection, without touching production code
+
+| Need | Mechanism |
+| --- | --- |
+| a genuinely offline client | page-side `WebSocket` rewrite to an unreachable port (`window.__qa.setOffline`) |
+| a durable-append failure | `acquireWriteLock(dataPath)` holds SQLite's write lock from a second process, so the server's `BEGIN IMMEDIATE` fails after its 5 s `busy_timeout` |
+| duplicate / reordered / malformed frames | frame-level hold, replay and injection in the page transport |
+| durable-state assertions | `reconstructDurableDocument(dataPath, id)` rebuilds a `Y.Doc` from `snapshot` + `document_update`, the same replay `DocumentHydrator` does |
 
 ## Conventions that keep the results honest
 
@@ -124,3 +189,4 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
   `.cm-editor` nodes) — never assumed.
 - Latency is reported as median/p95/max with the method stated, and is labelled when a
   leg of the path is not exercised.
+- Persistence claims are backed by the bytes on disk, never by "the page still shows it".
