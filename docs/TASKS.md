@@ -425,7 +425,8 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | Owner（预计） | A5（权限/认证）+ A3（服务端权威判定点） |
 | 状态 | **NOT STARTED**；本次冻结只锁定顺序，不确定其契约 |
 
-**Backlog（不属于任何 Gate）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
+**Backlog（不属于任何 Gate）**：**idle/background compaction**（M2-P0 只做 eviction-time，D-054）、
+键击通知扇出优化（D-039 L2）、主 bundle 分块、
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。
 
@@ -449,7 +450,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | B | 进程重启恢复 | 写文本 → **终止 server 进程** → 启动新进程 → 新浏览器打开同一文档 → 内容完整 |
 | C | 离线客户端 + 重启 | 客户端离线编辑 → 服务端重启 → 客户端重连 → state-vector 对账 → 双方收敛 → 再开**全新**客户端 → 看到完整内容 |
 | D | 重复 update 重放 | 同一 update 重复进入持久化路径 → 重启 → 状态不重复、不损坏 |
-| E | 压缩 | 超过阈值产生日志 → compaction → 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言） |
+| E | 压缩 | 超过阈值产生日志 → compaction（**eviction-time**）→ 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言） |
 | F | 持久化失败 | 模拟写入失败 → 不得向其它 peer 宣称成功的状态 → 行为符合 D-044（error + 断开 + 房间移除） |
 | G | 文档隔离 | doc A 与 doc B 的持久状态完全隔离，互不可见、互不覆盖 |
 | H | 并发上送 | 两个 peer 几乎同时提交 update → durable append 顺序明确 → broadcast 只发生在各自 commit 之后 → 重启后完全收敛 |

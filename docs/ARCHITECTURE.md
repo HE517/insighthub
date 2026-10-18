@@ -384,7 +384,8 @@ export interface DocumentStore {
   /** Load the durable state, or `null` when this document has never been stored. */
   load(documentId: string): Promise<StoredDocument | null>;
   /** Append one already-applied update. Resolves only once it is durable. */
-  append(documentId: string, update: Uint8Array): Promise<void>;
+  /** Append one already-applied update; resolves with its committed sequence. */
+  append(documentId: string, update: Uint8Array): Promise<number>;
   /** Replace snapshot + truncate the consumed log, atomically. */
   compact(documentId: string, snapshot: Uint8Array, throughSequence: number): Promise<void>;
   /** Durably remove a document. Semantics frozen even though M2 exposes no UI for it. */
@@ -565,7 +566,7 @@ was verified against: `DatabaseSync`, `exec`, `prepare`, `StatementSync#run/#get
 parameters and results, `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`, and `PRAGMA journal_mode`.
 
 - **Startup capability check**: before listening, the server opens a throwaway database in
-  the configured data directory (or `:memory:` when the path is not writable yet), executes
+  the configured data directory, executes
   a statement, and round-trips one BLOB. A failure is a **startup failure** with a clear
   diagnostic naming the runtime requirement.
 - **No fallback**: the server must not start in a memory-only mode. Refusing to start is the
@@ -584,3 +585,17 @@ file does not necessarily throw at construction — the failure surfaces on the 
   `docs/CONTRACTS.md`), and `ROOM_NOT_FOUND` keeps its reserved meaning.
 - **Client seam**: `CollaborativeSession` is untouched by `M2-P0-1`.
 - **Awareness**: still never persisted (§9 of `docs/CONTRACTS.md`).
+
+### 7.13 Integration notes (M2-P0 scope decisions)
+
+These were settled during the P0-1 / P0-3 integration gate (`docs/DECISIONS.md` D-054). They do
+not change the contract; they pin what the first implementation is allowed to be.
+
+| Item | Decision |
+| --- | --- |
+| `append` return | `Promise<number>` — the committed sequence, not `void` (§7.3); this is what `CONTRACTS.md` §14.7 requires |
+| Runtime capability check | validates the **real** data path (§7.11). "Not writable → fall back to `:memory:`" is forbidden: it re-creates the M1 data-loss mode inside the fix |
+| Compaction timing | **eviction-time only** in M2-P0. Idle/background compaction is a performance backlog item, deliberately outside this P0 |
+| WebSocket close code | persistence-internal failure closes with **1011** (internal error), not 1008 (policy violation). 1008 stays for protocol/policy errors |
+| No-store server path | accepted as an internal/test compatibility seam, bounded by three obligations: production `index.ts` always opens the durable store; a durable-init failure refuses to start; isolated tests may run the no-store path but production cannot reach it |
+| Fail-closed wiring | `attachWebSocketServer` throws when `config.dataPath` is set but no store was supplied, so "forgot to open the store" is a startup failure rather than a silent memory-only server |

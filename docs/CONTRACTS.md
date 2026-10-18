@@ -575,7 +575,7 @@ The server reaches durable state only through `DocumentStore`. Its shape is spec
 | Member | Meaning | Guarantee |
 | --- | --- | --- |
 | `load(documentId)` | read snapshot + log | `null` means *never stored*, never "empty document" |
-| `append(documentId, update)` | append one already-applied update | resolves **only after the bytes are durable**; rejects on failure |
+| `append(documentId, update)` | append one already-applied update | resolves **with the committed sequence, only after the bytes are durable**; rejects on failure |
 | `compact(documentId, snapshot, throughSequence)` | replace snapshot, drop consumed log | atomic: a crash mid-compaction leaves either the old state or the new one |
 | `delete(documentId)` | durable removal | idempotent; removal, not a flag |
 | `close()` | flush and release | idempotent; safe on a store that failed to open |

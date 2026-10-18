@@ -1121,7 +1121,9 @@ the harness rather than by weakening the assertions.
 
 ### 4. 注入环境的全局 IndexedDB 工厂缺少引用计数（已接受，M2 处理，未验证）
 
-**事实。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
+**事实（M1 当时的实现）。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
+
+> M2-P0-3 已实现该缺口：符号改名为 `acquireIndexedDbLease`，并改为 module-level 租约栈 + 每工厂引用计数（D-046、D-054）。本条保留 M1 当时的命名，因为它是历史记录。
 
 **重叠场景的失败链。** A 安装 `FA`（存下 ambient descriptor），B 安装 `FB`（存下 A 的 descriptor）。`A.destroy()` 还原 **ambient**，而 B 仍在运行 → B 的 provider 静默读到 ambient 工厂，**写进错误的数据库且不报错**；`B.destroy()` 再还原 `FA` → **一个假工厂永久留在全局上**。
 
@@ -1380,7 +1382,7 @@ awareness 字段早已存在，wire 无变化。
 
 ## D-046 · 2026-10-18 · accepted · IndexedDB 工厂改为 module-level 租约栈，而非单次快照 (M2-P0-3)
 
-**背景。** M1 的 `installGlobalIndexedDb` 只做"保存 descriptor → 还原 descriptor"，只有单个
+**背景。** M1 的 `acquireIndexedDbLease` 只做"保存 descriptor → 还原 descriptor"，只有单个
 handle 的幂等（`destroyPromise`），没有跨 handle 的栈或引用计数。两个重叠会话注入不同工厂时：
 A 存 ambient、B 存 A 的 descriptor；`A.destroy()` 把全局还原成 ambient（B 仍活着，静默读到
 错的库）；`B.destroy()` 再还原成 A 的假工厂，**永久留在全局**。
@@ -1579,3 +1581,56 @@ API（`DatabaseSync`、`exec`、`prepare`、`StatementSync#run/#get/#all`、BLOB
 （每个 Agent 一份完整 prompt，而不是一句话）；收益是上下文与依赖的推断只做一次，且写在可审计的
 地方。风险是 A0 可能滥用 `AUTO_CONTINUE` 绕过本该询问的决策——因此七条被写成**同时成立**，
 且第 3 条把触发条件列成封闭清单：任何一条成立就必须停。
+
+---
+
+## D-054 · 2026-10-18 · accepted · M2-P0-1 / M2-P0-3 集成期的 Supervisor engineering decisions (M2)
+
+**背景。** A3（`5094ffd`）与 A1（`97f4a32`）分别交付 M2-P0-1 与 M2-P0-3，集成时出现若干需要定性的
+工程选择。它们都不改变产品语义、不改 frozen architecture 的实质、不改 wire，因此属于 Supervisor
+权限内，不上升为 Project Owner Decision。
+
+**1. A1 的 test seam：保留 `PersistenceAttachOptions.loadProviderConstructor`（批准）。**
+
+| 维度 | 判定 |
+| --- | --- |
+| 可见性 | **internal-only**：类型在 `collab/internal/persistence.ts`，不在 `CollaborativeSession`、不在 `collab/public.ts` |
+| 必需性 | **optional**，production caller 一律不传；不传时等价于 `createProviderConstructor` |
+| 用途 | 验证"provider constructor 抛错 → 租约回滚 → 全局复原"这条路径 |
+| 被否替代 | `vi.resetModules` 会重新加载模块，等于在测试里制造**第二个 module singleton**，而本任务要测的正是 module-level 租约栈；用它测出来的不是同一份状态 |
+| 边界 | 不扩大 public seam、不扩大 `CollaborativeSession`、不需要版本号变更 |
+
+**2. A3 的五项工程决定。**
+
+| # | 决定 | 理由 |
+| --- | --- | --- |
+| 1 | `DocumentStore.append` 返回 **`Promise<number>`**（committed sequence） | 与 `CONTRACTS.md` §14.7 一致：调用方需要知道自己拿到的序号，才能表达"已提交到哪一条"。`ARCHITECTURE` §7.3 的 `Promise<void>` 是冻结文本里的笔误，已修正 |
+| 2 | runtime capability check 必须验证**真实 data path**；删除"路径不可写时可退回 `:memory:`" | 生产启动若在不可写的目录上静默改用内存库，就是把 M1 的数据丢失模式换个地方重演。真实目录不可用 → **启动失败** |
+| 3 | compaction：M2-P0 只接受 **eviction-time compaction** | 空闲压缩属于性能优化，纳入 backlog；不在本 P0 扩大范围 |
+| 4 | 持久化内部故障的 WebSocket close code 保留 **1011** | 1011 = "服务端内部错误"，如实描述原因；1008 = policy violation，会误导客户端与运维。1008 仍用于协议/策略类错误 |
+| 5 | `attachWebSocketServer` 的 **no-store 兼容路径**接受为 internal/test seam | 见下三条义务 |
+
+**no-store seam 的三条义务（A7 后续检查）：**
+
+1. **production `index.ts` 必须始终打开 durable store**（`await openDocumentStore(config.dataPath)`）；
+2. **production durable 初始化失败必须拒绝启动**（`exitCode = 1` + 清晰诊断），不得降级；
+3. isolated tests 可以显式走 no-store 兼容路径，但该路径在 production 不可达。
+
+A3 还加了一条**反向**防线：`attachWebSocketServer` 在 `config.dataPath` 已配置却未收到 store 时
+**直接抛错**，让"忘了打开 store"变成启动失败而不是静默无持久化。这条比注释可靠，予以保留。
+
+**3. 符号重命名：`installGlobalIndexedDb` → `acquireIndexedDbLease`。**
+
+M2-P0-3 把"保存快照再还原"改为租约栈，"install"一词已不能描述行为。当前实现与设计文档统一改为
+`acquireIndexedDbLease`；`docs/agent-governance/A7-m1-p0-review.md` 与 D-039 的 M1 事实描述**保持
+原样**（它们记录的是当时的代码），D-039 §4 只加一句注解指向新名。
+
+**4. Tooling：本轮 root test runner 未复现挂起。**
+
+`pnpm test` 在 integrated HEAD 上 **42.7s 完成**（vitest 257 + server 105）。M1 期记录过的
+`TOOLING-P1` 间歇挂起本轮未复现，因此本轮不创建 tooling backlog，也不再把它与任何 Agent 的
+交付物关联。
+
+**后果。** 集成期没有出现需要项目负责人裁决的架构冲突；四项文本不一致（`append` 返回类型、
+`:memory:` 回退、compaction 范围、close code）被就地修正，两项（test seam、no-store seam）被
+明确追认并附上 A7 可核查的义务。
