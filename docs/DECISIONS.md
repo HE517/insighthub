@@ -1541,3 +1541,41 @@ API（`DatabaseSync`、`exec`、`prepare`、`StatementSync#run/#get/#all`、BLOB
 **与 D-048 的关系。** D-048 保证同一文档内不会有两个 mutation 同时进入 store，因此正常路径
 下并发分配根本不会发生；D-052 仍然要求 store 自身具备该性质，因为**不变量不应依赖调用方的
 良好行为**，否则一旦 pipeline 被重构，corruption 会以"偶发重复 seq"的形式出现。
+
+---
+
+## D-053 · 2026-10-18 · accepted · Gate-driven autonomous handoff：A0 成为正式 Dispatcher (M2)
+
+**背景。** 在此之前，每一轮结束后项目负责人都要回答"下一步让谁做什么"。这不是监督，而是把调度
+工作外包给了他：他必须重新建立上下文、重新推断依赖、再口述一遍任务。M1 的实践证明这套流程能跑，
+但成本错位——最贵的人力在做最机械的编排。
+
+**决策：项目采用 Gate-driven autonomous handoff。**
+
+1. **A0 是正式 Dispatcher / Supervisor。** 每个 Gate 结束后由 A0 判定状态并直接派发。
+2. **`AUTO_CONTINUE`**（七条同时成立才可）：当前 Acceptance 全 PASS；下一步已在冻结的
+   TASKS / ARCHITECTURE / Agent Plan 中；不改 scope；不推翻 frozen decision；不产生新的产品级
+   语义；不需破坏性 Git；无 unresolved blocker。此时 A0 **必须**直接产出 Gate 判定、DAG、
+   可启动的 Agent、**每 Agent 一份完整可复制 prompt**、worktree/branch 创建指令、并行关系与
+   集成顺序——**不得**以"请项目负责人决定下一步"结束。
+3. **`OWNER_DECISION_REQUIRED`** 只在九类情形触发：产品 scope 变化；milestone 边界变化；
+   安全 / 权限 / 数据耐久性承诺变化；需推翻冻结架构或契约；wire protocol 需非预期变更；
+   引入重大新依赖或运行时约束；两个方案都合理但影响产品行为或发布承诺；需要破坏性 Git 或改写
+   共享历史；需求互相矛盾且工程判断无法解决。提问必须给 Option A/B/C + 影响 + 推荐，
+   **不让负责人从零设计**。
+4. **A1–A7 的报告必须追加 `## Next Handoff`**：状态、建议下一棒、base（branch + SHA）、为什么、
+   已满足的依赖、可直接复制的 prompt。**建议权属于 Specialist，调度权属于 A0。**
+5. **即使门禁全绿也不得由 Specialist 自行跨越**：merge main、milestone CLOSED、删除 milestone
+   tag、push / 建 remote、改 milestone scope、推翻冻结架构。merge main 与 milestone close 由 A0
+   在 A7 APPROVE 后生成操作计划并向负责人报告"已达到 release gate，准备执行"，**执行前仍需一次
+   明确授权**。
+
+**为什么这条要写进仓库而不是只停在对话里。** A1–A7 的会话读取的是 `AGENTS.md` 与
+`agent-prompts/**`；策略不落盘，Specialist 就不会输出 `Next Handoff`，A0 也就拿不到它需要的
+输入。所以本条同时改了 `AGENTS.md` §4.1（第 14 项）、`agent-prompts/COMMON.md` §8、
+`agent-prompts/A0-supervisor.md` §8。
+
+**后果。** 负责人从"每轮派活"退到"只在 Gate 与决策点出现"。代价是 A0 每轮要写更长的派发文本
+（每个 Agent 一份完整 prompt，而不是一句话）；收益是上下文与依赖的推断只做一次，且写在可审计的
+地方。风险是 A0 可能滥用 `AUTO_CONTINUE` 绕过本该询问的决策——因此七条被写成**同时成立**，
+且第 3 条把触发条件列成封闭清单：任何一条成立就必须停。

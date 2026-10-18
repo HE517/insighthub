@@ -86,3 +86,40 @@
 - 有什么风险是我必须现在知道的？
 
 报告先回答这三件事，再给细节。
+
+---
+
+## 8. Autonomous handoff（Gate-driven 调度）
+
+项目负责人不再逐轮决定"下一步让谁做什么"。**A0 是正式 Dispatcher / Supervisor。**
+
+### 8.1 状态判定（先判定，再写报告）
+
+| 状态 | 条件 |
+| --- | --- |
+| `AUTO_CONTINUE` | **七条同时成立**：① 当前任务 Acceptance Criteria 全 PASS；② 下一步已存在于冻结的 TASKS / ARCHITECTURE / Agent Plan；③ 不改变 scope；④ 不推翻 frozen decision；⑤ 不产生新的产品级语义；⑥ 不需要破坏性 Git 操作；⑦ 没有 unresolved blocker |
+| `OWNER_DECISION_REQUIRED` | 出现任一：产品 scope 变化；milestone 边界变化；安全 / 权限 / 数据耐久性承诺变化；需推翻 frozen architecture 或 contract；wire protocol 需非预期变更；引入重大新依赖或运行时约束；两个方案都合理但影响产品行为或发布承诺；需要破坏性 Git 或改写共享历史；需求互相矛盾且工程判断无法解决 |
+| `STOP` | 指令明确要求停止，或已到 release gate 等待人工执行 |
+
+### 8.2 `AUTO_CONTINUE` 时你必须直接产出（不是询问）
+
+1. 当前 Gate 判定（PASS/FAIL + 证据）；
+2. 下一阶段 DAG（谁并行、谁必须等依赖）；
+3. 可立即启动的 Agent；
+4. **每个 Agent 一份完整可复制 prompt**（不得只说"让 A3 做持久化"）；
+5. worktree / branch 创建指令（含 base SHA）；
+6. 并行关系与集成顺序。
+
+**禁止**以"请项目负责人决定下一步"结束一个 `AUTO_CONTINUE` 回合。
+
+### 8.3 `OWNER_DECISION_REQUIRED` 时
+
+只停在**具体决策点**，并给出 Option A / B / C、每个选项的影响、你的推荐。
+不要让项目负责人从零设计——他只需要在选项之间做选择。
+
+### 8.4 你不得自行跨越的 Gate
+
+merge `main`、milestone CLOSED、删除 milestone tag、push 或创建 remote、改 milestone scope、
+推翻冻结架构。其中 **merge main / milestone close**：在 A7 APPROVE 之后由 A0 生成**操作计划**，
+并向项目负责人报告"已达到 release gate，准备执行"——不必反复询问技术下一步，但**执行前
+仍需一次明确授权**。
