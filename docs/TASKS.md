@@ -565,6 +565,27 @@ main @ <freeze commit>
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。
 
+**TOOLING-P2（A3 的第一项工作，不是 backlog）**：`pnpm --filter @insighthub/server test`
+＝ `tsx --test src/**/*.test.ts` 的**默认并行运行在本机不退出**（A0 集成期观测到 2 次，
+每次 >10 分钟无进展后手动终止）。实测分层证据：
+
+| 运行方式 | 结果 |
+| --- | --- |
+| 串行 `--test-concurrency=1`（15 文件） | **163/163 pass，55 s，exit 0** |
+| 并行但排除 `persistence/restart.test.ts` | **160/160 pass，8 s，exit 0** |
+| 并行 + `--test-force-exit`（15 文件） | **163/163 pass，9 s，exit 0** |
+| 并行，默认（15 文件） | **不退出**（测试结果已全部打印） |
+
+结论：**测试全绿，是进程不退出**，不是测试失败；可疑点是 `restart.test.ts` 的
+`kill()` → `waitForExit()` 竞态（超时返回 `null` 后子进程可能仍存活，node:test 等事件循环排空
+→ 永不退出），并行 16 worker 时更容易触发。M1 期 D-054 §4 记过的 `TOOLING-P1` 间歇挂起很可能是
+同一机制。
+
+**为什么它不算"已知无害"**：`pnpm test` 是 AGENTS §5 的门禁命令之一。一个**永不返回**的门禁
+无法区分"通过"与"卡住"，A6/A7 会为此付出不可预期的等待。因此它被列为 A3 本轮的第一项工作，
+而不是 backlog：必须让默认命令**自己退出**（不得用 `--test-force-exit` 掩盖，那会让将来真正的
+句柄泄漏也无声无息）。
+
 ### M2-P0-1 — 服务端 durable persistence
 
 | 项 | 内容 |
