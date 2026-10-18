@@ -1073,153 +1073,72 @@ the harness rather than by weakening the assertions.
 
 ---
 
-## D-039 · 2026-10-18 · accepted · M1-P0 integration audit: delegated edits, pin retirement, and two gaps carried to M2 (M1-P0/C2)
+## D-039 · 2026-10-18 · accepted · M1-P0 集成审计：代为修改、pin 退场，以及两项带到 M2 的缺口 (M1-P0/C2)
 
-**Context.** A6's real-browser gate pinned three product defects (`P0-1`, `P0-2`, `P0-3`).
-A1 and A2 fixed them on their own branches; A0 integrated both into `m1-stabilization`
-(`caa5376`, `0d04161`) and, while turning a pinned-red suite into a trustworthy green one,
-edited files owned by two other agents and retired the pins themselves. A7 then reviewed the
-result independently and raised four items. Two of them are gaps that cannot be closed inside
-M1-P0 without reopening the frozen contract, so they are recorded here as accepted risk rather
-than quietly fixed, weakened, or left undocumented.
+> 本条目以**中文**书写：项目负责人要求"给我看的工程报告要写中文"。D-001…D-038 保持既有英文体例，未做改动。
 
-**Status of each item in this record — recording a risk is not fixing it:**
+**背景。** A6 的真实浏览器门禁钉住了三个产品缺陷（`P0-1`、`P0-2`、`P0-3`）。A1 与 A2 在各自分支上修好；A0 把两者集成进 `m1-stabilization`（`caa5376`、`0d04161`），并在"把一片红色的 pin 变成可信的绿色"这个过程中，改动了两个其他 Agent 拥有的文件、并把 pin 本身退场。随后 A7 独立复核，提出四项。其中两项无法在 M1-P0 内闭合而不重新打开冻结契约，因此在此**记录为已接受风险**——不悄悄修掉、不削弱、也不留空。
 
-| Item | Status | Where it stands |
+**本条目的每项状态——记录一个风险不等于修复它：**
+
+| 事项 | 状态 | 落脚点 |
 | --- | --- | --- |
-| A0 edited A6- and A1-owned files during integration | **Resolved and recorded** | §1; boundary held, commits name the exception |
-| P0 pins and the P0-1 workaround shim | **Fixed** | §2; pins deleted, shim removed, assertions untouched |
-| Local presence write path is outside the frozen seam | **Accepted — risk open** | §3; M2 closes it with a write-side seam |
-| Global IndexedDB factory has no reference count | **Accepted — risk open and unverified** | §4; M2 adds an install stack plus a regression test |
-| A7's review report is not archived in the repo | **Closed — archived** | §5; `docs/agent-governance/A7-m1-p0-review.md` (verbatim) |
+| 集成期间 A0 改动了 A6 与 A1 拥有的文件 | **已处置并留痕** | §1；边界成立，提交信息点名例外 |
+| P0 pin 与 P0-1 workaround shim | **已修复** | §2；pin 删除、shim 移除、断言未动 |
+| 本地 presence 写路径不在冻结 seam 内 | **已接受——风险仍在** | §3；M2 用写侧 seam 收口 |
+| 全局 IndexedDB 工厂缺少引用计数 | **已接受——风险仍在且未验证** | §4；M2 加安装栈 + 重叠回归测试 |
+| A7 的复核报告未入库 | **已闭合——已归档** | §5；原文存于 `docs/agent-governance/A7-m1-p0-review.md` |
 
-### 1. A0 edited A6- and A1-owned files (resolved, recorded)
+### 1. A0 改动 A6 与 A1 拥有的文件（已处置，已留痕）
 
-A0 changed `tests/browser/**` (owner A6) and `apps/web/src/collab/tests/support/test-server.ts`
-+ `sync.test.ts` (owner A1) while integrating. Neither A6 nor A1 was running.
+集成期间 A0 改动了 `tests/browser/**`（属 A6）与 `apps/web/src/collab/tests/support/test-server.ts`、`sync.test.ts`（属 A1）。当时 A6、A1 均无活跃进程。
 
-*Why the edits were necessary.* The alternative was shipping a baseline whose gate could not be
-trusted: stale pins asserted nothing meaningful, two assertions failed when the product was
-**correct**, and one assertion compared two live socket counts (flaky, and vacuous whenever both
-were zero). A green gate built on those would have been worse than a red one.
+**为什么必须改。** 替代方案是交出一份门禁不可信的基线：过期的 pin 什么也没断言；两条断言在产品**正确**时会失败；还有一条把"存活 socket 数"当证据（既抖动，又在两者都为 0 时变成空断言）。建立在那些之上的绿色比红色更糟。
 
-*Authorization basis, stated precisely, because the two cases differ.*
-- A6's case was **delegated by the project owner**: the M1-P0 instruction explicitly asked for
-  the P0-1 pin and workaround to be removed and for the two assertions to be corrected.
-- A1's case was **not** delegated. It is recorded as an ownership exception under A0's quality
-  gate duty (`agent-prompts/A0-supervisor.md` §4: an integrator must verify that tests are real
-  and must not accept a flaky gate), not as authority. A7 is the independent check on it.
+**授权依据，两案分述——因为性质不同。**
+- A6 这一侧是**项目负责人明确委派**：M1-P0 指令点名要求移除 P0-1 的 pin 与 workaround，并修正那两条断言。
+- A1 这一侧**没有被委派**。它记录为 A0 质量门职责下的 **ownership 例外**（`agent-prompts/A0-supervisor.md` §4：集成者必须验证测试是真的、不得接受抖动的门禁），而**不是**把它写成授权。A7 是对它的独立检查。
 
-*Boundary that was held.* A0 touched no A1/A2/A3 production code, no frozen contract, and no
-`package.json`. Every edit either removed a label that no longer described reality or made an
-assertion **stronger** (`viewId` + mount delta instead of a brittle absolute count; attribution
-instead of "zero carets"; a monotonic counter instead of a live count). Both exceptions are
-named in the commit messages (`19587fc`, `fc542f8`, `9be0e1a`) rather than buried in a diff.
+**守住的边界。** A0 未触碰 A1/A2/A3 的任何生产代码、未改冻结契约、未改 `package.json`。每处改动要么删掉不再描述现实的标签，要么让断言**更强**（用 `viewId` + 挂载增量替代脆弱的绝对值；用归属校验替代"光标必须为零"；用单调计数替代存活计数）。两处例外在提交信息中点名（`19587fc`、`fc542f8`、`9be0e1a`），不埋在 diff 里。
 
-### 2. P0 pins and the P0-1 shim retired (fixed)
+### 2. P0 pin 与 P0-1 shim 退场（已修复）
 
-*Basis for removal.* A pin may only be deleted when the behaviour the contract requires passes on
-the **unmodified** production path. That was demonstrated before anything was removed:
-`defect-pin/P0-1` (which ran without the shim, by construction) passed in real Chromium, and the
-run before the deletion already reported `pinnedFixed: [P0-1, P0-2, P0-3]`. After removal the
-suite was 27/27 with no shim and no pins, so the evidence for each fix no longer depends on a
-test-only workaround.
+**删除依据。** 只有契约要求的行为在**未修改**的生产路径上通过，pin 才可以删。这一点在删除之前就已证明：`defect-pin/P0-1`（按构造不加载 shim）在真实 Chromium 中通过，且删除前那次运行已报告 `pinnedFixed: [P0-1, P0-2, P0-3]`。删除后 27/27、无 shim、无 pin，说明每个修复的证据不再依赖 test-only workaround。
 
-*What was removed.* `suite/defect-pins.mjs` (deleted, so the runner's directory discovery stops
-registering it), `P0_1_WORKAROUND` and the whole `withWorkaround` plumbing plus its banner and
-recorded `testOnlyWorkaround` environment field, and nine now-obsolete `knownDefect` tags. No
-assertion was deleted or relaxed; the P0-2/P0-3 scenarios became ordinary green scenarios.
+**删除范围。** `suite/defect-pins.mjs`（真删文件，跑者的目录发现机制随之注销）、`P0_1_WORKAROUND` 与整条 `withWorkaround` 管线（含横幅与记录进 environment 的 `testOnlyWorkaround` 字段）、九个已过期的 `knownDefect` 标签。**没有任何断言被删除或放宽**；P0-2/P0-3 的场景变成普通的绿色场景。
 
-*A7's independent conclusion (archived at `docs/agent-governance/A7-m1-p0-review.md`; see §5).* A7
-performed the review on `9be0e1a` and did not require the fixes to be rolled back. Its verdict was
-APPROVE WITH CONDITIONS with two blocking items, both now satisfied (C1 in `dd36169`/`f2dfe1a`,
-C2 in `a06b6ff`). It raised the four items recorded in this decision: the two delegated-edit/audit
-questions (§1, §5), the presence write path (§3) and the IndexedDB reference count (§4). §1 and §2
-are closed by this record; §3 and §4 are accepted risk with an M2 owner; §5 is closed by the
-verbatim archive.
+**A7 的独立结论（原文归档见 §5）。** A7 在 `9be0e1a` 上完成复核，未要求回滚修复。其结论为 **APPROVE WITH CONDITIONS（有条件放行）**，列两项阻塞：C1（让 fatal 重连不变量**可被观测**）、C2（补齐决策留痕并修掉对已删除 `defect-pins.mjs` 的悬空引用）。**两项均已满足**：C1 由 `dd36169` 提供、经 `f2dfe1a` 以真实 merge 集成；C2 由本条记录与 `a06b6ff` 完成。
 
-### 3. The local presence write path is outside the frozen seam (accepted, M2)
+### 3. 本地 presence 写路径不在冻结 seam 内（已接受，M2 收口）
 
-*Fact.* `CollaborativeSession` (`packages/shared/src/collab-session.ts:89`) exposes presence
-**reads** — `getCollaborators()`, `getLocalAwarenessState()` — and the raw `readonly awareness`
-instance. It exposes **no write** method. A2 therefore publishes presence through the raw
-instance: `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx:200-202` calls
-`session.awareness.setLocalStateField('cursor' | 'selection' | 'updatedAt', …)`.
+**事实。** `CollaborativeSession`（`packages/shared/src/collab-session.ts:89`）只暴露 presence 的**读**——`getCollaborators()`、`getLocalAwarenessState()`——以及原始 `readonly awareness` 实例，**没有写方法**。因此 A2 经裸实例发布 presence：`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx:200-202` 调用 `session.awareness.setLocalStateField('cursor' | 'selection' | 'updatedAt', …)`。
 
-*Why this matters.* Reads are schema-validated (`awarenessStateSchema`), writes are not. The shape
-a client publishes is therefore not owned by the contract: an A2 bug can publish a state that
-every peer must reject, and nothing in the contract prevents it. R14's "raw `Awareness` is only a
-binding input" holds for reads and is stretched for writes — the single-channel invariant is not
-violated, but the write shape is ungoverned.
+**为什么是问题。** 读侧经 `awarenessStateSchema` 校验，写侧没有。**客户端发布什么形状不由契约拥有**：A2 的一个 bug 就能发出"所有对端都必须拒绝"的状态，契约拦不住。R14 的"原始 `Awareness` 仅作绑定输入"在读侧成立、在写侧被拉伸——单通道不变量未被破坏，但写形状无人治理。
 
-*Why M1 accepts it.* (a) Every field A2 writes is inside `awarenessStateSchema`, including
-`updatedAt`, so today's payloads are contract-conformant; the exposure is a missing guard, not a
-present defect. (b) Real-browser scenarios cover the observable behaviour: presence renders,
-clears on departure, and does not survive a room switch into the wrong document. (c) Adding a
-write method is a **frozen-contract change** (version bump plus `docs/CONTRACTS.md` revision) with
-no functional driver in M1, and M1-P0's brief was to stabilise, not to extend the contract.
+**M1 为何接受。**（a）A2 写入的每个字段都在 `awarenessStateSchema` 内（含 `updatedAt`），今天的载荷合规，缺的是**护栏**而非已存在的缺陷；（b）真实浏览器已覆盖可观测行为（渲染、离开清除、切房不串台）；（c）增加写方法是**冻结契约变更**（版本号 + `docs/CONTRACTS.md` 修订）且 M1 无功能驱动，而 M1-P0 的职责是稳定基线，不是扩展契约。
 
-*M2 direction.* Add `publishPresence(patch: Pick<AwarenessState, 'cursor' | 'selection'>)` to the
-seam, validate before writing, and narrow `readonly awareness` to a binding-input-only type so A2
-cannot write through it; bump `SHARED_CONTRACT_VERSION` and update §5/§9 of `docs/CONTRACTS.md`.
+**M2 方向。** seam 增加 `publishPresence(patch: Pick<AwarenessState, 'cursor' | 'selection'>)`，写入前校验，并把 `readonly awareness` 收窄为"仅绑定输入"类型，使 A2 无法经它写入；提升 `SHARED_CONTRACT_VERSION` 并更新 `docs/CONTRACTS.md` §5/§9。
 
-### 4. The injected IndexedDB factory has no reference count (accepted, M2, unverified)
+### 4. 注入环境的全局 IndexedDB 工厂缺少引用计数（已接受，M2 处理，未验证）
 
-*Fact.* `installGlobalIndexedDb` (`apps/web/src/collab/internal/persistence.ts:127`) snapshots
-`Object.getOwnPropertyDescriptor(host, 'indexedDB')` and restores that descriptor on teardown. It
-short-circuits when the resolved factory already *is* the global, and
-`attachDocumentPersistence` makes teardown idempotent **per handle** via `destroyPromise`. What
-does not exist is any cross-handle stack or reference count.
+**事实。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
 
-*Failure mode with overlapping injected sessions.* A installs `FA` (saving the ambient
-descriptor), B installs `FB` (saving A's descriptor). `A.destroy()` restores **ambient** while B
-is still live, so B's provider silently reads the ambient factory — the wrong database, with no
-error. `B.destroy()` then restores **FA**, leaving a fake factory on the global permanently.
+**重叠场景的失败链。** A 安装 `FA`（存下 ambient descriptor），B 安装 `FB`（存下 A 的 descriptor）。`A.destroy()` 还原 **ambient**，而 B 仍在运行 → B 的 provider 静默读到 ambient 工厂，**写进错误的数据库且不报错**；`B.destroy()` 再还原 `FA` → **一个假工厂永久留在全局上**。
 
-*Scope.* Only when two or more sessions with an **injected** factory overlap in one realm.
-Production is unaffected: when `options.indexedDB` is absent the resolved factory is
-`globalThis.indexedDB`, the identity check matches, and nothing is installed. So this is a
-test-support and future-non-browser-host risk, not a user-facing one.
+**影响范围。** 仅当两个及以上**注入**工厂的会话在同一 realm 内重叠。生产不受影响：未传 `options.indexedDB` 时解析出的就是 `globalThis.indexedDB`，身份检查命中，安装根本不发生。所以这是测试支撑与"未来非浏览器宿主"的风险，不是用户可见风险。
 
-*Why it is not fixed in M1-P0.* No test exercises overlapping injected sessions, so a fix would
-be unverified; the correct fix changes teardown semantics that P0-1's tests pin; and it is not on
-M1's exit criteria. Fixing it here would have meant writing unverified lifecycle code at the end
-of an integration pass — the exact failure mode this milestone is trying to leave behind.
+**M1-P0 为何不修。** 没有任何测试演练重叠注入，修了也是未验证；正确的修法会改变 P0-1 测试所钉住的 teardown 语义；且它不在 M1 退出条件内。**在集成收尾阶段写未验证的生命周期代码，正是本里程碑要消除的模式。**
 
-*M2 direction.* Replace the single descriptor snapshot with a module-level install stack plus a
-per-factory reference count, restore only when the current value is still ours (identity-guarded
-pop), and add a regression test with two overlapping injected sessions asserting that the second
-session's provider keeps its own factory and that the global ends up exactly as it started.
+**M2 方向。** 以模块级安装栈 + 每工厂引用计数替掉单次快照；只在当前值仍是自己时才还原（身份保护的 pop）；新增"两个重叠注入会话"的回归测试，断言第二个会话仍用自己的工厂、且全局最终与初始完全一致。
 
-### 5. Audit-chain: A7's report is archived verbatim (closed)
+### 5. 审计链：A7 报告已逐字归档（已闭合）
 
-A7's review is now a repository artefact: `docs/agent-governance/A7-m1-p0-review.md`, the
-original report as delivered, unedited. This decision does not paraphrase it, and its verdict
-wording stands as A7 wrote it.
+A7 的复核现已是仓库产物：`docs/agent-governance/A7-m1-p0-review.md`，即交付时的原文，未编辑。本条目不复述它，其判定措辞按 A7 所写为准。
 
-*Why this matters here.* §1–§4 of this record were written before the report was filed and were
-derived independently (by re-reading the code and the commit history), so they remain verifiable
-facts rather than a summary of A7's prose. Where they and the archived report overlap — the
-non-reference-counted global factory, the presence write path, the delegated edits and the
-missing integration report — the two agree.
+**为什么这一点在此重要。** 本文 §1–§4 写于报告归档之前，是**独立**得出的（重读代码与提交历史），因此它们是可独立核验的事实，而不是对 A7 叙述的摘要。两者重叠处——非引用计数的全局工厂、presence 写路径、代改范围、缺失的集成报告——结论一致。
 
-*One thing the archive does not change:* the report carries relative markdown links such as
-`apps/web/src/collab/internal/persistence.ts#L127-L161`, which were written from the repository
-root and therefore do not resolve from `docs/agent-governance/`. They were left exactly as
-authored instead of being rewritten; resolve them against the repository root.
+**归档不改变的一件事：** 报告内的相对 markdown 链接（如 `apps/web/src/collab/internal/persistence.ts#L127-L161`）是按仓库根书写的，从 `docs/agent-governance/` 下不能解析。它们**按原样保留**，未做改写；请以仓库根为基准解析。
 
-*Status.* Both blocking items A7 named are now satisfied: **C1** by `dd36169` (integrated in
-`f2dfe1a`, which replaces the 120 ms window with a wired 20 ms/60 ms backoff and a 300 ms
-observation window, and adds the explicit-recovery and positive-control assertions), and **C2**
-by this record plus the `persistence.test.ts` reference fix in `a06b6ff`.
+**状态。** A7 列出的两项阻塞均已满足：**C1** 由 `dd36169`（经 `f2dfe1a` 集成，把 120 ms 窗口换成接线的 20 ms / 60 ms 退避与 300 ms 观测窗口，并补上显式恢复与正向对照断言）；**C2** 由本条记录与 `a06b6ff` 中的引用修复完成。
 
-**Consequences.** The M1-P0 baseline (`9be0e1a`) is auditable: every delegated edit has a stated
-basis and a named owner who should review it, pin removal is tied to evidence that does not depend
-on a shim, and the two remaining gaps have an owner, a milestone and a concrete direction instead
-of a vague "known issue". The cost is two pieces of accepted risk carried into M2 plus one open
-documentation gap — which is the honest state. Nothing here was weakened to make the suite green,
-and no frozen contract was touched to make a risk disappear.
-
-
-
-
+**后果。** M1-P0 基线现在可审计：每处代改都有陈述清楚的依据与应当复核它的具名 owner；pin 退场绑定在不依赖 shim 的证据上；两项剩余缺口有 owner、有里程碑、有具体方向，而不是一句含糊的"已知问题"。代价是两项被接受的风险带入 M2——这才是诚实的当前状态。这里没有为了让套件变绿而削弱任何断言，也没有为了让风险消失而改动任何冻结契约。

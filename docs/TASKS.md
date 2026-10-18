@@ -84,25 +84,20 @@ pnpm --filter @insighthub/server verify:m0
 
 ## M1 — Collaboration core
 
-Status: **M1 implementation complete; final closing review pending.** (`m1-stabilization`)
+状态：**M1 实现已完成；终签（final closing review）待办。**（`m1-stabilization`）
 
-| M1 area | State |
+| M1 领域 | 状态 |
 | --- | --- |
-| Implementation (A1 / A2 / A3) | **DONE** |
-| Browser / Chaos Gate (A6) | **DONE** — 27/27 real-Chromium scenarios, no shim, no pins |
-| P0 Stabilisation (A1 / A2 + integration) | **DONE** — baseline `9be0e1a`; C1 integrated in `f2dfe1a` |
-| Final Review (A7) | **PENDING FINAL CLOSING REVIEW** — verdict *APPROVE WITH CONDITIONS*, archived at `docs/agent-governance/A7-m1-p0-review.md`; both conditions (C1, C2) satisfied |
-| Merge to `main` | **PENDING** — `main` is still at `47e96e3` |
-| M2 Durable Persistence | **NOT STARTED** — see `M2-P0-1` |
+| 实现（A1 / A2 / A3） | **已完成** |
+| 浏览器 / Chaos 门禁（A6） | **已完成** —— 真实 Chromium 27/27，无 shim、无 pin |
+| P0 稳定化（A1 / A2 + 集成） | **已完成** —— 基线 `9be0e1a`；C1 经 `f2dfe1a` 集成 |
+| 最终复核（A7） | **待终签** —— 结论 *APPROVE WITH CONDITIONS*，原文逐字归档于 `docs/agent-governance/A7-m1-p0-review.md`；两项条件（C1、C2）均已满足 |
+| 合入 `main` | **待定** —— `main` 仍为 `47e96e3` |
+| M2 服务端持久化 | **未开始** —— 见 `M2-P0-1` |
 
-Two accepted risks travel with this baseline and are **not** closed by it
-(`docs/DECISIONS.md` D-039 §3/§4): the presence **write** path is outside the frozen seam, and
-the injected IndexedDB factory has no reference count.
+两项被接受的风险随本基线进入下一阶段，**并未**被本基线关闭（`docs/DECISIONS.md` D-039 §3/§4）：presence 的**写**路径不在冻结 seam 内；注入环境的 IndexedDB 工厂没有引用计数。
 
-> **Durable server-side persistence is an M1 known limitation, tracked as `M2-P0-1`. It is NOT a
-> blocker for the merge decision.** The blocker list is what A7 named — C1 and C2 — and both are
-> closed. What persistence affects is the *release note*: the only durable copy of a document is
-> each client's IndexedDB, so a user who loses every local replica loses the content.
+> **服务端持久化是 M1 的已知 limitation，立项为 `M2-P0-1`，且不是合并决策的阻塞项。** 阻塞项是 A7 点名的那两条——C1 与 C2——两者均已闭合。持久化影响的是**发布说明**：文档唯一持久副本是各客户端的 IndexedDB，用户若丢失全部本地副本，内容即无法恢复。
 
 ### M1-A0.1 — Pre-Parallel Cleanup ✅ done
 
@@ -163,46 +158,43 @@ agents.
 | ID | Task | Owner | Status |
 | --- | --- | --- | --- |
 | M1-A0 | Contract freeze: binary framing, error codes, session seam, wire semantics | A0 | **done** |
-| M1-A1 | Yjs document + offline persistence + reconnect merge + awareness + undo | A1 | **done** — P0-1 fixed in `85a1b7c`, integrated in `caa5376` |
-| M1-A2 | CodeMirror ⇄ `Y.Text` binding + editor UI + collaborator UI | A2 | **done** — P0-2 `0b79a93`, P0-3 `a679856`, selection `270cf5e`, integrated in `0d04161` |
-| M1-A3 | Document rooms, sync relay, presence, connection lifecycle | A3 | **done** — integrated in `47e96e3`; 58 server tests green |
-| M1-A6 | Chaos tests: reconnect, duplicate frames, out-of-order, ghost awareness | A6 | **done** — real-browser + chaos gate delivered in `f031063`; found P0-1/2/3 |
-| M1-P0 | Stabilisation of the defects A6 found (A1, A2) and their integration | A1 / A2 / A0 | **done** — baseline `9be0e1a`; see the section below |
-| M1-A7 | Integration gate: typecheck, tests, build, wire-format review | A7 | **review closed, sign-off pending** — verdict *APPROVE WITH CONDITIONS*, archived verbatim at `docs/agent-governance/A7-m1-p0-review.md`; C1 + C2 satisfied; final closing review outstanding |
-| M1-MERGE | Merge M1 into `main` | A0 | **pending** — `main` still at `47e96e3`; not blocked by `M2-P0-1` (that is an M1 known limitation) |
-| M1-C1 | A7's condition C1: make the fatal-reconnect pin observable | A1 | **done** — `dd36169` based on `85a1b7c`, integrated in `f2dfe1a` |
-| M1-C2 | A7's condition C2: decision record + fix the dangling `defect-pins.mjs` reference | A0 | **done** — `a06b6ff` (D-039, reference fix) |
+| M1-A1 | Yjs 文档 + 离线持久化 + 重连合并 + awareness + undo | A1 | **done** —— P0-1 见 `85a1b7c`，经 `caa5376` 集成 |
+| M1-A2 | CodeMirror ⇄ `Y.Text` 绑定 + 编辑器 UI + 协作者 UI | A2 | **done** —— P0-2 `0b79a93`、P0-3 `a679856`、选区 `270cf5e`，经 `0d04161` 集成 |
+| M1-A3 | 文档房间、同步中继、presence、连接生命周期 | A3 | **done** —— 经 `47e96e3` 集成；服务端 58 测试通过 |
+| M1-A6 | Chaos 测试：重连、重复帧、乱序、幽灵 awareness | A6 | **done** —— 真实浏览器 + chaos 门禁见 `f031063`；发现 P0-1/2/3 |
+| M1-P0 | A6 发现缺陷的稳定化（A1、A2）与集成 | A1 / A2 / A0 | **done** —— 基线 `9be0e1a`；见下一节 |
+| M1-A7 | 集成门禁：typecheck、测试、构建、wire 格式复核 | A7 | **review 已收口，签署待办** —— 结论 *APPROVE WITH CONDITIONS*，原文逐字归档于 `docs/agent-governance/A7-m1-p0-review.md`；C1 + C2 已满足；终签待办 |
+| M1-MERGE | 将 M1 合入 `main` | A0 | **pending** —— `main` 仍为 `47e96e3`；**不**受 `M2-P0-1` 阻塞（那是 M1 已知 limitation） |
+| M1-C1 | A7 条件 C1：让 fatal 重连 pin 可被观测 | A1 | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成 |
+| M1-C2 | A7 条件 C2：决策记录 + 修掉 `defect-pins.mjs` 悬空引用 | A0 | **done** —— `a06b6ff`（D-039、引用修复） |
 
-### M1 exit criteria — status
+### M1 退出条件 —— 逐项状态
 
-| Exit criterion | Met? | Evidence |
+| 退出条件 | 是否满足 | 证据 |
 | --- | --- | --- |
-| Two browser sessions converge | **yes** | `realtime/two-tabs-converge`, `indexeddb/D-two-tabs-share-one-replica`, `indexeddb/C-offline-then-reconnect-converges` |
-| Offline loses no keystroke | **yes in substance** | Real socket refusal, then reconnect: `indexeddb/B-offline-edits-survive-reopen`, `chaos/offline-reconnect`. The criterion's literal **30 s** is *not* asserted by a dedicated timer — the scenarios exercise a real outage of unspecified length |
-| Reconnect transfers a delta, not the document | **yes** | Server `M1-A3 incremental sync (acceptance criterion 4)`; the transfer is bounded by the state vector |
-| `typecheck` / tests / build green | **yes** | On `f2dfe1a`: `pnpm typecheck` exit 0, `pnpm test` exit 0 (251 vitest + 58 server), `pnpm build` exit 0 |
-| Browser evidence for the above | **yes — but one browser** | `node tests/browser/run.mjs` → **27 pass / 0 fail / 0 error**. Chrome 155 on Windows on one machine; cross-browser and cross-platform are **unverified** |
+| 两个浏览器会话收敛 | **是** | `realtime/two-tabs-converge`、`indexeddb/D-two-tabs-share-one-replica`、`indexeddb/C-offline-then-reconnect-converges` |
+| 离线不丢键击 | **实质满足** | 真实拒绝连接后重连：`indexeddb/B-offline-edits-survive-reopen`、`chaos/offline-reconnect`。条件字面的 **30 s** **未**用专门计时器断言——场景演练真实断网，但时长未固定 |
+| 重连传增量而非整篇文档 | **是** | 服务端 `M1-A3 incremental sync (acceptance criterion 4)`；传输受 state vector 约束 |
+| `typecheck` / 测试 / 构建 全绿 | **是** | 在 `f8af8d7`：`pnpm typecheck` exit 0、`pnpm test` exit 0（251 vitest + 58 服务端）、`pnpm build` exit 0 |
+| 上述项的浏览器证据 | **是——但仅一种浏览器** | `node tests/browser/run.mjs` → **27 通过 / 0 失败 / 0 错误**。Chrome 155 / Windows / 单机；跨浏览器与跨平台**未验证** |
 
-### M1-P0 — Stabilisation ✅ done
+### M1-P0 —— 稳定化 ✅ 已完成
 
-A6's real-browser gate found three defects no Node suite could observe. A1 and A2 fixed them on
-their own branches; A0 integrated both and made the gate trustworthy. Decisions and audit trail:
-`docs/DECISIONS.md` D-039.
+A6 的真实浏览器门禁发现了三个 Node 套件观测不到的缺陷。A1 与 A2 在各自分支修复，A0 集成两者并让门禁变得可信。决策与审计链见 `docs/DECISIONS.md` D-039。
 
-| ID | Task | Owner | Status | Evidence |
+| ID | 任务 | Owner | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| M1-P0-1 | `globalThis.indexedDB` assigned although it is getter-only in every browser → no document opened at all | A1 | **done** | `85a1b7c`; `defect-pin/P0-1` passed on the **unmodified** path before the pin was deleted |
-| M1-P0-2 | Local edits flushed only at 64 queued changes → keystrokes never reached `Y.Text` (no persist, no share, no undo) | A2 | **done** | `0b79a93`; nine pinned scenarios turned green; editor length == `Y.Text` length |
-| M1-P0-3 | `ViewPlugin` dispatched from its own constructor → the plugin crashed on mount, so no remote caret ever rendered | A2 | **done** | `a679856`; `cursors/remote-caret-and-selection-render` green |
-| M1-P0-4 | Two harness assertions failed when the product was **correct** (absolute `editorMounts === 1`; zero carets after switching into a room that has a peer) | A0 — A6-owned, delegated | **done** | `19587fc`; `mounts 2→2`, `viewId 1→1`, caret attributed to the new room's collaborator |
-| M1-P0-5 | `sync.test.ts` fatal-error assertion compared a *live* socket count → flaky, and vacuous whenever both reads were 0 | A0 — A1-owned, ownership exception | **done, superseded by C1** | `9be0e1a` fixed the counting semantics; A7 then showed the *window* was still too short (120 ms vs a 1000 ms backoff), and `f2dfe1a` replaced the whole test with C1. The duplicate counter was consolidated into A1's single monotonic `totalConnections` |
-| M1-P0-6 | P0 pins, the P0-1 shim and stale "defect still open" comments retired | A0 — A6-owned, delegated | **done** | `19587fc`, `fc542f8`; 27 scenarios, no shim, no `knownDefect` tags |
-| M1-P0-7 | **Durable server-side persistence** — M1 has none | — | **not done → `M2-P0-1`** | A room dies with its last member; a *fresh* client cannot recover prior content. Known limitation, not a merge blocker |
-| M1-P0-8 | Presence write-side seam missing; injected IndexedDB factory has no reference count | — | **accepted risk → `M2-P0-2` / `M2-P0-3`** | `docs/DECISIONS.md` D-039 §3 / §4; both recorded, neither fixed |
-| M1-P0-9 | A7's review report was not archived in the repo | A0 | **closed** | `docs/agent-governance/A7-m1-p0-review.md` (verbatim); D-039 §5 rewritten to point at it |
+| M1-P0-1 | 给只读的 `globalThis.indexedDB` 赋值（浏览器中它是 getter-only）→ 任何文档都打不开 | A1 | **已完成** | `85a1b7c`；`defect-pin/P0-1` 在 pin 删除前已于**未修改**路径通过 |
+| M1-P0-2 | 本地编辑只在累计 64 次变更时 flush → 击键从未进入 `Y.Text`（不持久、不共享、undo 失效） | A2 | **已完成** | `0b79a93`；九个 pinned 场景转绿；编辑器长度 == `Y.Text` 长度 |
+| M1-P0-3 | `ViewPlugin` 在自己的构造函数里 dispatch → 插件挂载即崩，远端光标从不渲染 | A2 | **已完成** | `a679856`；`cursors/remote-caret-and-selection-render` 通过 |
+| M1-P0-4 | 两条 harness 断言在产品**正确**时失败（绝对 `editorMounts === 1`；切进一个有协作者的房间后仍要求 0 光标） | A0 —— A6 域，受委派 | **已完成** | `19587fc`；`mounts 2→2`、`viewId 1→1`，光标归属新房协作者 |
+| M1-P0-5 | `sync.test.ts` 的 fatal 断言比较的是**存活** socket 数 → 抖动，且两次读数都为 0 时变成空断言 | A0 —— A1 域，ownership 例外 | **已完成，随后被 C1 取代** | `9be0e1a` 修正了计数语义；A7 随后指出**窗口**仍太短（120 ms vs 1000 ms 退避），`f2dfe1a` 用 C1 重写了整个用例；重复计数器已收敛为 A1 单一的单调 `totalConnections` |
+| M1-P0-6 | P0 pin、P0-1 shim 与"缺陷仍存在"的过期注释退场 | A0 —— A6 域，受委派 | **已完成** | `19587fc`、`fc542f8`；27 个场景，无 shim、无 `knownDefect` 标签 |
+| M1-P0-7 | **服务端持久化** —— M1 没有 | — | **未完成 → `M2-P0-1`** | 房间随最后一个成员销毁；**全新**客户端无法恢复既有内容。已知 limitation，非合并阻塞 |
+| M1-P0-8 | presence 写侧 seam 缺失；注入的 IndexedDB 工厂无引用计数 | — | **已接受风险 → `M2-P0-2` / `M2-P0-3`** | `docs/DECISIONS.md` D-039 §3 / §4；两项均已记录，**均未修复** |
+| M1-P0-9 | A7 复核报告原先不在仓库 | A0 | **已闭合** | `docs/agent-governance/A7-m1-p0-review.md`（逐字原文）；D-039 §5 已改为指向它 |
 
-> The browser results above describe **M1's collaboration surface only**. They say nothing about
-> M2 permissions, M3 AI or M4 hardening, and must not be quoted as if they did.
+> 以上浏览器结论**仅描述 M1 的协作面**。它们与 M2 权限、M3 AI、M4 硬化无关，不得当作那些里程碑的证据引用。
 
 ### M1-A2 implementation notes (A2)
 
@@ -377,14 +369,14 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 Auth, document RBAC enforced server-side, request cancellation, stale-response
 guards and document-switch race protection. Owner: A5.
 
-### M2-P0 — items carried out of M1 (these are not optional)
+### M2-P0 —— 从 M1 带出的项目（不可选）
 
-| ID | Task | Owner | Status | Why it is P0 |
+| ID | 任务 | Owner | 状态 | 为何是 P0 |
 | --- | --- | --- | --- | --- |
-| M2-P0-1 | Durable server-side document persistence | A3 | **not started** | M1 keeps rooms in memory only: a room dies with its last member, so a *fresh* device cannot recover content that existed before. Data-loss window, not a nicety. **This is an M1 known limitation and explicitly NOT a blocker for merging M1 into `main`** |
-| M2-P0-2 | Presence write-side seam (`publishPresence`), validated before write; narrow `readonly awareness` to binding-input-only | A1 + A0 (contract) | **not started** | Today A2 writes presence through the raw `Awareness`, so the published shape is ungoverned while the read side is validated (`docs/DECISIONS.md` D-039 §3) |
-| M2-P0-3 | Reference-counted IndexedDB factory installation (install stack, identity-guarded restore) + overlapping-session regression test | A1 | **not started** | Two overlapping sessions with injected factories can leave a fake factory on the global and silently read the wrong database (`docs/DECISIONS.md` D-039 §4). Currently **unverified**, not merely unfixed |
-| M2-P0-4 | Archive A7's review report as `docs/agent-governance/A7-m1-p0-review.md` | A0 | **done** (moved to M1-P0-9) | Filed verbatim during M1 closing; kept here only so the M2 list is not silently missing an item it once promised |
+| M2-P0-1 | 服务端文档持久化 | A3 | **未开始** | M1 的房间只在内存中：房间随最后一个成员销毁，**全新**设备无法恢复先前存在的内容。这是数据丢失窗口，不是锦上添花。**这是 M1 的已知 limitation，明确不是把 M1 合入 `main` 的阻塞项** |
+| M2-P0-2 | presence 写侧 seam（`publishPresence`），写入前校验；把 `readonly awareness` 收窄为仅绑定输入 | A1 + A0（契约） | **未开始** | 当前 A2 经裸 `Awareness` 写 presence，读侧有校验而写侧没有（`docs/DECISIONS.md` D-039 §3） |
+| M2-P0-3 | 引用计数的 IndexedDB 工厂安装（安装栈、身份保护还原）+ 重叠会话回归测试 | A1 | **未开始** | 两个重叠的注入会话可能把假工厂留在全局并静默读错数据库（`docs/DECISIONS.md` D-039 §4）。当前是**未验证**，不只是未修复 |
+| M2-P0-4 | 将 A7 复核报告归档为 `docs/agent-governance/A7-m1-p0-review.md` | A0 | **已完成**（已并入 M1-P0-9） | M1 收尾期间已逐字归档；保留此行只为避免 M2 列表静默丢掉一项曾承诺的事项 |
 
 ## M3 — AI suggestions (sketch)
 
