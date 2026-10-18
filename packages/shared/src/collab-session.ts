@@ -249,6 +249,46 @@ export interface CollaborativeSessionOptions {
 }
 
 /**
+ * The slice of `y-protocols`' `Awareness` a **binding** legitimately needs
+ * (M2-P0-2 step 3).
+ *
+ * ## Why this exists
+ *
+ * `docs/CONTRACTS.md` §15.2 rule 4 says the raw `Awareness` "may remain exposed only as
+ * a binding input". Until step 3 that was a comment: the seam exposed the full class, so
+ * `session.awareness.setLocalState(...)` compiled and every caller could write presence
+ * directly, bypassing validation and the collaboration layer's `updatedAt` ownership.
+ *
+ * This type makes the rule structural instead of advisory:
+ *
+ * | Member | Why a binding needs it |
+ * | --- | --- |
+ * | `getStates()` | a cursor extension reads peer entries to compute remote cursors |
+ * | `on` / `off` | the extension subscribes to `change`/`update` and unsubscribes on teardown |
+ * | `clientID` | the binding has to tell the local entry from peers |
+ *
+ * Everything else is gone: `setLocalState`, `setLocalStateField`, `states`, `meta` and
+ * `destroy` are **not reachable** through this type. Presence is written only through
+ * `CollaborativeSession.publishPresence`.
+ *
+ * ## Why `getStates` is narrowed to `ReadonlyMap`
+ *
+ * `Awareness.getStates()` returns the live `Map`, so `Pick<Awareness, 'getStates'>`
+ * would still have handed out a writable map — a write path wearing a read interface.
+ * The declared return is therefore `ReadonlyMap<number, unknown>`, which is also the
+ * shape a binding actually consumes (`collectValidAwarenessStates` takes exactly that).
+ * The values stay `unknown` on purpose: they are untrusted peer payloads and must go
+ * through `awarenessStateSchema` before anyone renders them (R14).
+ *
+ * `on`/`off` are taken from `Awareness` itself rather than re-declared, so the
+ * subscription signatures cannot drift from `y-protocols`.
+ */
+export interface AwarenessBinding extends Pick<awarenessProtocol.Awareness, 'clientID' | 'on' | 'off'> {
+  /** Peer presence entries, exactly as they came off the wire. Validate before use. */
+  getStates(): ReadonlyMap<number, unknown>;
+}
+
+/**
  * The one collaboration object A2 may depend on.
  *
  * Everything A2 is forbidden to know about (IndexedDB, reconnect queue, state
@@ -261,8 +301,15 @@ export interface CollaborativeSession {
   readonly text: Y.Text;
   /** Full CRDT document, exposed for readiness/AI transactions in later milestones. */
   readonly doc: Y.Doc;
-  /** Ephemeral presence. Read via `getCollaborators()`. */
-  readonly awareness: awarenessProtocol.Awareness;
+  /**
+   * Ephemeral presence, as a **binding input only** (`docs/CONTRACTS.md` §15.2 rule 4).
+   *
+   * This is deliberately not the raw `y-protocols` instance: writing through it does not
+   * compile (`AwarenessBinding` has no write member), because the only supported write
+   * path is `publishPresence` below. It is also not UI state — render collaborators from
+   * `getCollaborators()`, which is schema-validated (R14).
+   */
+  readonly awareness: AwarenessBinding;
 
   /** Local lifecycle. `active` can be reached without any network connection. */
   readonly state: SessionState;
@@ -288,8 +335,9 @@ export interface CollaborativeSession {
    * untouched. Awareness stays the single presence channel (`docs/DECISIONS.md`
    * D-021); no control-plane presence message exists or is added.
    *
-   * The raw `awareness` instance above remains exposed as a binding input only. It is
-   * not a write path, and it is not UI state (R14).
+   * The raw `awareness` instance above is a binding input only and has no write member.
+   * Use this method; it is the sole presence write path, and it is what makes the
+   * published shape the contract's business rather than the caller's.
    */
   publishPresence(patch: PresencePatch): void;
 

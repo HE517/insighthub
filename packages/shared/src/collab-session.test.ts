@@ -136,9 +136,85 @@ describe('presence seam shape', () => {
   });
 
   it('bumps the shared contract version but not the protocol version', () => {
-    // The seam is an interface-level addition: version up.
-    expect(SHARED_CONTRACT_VERSION).toBe(3);
+    // v4: narrowing is a **breaking** seam change (v3 code that wrote through
+    // `awareness` no longer compiles), so the surface version moves again.
+    expect(SHARED_CONTRACT_VERSION).toBe(4);
     // The wire is untouched: awareness already carried cursor and selection.
     expect(PROTOCOL_VERSION).toBe(2);
+  });
+});
+
+/**
+ * M2-P0-2 step 3 — the narrowing, asserted at **compile time**.
+ *
+ * Every `@ts-expect-error` below is the real assertion: if a write member ever comes
+ * back on `AwarenessBinding`, the directive finds no error and `pnpm typecheck` fails
+ * with "Unused '@ts-expect-error' directive". That is why these are stronger than a
+ * comment or a runtime `expect(...).toBeUndefined()` — a runtime check would pass even
+ * if the member were reachable, because it only proves the value happens to be missing.
+ *
+ * The bodies are never executed (`void (() => { ... })`), so nothing writes anything.
+ */
+describe('awareness is a binding input only (M2-P0-2 step 3)', () => {
+  /** A compile-time handle; never dereferenced at runtime. */
+  function typeOnlySession(): CollaborativeSession {
+    return null as unknown as CollaborativeSession;
+  }
+
+  it('keeps the members a binding needs', () => {
+    const session = typeOnlySession();
+    void (() => {
+      // Each of these must compile; they are the binding's read/subscribe surface.
+      const states: ReadonlyMap<number, unknown> = session.awareness.getStates();
+      const clientId: number = session.awareness.clientID;
+      session.awareness.on('change', () => undefined);
+      session.awareness.on('update', () => undefined);
+      session.awareness.off('change', () => undefined);
+      session.awareness.off('update', () => undefined);
+      void states;
+      void clientId;
+    });
+    expect(typeof typeOnlySession).toBe('function');
+  });
+
+  it('does not compile a raw presence write through the seam', () => {
+    const session = typeOnlySession();
+    void (() => {
+      // @ts-expect-error `setLocalState` is not on the binding surface.
+      session.awareness.setLocalState({ user: { id: 'u', name: 'U' }, cursor: null, selection: null, updatedAt: 1 });
+      // @ts-expect-error `setLocalStateField` is not on the binding surface.
+      session.awareness.setLocalStateField('cursor', { anchor: 0, head: 0 });
+      // @ts-expect-error the internal `states` map is not exposed.
+      void session.awareness.states;
+      // @ts-expect-error the internal `meta` (clock bookkeeping) is not exposed.
+      void session.awareness.meta;
+      // @ts-expect-error a binding may not tear the presence channel down; the session owns it.
+      session.awareness.destroy();
+    });
+    expect(typeof typeOnlySession).toBe('function');
+  });
+
+  it('does not hand out a writable states map', () => {
+    const session = typeOnlySession();
+    void (() => {
+      // `Pick<Awareness, 'getStates'>` would have returned the live `Map`, leaving a
+      // write path disguised as a read. The declared type is `ReadonlyMap`.
+      // @ts-expect-error a ReadonlyMap has no `set`.
+      session.awareness.getStates().set(1, {});
+      // @ts-expect-error a ReadonlyMap has no `delete`.
+      session.awareness.getStates().delete(1);
+      // @ts-expect-error a ReadonlyMap has no `clear`.
+      session.awareness.getStates().clear();
+    });
+    expect(typeof typeOnlySession).toBe('function');
+  });
+
+  it('exposes exactly the binding members and nothing else', () => {
+    // Compile-time inventory: the key set of the narrowed member type. If someone adds
+    // a member to `AwarenessBinding`, this assertion fails and forces a review — the
+    // narrowing is only meaningful while the list is small and deliberate.
+    type BindingKeys = keyof CollaborativeSession['awareness'];
+    const keys: readonly BindingKeys[] = ['clientID', 'getStates', 'on', 'off'];
+    expect(keys).toEqual(['clientID', 'getStates', 'on', 'off']);
   });
 });
