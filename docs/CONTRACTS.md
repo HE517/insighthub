@@ -637,19 +637,19 @@ reported as `FRAME_TOO_LARGE` (reserved for a single frame exceeding the frame-s
 them. The server log may tag the event `HYDRATION_BACKLOG_OVERFLOW`; that tag is **not** part
 of the wire error vocabulary (§7) and does not change `PROTOCOL_VERSION`.
 
-## 15. Presence write seam (M2-P0-2 — steps 1+2 IMPLEMENTED; narrowing pending)
+## 15. Presence write seam (M2-P0-2 — steps 1–3 IMPLEMENTED)
 
-> **Status: IMPLEMENTED (steps 1 and 2 of 3).** `CollaborativeSession.publishPresence`,
-> `PresencePatch`, `parsePresencePatch` and `PresencePatchError` ship today; the A2 editor
-> publishes exclusively through the seam (no raw `Awareness` write and no `updatedAt` bookkeeping
-> remain in `apps/web/src/features/**` production code); `SHARED_CONTRACT_VERSION` is **3** (§15.5)
-> and `PROTOCOL_VERSION` is unchanged. **Step 3 — narrowing the raw `Awareness` to a
-> binding-input-only type — is still open** (§15.3, `docs/TASKS.md` M2-P0-2).
+> **Status: IMPLEMENTED (all three steps).** `CollaborativeSession.publishPresence`,
+> `PresencePatch`, `parsePresencePatch`, `PresencePatchError` and `AwarenessBinding` ship today.
+> The A2 editor publishes exclusively through the seam (no raw `Awareness` write and no
+> `updatedAt` bookkeeping remain in `apps/web/src/features/**` production code), and
+> `readonly awareness` is narrowed so a raw write **does not compile** (§15.2 rule 4, §15.6).
+> `SHARED_CONTRACT_VERSION` is **4** and `PROTOCOL_VERSION` is unchanged (§15.5).
 
-### 15.1 The gap
+### 15.1 The gap (historical — this section records what M2-P0-2 fixed)
 
 Today A2 publishes presence by writing the raw instance
-(`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx` calls
+(`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx` called
 `session.awareness.setLocalStateField('cursor' | 'selection' | 'updatedAt', …)`), while
 `CollaborativeSession` (§8) exposes presence **reads** only. Two consequences:
 
@@ -689,20 +689,54 @@ Rules:
    added; `docs/DECISIONS.md` D-021 still stands.
 4. **The raw `Awareness` instance may remain exposed only as a binding input.** It is not a
    write path and not UI state (R14). The seam addition does not legitimise writing through
-   it; it exists so a caller never has to.
+   it; it exists so a caller never has to. **As implemented, the exposure is the narrowed
+   `AwarenessBinding` (§15.6): the write members are not on the type, so a raw write is a
+   compile error rather than a documented prohibition.**
 5. **Partial patches are legal**: publishing only `cursor` must not clear `selection`.
 
-### 15.3 Migration order (frozen)
+### 15.3 Migration order (frozen, now complete)
 
 The order matters because the two packages ship in one workspace but are reviewed as
 separate changes:
 
 1. **A1** adds `publishPresence` to the seam and implements it (additive, no callers yet).
+   — **DONE** (`6714ca2`, plus the A0 ownership exception `054d87e` for A2's test double).
 2. **A2** migrates the editor to call it and deletes its own `updatedAt` bookkeeping.
+   — **DONE** (`1a8c887`).
 3. **A1** narrows `readonly awareness` to a binding-input-only type (or keeps it with an
    explicit write prohibition), now that no production caller writes through it.
+   — **DONE** (`9f8cfa2`); the narrowing is `AwarenessBinding` (§15.6).
 
 Doing step 3 before step 2 would break the editor; doing step 2 before step 1 is impossible.
+Both statements held in practice: step 1 alone turned 21 `tsc` errors on in A2's test double,
+and step 3 needed step 2's callers gone before the write members could be removed.
+
+### 15.6 The narrowed exposure: `AwarenessBinding`
+
+```ts
+export interface AwarenessBinding
+  extends Pick<awarenessProtocol.Awareness, 'clientID' | 'on' | 'off'> {
+  /** Live peer entries as they came off the wire — unvalidated, read-only. */
+  getStates(): ReadonlyMap<number, unknown>;
+}
+```
+
+| Member | Why it is in the binding face |
+| --- | --- |
+| `clientID` | the editor's remote-cursor view needs this client's id; made **required** because A2's `AwarenessView` declares it required and `session.awareness` is passed into that parameter |
+| `on` / `off` | the remote-cursor subscription and its teardown; taken from `Awareness` via `Pick` so the signature can never drift from `y-protocols` |
+| `getStates()` | peer entries; declared as `ReadonlyMap` **not** `Pick<Awareness, 'getStates'>`, because the upstream signature returns a live `Map` — that would leave a write channel wearing a read interface's clothes |
+
+`setLocalState`, `setLocalStateField`, `states`, `meta` and `destroy` are deliberately **absent**:
+presence is written only through `publishPresence`, and the awareness channel is torn down by the
+session, not by a binding consumer. The runtime object is still the same `Awareness` instance —
+this is a type-level window, not a wrapper, so identity, listener counts and `y-protocols`
+semantics are unchanged.
+
+Negative type tests pin this: 17 `@ts-expect-error` directives across
+`packages/shared/src/collab-session.test.ts` and `apps/web/src/collab/tests/presence-narrowing.test.ts`.
+**If the narrowing is reverted, those directives become unused and `tsc` fails with `TS2578`** —
+so the prohibition is enforced, not documented.
 
 ### 15.4 Scope restraint
 
@@ -714,8 +748,9 @@ invite callers to change identity mid-session, which nothing in M2 needs.
 
 | Constant | Change | Why |
 | --- | --- | --- |
-| `SHARED_CONTRACT_VERSION` | 2 → **3** when implemented | additive but interface-level change to a frozen seam |
-| `PROTOCOL_VERSION` | **unchanged** | the wire does not change: awareness fields already exist |
+| `SHARED_CONTRACT_VERSION` | 2 → **3** (step 1) | additive but interface-level change to a frozen seam |
+| `SHARED_CONTRACT_VERSION` | 3 → **4** (step 3) | **breaking**: removing the write members from `readonly awareness` means code that compiled against v3 no longer compiles. Recorded in `docs/DECISIONS.md` D-058 |
+| `PROTOCOL_VERSION` | **unchanged (2)** | the wire does not change: awareness fields already exist |
 
 ## 16. Client-internal lifecycle fixes are not contract matters
 

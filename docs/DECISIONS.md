@@ -1764,3 +1764,50 @@ A2 step 2  →  A0 integrate  →  A1 step 3  →  A0 integrate
 
 **后果。** M2-P0 的完成路径多了一个往返（A1 回来做 step 3），换到的是"契约承诺真的被类型执行"而
 不是"大家记得别乱写"。同时这条修正记录在案，避免下一次把三步当成一步。
+
+---
+
+## D-058 · 2026-10-18 · accepted · presence seam 收窄为 `AwarenessBinding`，`SHARED_CONTRACT_VERSION` 3 → 4 (M2-P0-2 step 3)
+
+**背景。** `M2-P0-2` 的三步里，前两步（seam、编辑器迁移）让**调用方**只走一条写路径，但
+`readonly awareness` 的类型仍是裸 `Awareness`：任何调用方可以重新 `setLocalState*`，绕过
+`parsePresencePatch` 校验与 `updatedAt` 归属，编译器不会拦。也就是说 §15.2 规则 4 当时只是**注释**。
+
+**决策。**
+
+1. **新增 `AwarenessBinding` 并把它作为 seam 上 `awareness` 的类型：**
+
+```ts
+export interface AwarenessBinding
+  extends Pick<awarenessProtocol.Awareness, 'clientID' | 'on' | 'off'> {
+  getStates(): ReadonlyMap<number, unknown>;
+}
+```
+
+2. **`SHARED_CONTRACT_VERSION` 3 → 4。** 这是**移除成员**，v3 下能编译的
+   `session.awareness.setLocalStateField(...)` 在 v4 下是 `TS2339`。机械证据：把 seam 改回宽类型后，
+   `@ts-expect-error` 立即变成 `TS2578`（未使用的指令）——同一份代码在两种类型下一个能编译、一个不能，
+   这就是 breaking 的定义。留在 3 等于向后续依赖版本号判断兼容性的 Agent 发错误信号。
+3. **`PROTOCOL_VERSION` 保持 2。** wire 未变：awareness 帧本来就带 cursor/selection，本轮只改 TS 面。
+4. **`getStates()` 声明为 `ReadonlyMap` 而不是 `Pick<Awareness,'getStates'>`。** 上游签名返回**活 Map**，
+   直接 `Pick` 会留下 `getStates().set(...)` 这条披着读接口的写通道。
+5. **`clientID` 保留为必需成员**（与我派发单里写的"可选"不一致）。依据是消费方实测：A2 的
+   `remoteCursors.ts` 中 `AwarenessView` 把 `clientID` 声明为必需，而 `session.awareness` 正是被传进那个
+   参数位置的。**下限由消费方实测决定，不由派发单的措辞决定**——这是本轮派发单的一处偏差，以实测为准。
+6. **`DocumentSession` 的类成员也收窄，不只是接口。** 先用实测确认：只改接口时 `typecheck` 是 0 错误，
+   但 `session.awareness.setLocalState(...)` 在 A1 自己的测试里**仍然可编译**（结构化协变允许宽类满足
+   窄接口）。验收要求"在 `apps/web/src/collab/**` 中不可编译"，所以必须连具体类一起收窄。
+
+**验收由负向类型断言承担，而非注释**：17 条 `@ts-expect-error`（shared 11 + collab 6），撤销收窄即
+`TS2578` 变红。A0 另用一次性探针在 `features/**` 中独立验证：`setLocalStateField` →
+`TS2339: Property 'setLocalStateField' does not exist on type 'AwarenessBinding'`，
+`getStates().set()` → `TS2339`（探针已删除）。
+
+**已知边界（不做的事）：** 只读是**类型级**的，运行时仍返回真实 `Map` 实例（不包装，以免破坏
+`collectValidAwarenessStates` 与 `y-protocols` 语义）。因此 `getStates() as Map<...>` 这类**显式**下行
+转换仍可写——那是一次代码评审能看见的逃逸，不是类型漏洞。要做成运行时不可写需要返回包装对象，
+代价是引入假的 `ReadonlyMap` 与身份不等，收益不抵成本。
+
+**后果。** `M2-P0-2` 三步齐备，"裸 `Awareness` 只作 binding input"从注释变成类型约束；代价是版本号
+跳到 4（workspace 内已被 `tsc` 全量覆盖，无隐藏破坏），以及 `getStates()` 的只读只是类型级这一条
+已记录的边界。

@@ -380,7 +380,7 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 | ID | 内容 | 本轮状态 | 代码状态 |
 | --- | --- | --- | --- |
 | `M2-P0-1` | 服务端 durable persistence | **FROZEN** | NOT IMPLEMENTED |
-| `M2-P0-2` | presence 写侧 seam | **步骤 1+2 IMPLEMENTED**（seam + `SHARED_CONTRACT_VERSION` 3；编辑器已迁移） | 步骤 3（A1 收窄裸 `Awareness`）待做；三步齐备才可标 COMPLETE |
+| `M2-P0-2` | presence 写侧 seam | **COMPLETE**（三步齐备；`SHARED_CONTRACT_VERSION` = 4，wire 不变） | 见下「M2-P0-2 — presence 写侧 seam（3 步迁移）」 |
 | `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **FROZEN** | NOT IMPLEMENTED |
 
 **不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
@@ -487,7 +487,7 @@ SQLite 依赖。
 | --- | --- | --- | --- | --- |
 | **1** | `publishPresence` 附加 seam、`updatedAt` 归协作层、写入前校验、`SHARED_CONTRACT_VERSION` 2→3 | A1 | `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence` | **DONE** —— `6714ca2` + A0 ownership 例外 `054d87e`，合入 `b40ba3c` |
 | **2** | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt` | A2 | `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（base `0075aae`） | **DONE** —— `1a8c887`，合入 `271fb4c`；生产代码裸写入 0、`updatedAt` 0、`session.awareness` 仅 1 处 binding input |
-| **3** | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 | `agent/a1-m2-presence-narrow` / `Insighthub-wt-a1-m2-narrow`（**step 1+2 都合入后**从新的 stabilization HEAD 分叉） | **NEXT** —— 从 `271fb4c` 之后的新 HEAD 分叉 |
+| **3** | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 | `agent/a1-m2-presence-narrow` / `Insighthub-wt-a1-m2-narrow` | **DONE** —— `9f8cfa2`，合入 `a278ee8`；`AwarenessBinding`（`clientID`/`getStates`/`on`/`off`），17 条 `@ts-expect-error`，版本 3→4（D-058） |
 
 | 项 | 内容 |
 | --- | --- |
