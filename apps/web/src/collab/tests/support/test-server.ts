@@ -98,6 +98,8 @@ export class ContractTestServer {
 
   private readonly connections = new Map<string, ClientRecord>();
 
+  private connectionsOpened = 0;
+
   private readonly sockets = new Set<Duplex>();
 
   private server: http.Server | undefined;
@@ -127,6 +129,18 @@ export class ContractTestServer {
 
   get connectionCount(): number {
     return this.connections.size;
+  }
+
+  /**
+   * Connections ever accepted, never decremented.
+   *
+   * `connectionCount` is the live set, so it drops when a socket closes - which a fatal
+   * error does on purpose. "Did the reconnect loop stop?" is a question about attempts,
+   * so it needs a monotonic counter: a loop that opens and immediately closes would keep
+   * the live count at zero while reconnecting forever.
+   */
+  get totalConnectionsOpened(): number {
+    return this.connectionsOpened;
   }
 
   /** Client ids currently in the room (this is what "presence" means server-side). */
@@ -227,6 +241,7 @@ export class ContractTestServer {
       syncOrigin: { socket: randomUUID() },
     };
     this.connections.set(record.id, record);
+    this.connectionsOpened += 1;
 
     const reader = new WebSocketFrameReader(
       (data) => this.handleFrame(record, data),

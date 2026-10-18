@@ -199,10 +199,12 @@ describe('realtime sync over the frozen wire', () => {
     );
 
     await waitFor(() => session.connectionStatus === 'error', 'the fatal status to surface');
-    const connectionsAfterError = server.connectionCount;
+    const connectionsAfterError = server.totalConnectionsOpened;
     await new Promise((resolve) => setTimeout(resolve, 120));
-    // A fatal code stops the reconnect loop: no new socket was opened.
-    expect(server.connectionCount).toBe(connectionsAfterError);
+    // A fatal code stops the reconnect loop: no new connection is *attempted*.
+    // `totalConnectionsOpened` is monotonic, so this cannot pass by comparing two
+    // zeros after the fatal close, and it cannot fail because the old socket closed.
+    expect(server.totalConnectionsOpened).toBe(connectionsAfterError);
     session.destroy();
   });
 
