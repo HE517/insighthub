@@ -32,11 +32,13 @@ import {
   DOCUMENT_TEXT_KEY,
   TRANSACTION_ORIGINS,
   awarenessStateSchema,
+  parsePresencePatch,
   type AwarenessState,
   type CollaborativeSession,
   type CollaborativeSessionOptions,
   type CollaboratorInfo,
   type ConnectionStatus,
+  type PresencePatch,
   type SessionState,
   type TransactionOrigin,
   type UndoState,
@@ -240,6 +242,27 @@ export class FakeCollaborativeSession implements CollaborativeSession {
   getLocalAwarenessState(): AwarenessState | null {
     const parsed = awarenessStateSchema.safeParse(this.fakeAwareness.getLocalState());
     return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Publish presence through the M2-P0-2 seam.
+   *
+   * This double reuses `parsePresencePatch` from `@insighthub/shared` instead of deriving its
+   * own rules: a second copy of "what a legal patch is" would drift, and a test would then pass
+   * on patches the production seam rejects. `updatedAt` is stamped here for the same reason —
+   * the collaboration layer owns it, never the caller.
+   */
+  publishPresence(patch: PresencePatch): void {
+    const parsed = parsePresencePatch(patch);
+    const current = this.getLocalAwarenessState();
+    if (current === null) return;
+    const next: AwarenessState = {
+      ...current,
+      ...(parsed.cursor === undefined ? {} : { cursor: parsed.cursor }),
+      ...(parsed.selection === undefined ? {} : { selection: parsed.selection }),
+      updatedAt: Date.now(),
+    };
+    this.setLocalAwareness(awarenessStateSchema.parse(next));
   }
 
   transact(fn: (text: Y.Text) => void, origin?: TransactionOrigin): void {
