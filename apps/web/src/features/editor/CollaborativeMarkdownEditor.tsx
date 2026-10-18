@@ -37,6 +37,15 @@
  * `Mod-z` reverts only local/AI-origin edits and can never clobber a
  * collaborator's text (`AGENTS.md` R13). Two undo systems in one editor would be
  * a correctness bug, not a convenience.
+ *
+ * ## Presence
+ *
+ * This component publishes its caret through **one** seam call per selection update,
+ * `session.publishPresence(...)` (see `editorPresence.ts`). It does not write through
+ * `session.awareness` at all: that instance is a CodeMirror binding input only
+ * (`AGENTS.md` R14), and it is passed to the remote-cursor extension for that purpose
+ * alone. `updatedAt` belongs to the collaboration layer, so A2 neither computes nor
+ * sends it (`docs/CONTRACTS.md` §15, M2-P0-2).
  */
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -48,6 +57,7 @@ import type { CollaborativeSession } from '@insighthub/shared';
 
 import { createCollabTextBinding, type CollabTextBinding } from './collabTextBinding.js';
 import { createCodeMirrorSurface } from './codeMirrorSurface.js';
+import { publishEditorPresence } from './editorPresence.js';
 import { remoteCursors } from './remoteCursorExtension.js';
 
 export interface CollaborativeMarkdownEditorProps {
@@ -105,7 +115,10 @@ export function CollaborativeMarkdownEditor({
         },
         onSelectionChange: (range) => {
           if (binding === null) return;
-          publishLocalCursor(session, range);
+          // One seam call per selection update. The session validates the patch,
+          // stamps `updatedAt` and merges it; A2 writes nothing through the raw
+          // `Awareness` instance (M2-P0-2, `docs/CONTRACTS.md` §15).
+          publishEditorPresence(session, range);
         },
       },
     );
@@ -164,7 +177,7 @@ export function CollaborativeMarkdownEditor({
     // Publish this client's cursor once, so a peer that joins later sees where we
     // are instead of an empty awareness state.
     const initialRange = view.state.selection.main;
-    publishLocalCursor(session, { anchor: initialRange.anchor, head: initialRange.head });
+    publishEditorPresence(session, { anchor: initialRange.anchor, head: initialRange.head });
 
     return () => {
       // Teardown order matters: flush what the user typed, then stop observing
@@ -179,25 +192,4 @@ export function CollaborativeMarkdownEditor({
   }, [session]);
 
   return <div className="markdown-editor" ref={hostRef} data-testid="markdown-editor" />;
-}
-
-/**
- * Publish the local caret so peers can render it.
- *
- * Deliberately a no-op when the session has published no local identity yet: the
- * identity is A1's to own (`CollaborativeSessionOptions.user`), and writing a
- * cursor without it would race that initialisation instead of complementing it.
- */
-function publishLocalCursor(
-  session: CollaborativeSession,
-  range: { anchor: number; head: number },
-): void {
-  const local = session.getLocalAwarenessState();
-  if (local === null) return;
-
-  const from = Math.min(range.anchor, range.head);
-  const to = Math.max(range.anchor, range.head);
-  session.awareness.setLocalStateField('cursor', { anchor: range.anchor, head: range.head });
-  session.awareness.setLocalStateField('selection', from === to ? null : { from, to });
-  session.awareness.setLocalStateField('updatedAt', Date.now());
 }
