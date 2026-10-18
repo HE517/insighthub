@@ -9,8 +9,11 @@
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   PROTOCOL_VERSION,
@@ -34,6 +37,8 @@ import * as Y from 'yjs';
 
 import { createApp } from '../app.js';
 import type { ServerConfig } from '../config.js';
+import { openDocumentStore } from '../persistence/open-store.js';
+import type { DocumentStore } from '../persistence/types.js';
 import { attachWebSocketServer, type WebSocketHandle, type WebSocketServerOptions } from '../ws.js';
 
 /** One recorded inbound frame. Binary frames keep their raw bytes. */
@@ -44,25 +49,71 @@ export interface TestServer {
   readonly port: number;
   readonly url: string;
   readonly handle: WebSocketHandle;
+  /** The durable store this server uses. Owned by the harness unless one was injected. */
+  readonly store: DocumentStore;
+  /** Directory holding the database file (`undefined` when a store was injected). */
+  readonly dataPath: string | undefined;
   close(): Promise<void>;
 }
 
 /**
- * Boot an HTTP + WebSocket server on an ephemeral port.
+ * Options for a test server.
  *
- * `options` narrows the heartbeat window and injects a logger, which is how the
- * dead-socket test reaps a vanished peer in milliseconds instead of 40 seconds.
+ * `store` and `dataPath` are additive to the transport's own options:
+ *
+ * - **neither** (the default): a fresh temporary directory and a store inside it, owned and
+ *   removed by the harness. This is the isolation `docs/DECISIONS.md` D-041 requires — a
+ *   test run can never touch the development database at `./.insighthub-data`;
+ * - **`dataPath` only**: open a store in that directory (used to reopen the same durable
+ *   state within one process while keeping the cleanup explicit);
+ * - **`store` only**: use the caller's store, typically a wrapper that injects failures
+ *   (scenarios F and I) or blocks hydration (scenario K). The caller then owns its lifetime.
  */
-export async function startTestServer(options: WebSocketServerOptions = {}): Promise<TestServer> {
+export interface TestServerOptions extends WebSocketServerOptions {
+  /** Directory for a harness-created store. Ignored when `store` is supplied. */
+  dataPath?: string;
+}
+
+/**
+ * Boot an HTTP + WebSocket server on an ephemeral port, with an isolated durable store.
+ *
+ * Every test in this directory exercises **real WebSocket connections against a real
+ * server on a real SQLite database**, because the behaviour under test (frame routing,
+ * room isolation, heartbeat reaping, backpressure, durable ordering) is exactly the
+ * behaviour a mock would hide. `port: 0` plus `server.address().port` keeps parallel runs
+ * from colliding on a fixed 3001.
+ */
+export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
+  const { dataPath: requestedDataPath, store: injectedStore, ...transportOptions } = options;
+
+  let store: DocumentStore;
+  let dataPath: string | undefined;
+  let ownsStore = false;
+
+  if (injectedStore !== undefined) {
+    store = injectedStore;
+  } else {
+    const directory = requestedDataPath ?? mkdtempSync(join(tmpdir(), 'insighthub-a3-test-'));
+    const opened = await openDocumentStore(directory);
+    store = opened.store;
+    dataPath = opened.dataPath;
+    // `requestedDataPath` belongs to the caller (it is being reopened deliberately); a
+    // freshly created temp directory belongs to this server and is removed on close.
+    ownsStore = requestedDataPath === undefined;
+  }
+
   const config: ServerConfig = {
     port: 0,
     host: '127.0.0.1',
     corsOrigin: 'http://localhost:5173',
     wsPath: '/ws',
+    // Present only when the harness opened the store, so `attachWebSocketServer`'s
+    // fail-closed check (dataPath without a store) can never fire here.
+    ...(dataPath === undefined ? {} : { dataPath }),
   };
 
   const server: Server = createServer(createApp(config));
-  const handle = attachWebSocketServer(server, config, options);
+  const handle = attachWebSocketServer(server, config, { ...transportOptions, store });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   const address = server.address() as AddressInfo;
@@ -72,9 +123,17 @@ export async function startTestServer(options: WebSocketServerOptions = {}): Pro
     port,
     url: `ws://127.0.0.1:${port}${config.wsPath}`,
     handle,
+    store,
+    dataPath,
     close: async () => {
       await handle.close();
+      // Close the database before removing its directory: on Windows an open handle makes
+      // the removal fail, and a leaked temp directory per test run is its own bug.
+      await store.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (ownsStore && dataPath !== undefined) {
+        rmSync(dataPath, { recursive: true, force: true });
+      }
     },
   };
 }
