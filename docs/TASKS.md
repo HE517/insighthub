@@ -170,7 +170,7 @@ agents.
 | M1-P0 | A6 发现缺陷的稳定化（A1、A2）与集成 | A1 / A2 / A0 | **done** —— 基线 `9be0e1a`；见下一节 |
 | M1-A7 | 集成门禁：typecheck、测试、构建、wire 格式复核 | A7 | **done** —— Final Closing Review = **APPROVE**；C1、C2 均 CLOSED，无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
 | M1-MERGE | 将 M1 合入 `main` | A0 | **done** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`）；拓扑与 A1/A2/C1 提交历史完整保留 |
-| M1-C1 | A7 条件 C1：让 fatal 重连 pin 可被观测 | A1 | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成 |
+| M1-C1 | A7 条件 C1：让 fatal 重连 pin 可被观测 | A1 | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成。**mutation validation 已由 A1 完成**：删除 `active=false`、删除 `active=false`+`closeSocket()`、删除正常自动重连，三组变异均使对应断言 **FAIL**；变异后生产文件已恢复并核对 hash。A0 在最终 merge 阶段未重复执行该实验；A7 Final Closing Review 已独立复核代码敏感性与零残留状态，**C1 = CLOSED，无剩余证据缺口**（详见 `docs/DECISIONS.md` D-039 §6） |
 | M1-C2 | A7 条件 C2：决策记录 + 修掉 `defect-pins.mjs` 悬空引用 | A0 | **done** —— `a06b6ff`（D-039、引用修复） |
 
 ### M1 退出条件 —— 逐项状态
