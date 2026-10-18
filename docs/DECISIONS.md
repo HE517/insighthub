@@ -1688,3 +1688,79 @@ struct 时跳过 persist"，那要改持久化热路径并判断"空 update"，�
 
 **后果。** 本轮没有出现需要项目负责人裁决的技术冲突：一处集成顺序缺陷被复现并用最小补丁闭合，
 四处 A6 的建议被追认或记录，一项文档措辞与实现对齐。A1 报告的 `partial` 因此转为**已合入且全绿**。
+
+---
+
+## D-056 · 2026-10-18 · accepted · Persistence Acceptance Evidence 分层（M2-P0 Gate 判据） (M2)
+
+**背景。** `M2-P0 Exit Gate` 第 1 条原文是"A–K 全部通过"，且默认每项都要浏览器证据。A6 在真实
+Chrome + 真实进程 + 真实磁盘上交付后发现：其中 4 项在当前 production 实现下要么不需要浏览器证据
+（D/H/I 的确定性在 Node 层更精确），要么**结构上无法从 wire 形成**（K）。若维持字面要求，Gate 将
+永远无法通过；若直接删掉 K，则是**降低验收标准**——两者都不能接受。
+
+**决策（Project Owner，Option A）：分层而非删除。全部十一项仍必须 PASS，变化的只是每项所要求的
+evidence layer。**
+
+| 证据层 | 场景 | 要求 |
+| --- | --- | --- |
+| **Browser required** | **A / B / C / E / F / G / J** | 真实 Chrome + 真实后端进程（含 pid 变化）+ 真实磁盘；"内容还在"必须由**空 profile 的新浏览器**验证 |
+| **Node deterministic evidence sufficient** | **D / H / I** | 可复现的确定性用例（`apps/server/src/persistence/*.test.ts`），不要求浏览器 |
+| **K** | K | 见下 |
+
+**K 的正确表述（必须原样保留其限定条件，不得简化为"K 永久不可达"）：**
+
+> Node 级可控 hydration 测试 + room-state-machine / error-code 机制证明；
+> 在当前 production `SqliteDocumentStore` 的**同步 hydration** 实现下，wire/browser 无法稳定形成
+> hydration backlog，因此该项的 browser evidence 目前 **N/A**。
+> **若未来 store 变为真实 async I/O，或 hydration timing 改变，必须重新评估 K，并在可达时恢复
+> browser-level validation。**
+
+**机制根据（由 A6 实测，非推测）**：`SqliteDocumentStore.load` 虽为 `async`，内部 SQLite 工作同步，
+`await` 之后的续体在同一轮微任务内完成重放并释放屏障；而每个 WebSocket 帧是独立宏任务。因此
+BINARY 帧抵达时房间必然已是 `READY`。实测：6001 行日志 + 400 帧突发，`room-joined` 27 ms 到达，
+无 `FRAME_TOO_LARGE`，服务端正常应答 553 帧。
+
+**明确不做的事：不为 K 添加 production delay seam。** 把一个不可达路径变成可注入延迟，会增加攻击面
+与热路径分支，只为让一个测试可见；代价与收益不成比例。若将来 store 真变为异步 I/O，K 自然可达，
+届时补浏览器证据即可。
+
+**后果。** Gate 判据与可获得的证据一致，且没有一项被豁免：K 仍有 Node 级用例与机制证明，只是承认
+它在当前实现下的浏览器层 N/A，并写明了**重新评估的触发条件**。代价是判据表达从"一句话"变成"分层
+表格"——但一句永远无法满足的话不是判据。
+
+---
+
+## D-057 · 2026-10-18 · accepted · M2-P0-2 是三步迁移；A7 不得在 step 3 前启动 (M2)
+
+**背景。** 上一轮派发 A2 后，A0 的 Next Handoff 写成了"A2 完成后 → A7 M2-P0 Exit Review"。这是
+**调度错误**：`M2-P0-2` 是三步迁移，A2 只做第 2 步。
+
+**正确的三步（顺序冻结，源自 D-045 §15.3）：**
+
+| 步骤 | 内容 | Owner |
+| --- | --- | --- |
+| 1 | `publishPresence` 附加 seam + `updatedAt` 归协作层 + 写入前校验 + `SHARED_CONTRACT_VERSION` 2→3 | A1 |
+| 2 | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt` | A2 |
+| 3 | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 |
+
+**决策：**
+
+1. **`M2-P0-2` 只有 step 1/2/3 全部完成并合入后，才可标记 COMPLETE。** step 2 完成不等于
+   presence seam 完成——此时调用方已迁移，但**类型层面仍允许**任何人写裸实例。
+2. **A7 的 M2-P0 Exit Review 必须在 step 3 合入之后启动。** 修正后的 DAG：
+
+```text
+A2 step 2  →  A0 integrate  →  A1 step 3  →  A0 integrate
+           →  integrated full gates + A6 regression（必要时）
+           →  A7 M2-P0 Exit Review
+```
+
+3. **step 3 的 base 必须是 step 2 合入后的 `m2-stabilization` HEAD**，否则收窄会先打断编辑器
+   （step 2 之前编辑器仍是裸实例的写者）。
+
+**为什么这个顺序不能压缩。** step 3 是"把写入口撤掉"：在 step 2 之前做，编辑器会编译失败或无法
+发布 presence；在 step 2 之后跳过它，`D-045` 承诺的"裸 `Awareness` 只作 binding input"就只是注释，
+而 `D-039 §3` 记录的缺口（写侧无治理）只修了一半——调用方守规矩了，类型并没有拦人。
+
+**后果。** M2-P0 的完成路径多了一个往返（A1 回来做 step 3），换到的是"契约承诺真的被类型执行"而
+不是"大家记得别乱写"。同时这条修正记录在案，避免下一次把三步当成一步。

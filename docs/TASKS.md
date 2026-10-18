@@ -396,9 +396,23 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 **M2-P0 Exit Gate（本 Gate 的判据）**
 
-1. `M2-P0-1` 验收场景 **A–K** 全部通过；B/C 必须包含**真实进程重启**，H/I/J/K 必须包含并发
-   与状态机验证（见下）。
-2. `M2-P0-2` 已实现：A2 不再生成 `updatedAt`，写入前有 schema 校验。
+1. `M2-P0-1` 的 **A–K 全部 PASS**，但每项要求的**证据层**按 D-056 分层：
+
+   | 证据层 | 场景 |
+   | --- | --- |
+   | **浏览器级必需**（真实 Chrome + 真实后端进程 + 真实磁盘） | **A / B / C / E / F / G / J** |
+   | **Node 级确定性证据足够**（可复现的确定性用例） | **D / H / I** |
+   | **Node + 机制证明；browser evidence 目前 N/A**（附重评触发条件） | **K** |
+
+   **K 的正确表述**：Node 级可控 hydration 测试 + room-state-machine / error-code 机制证明；
+   在当前 production `SqliteDocumentStore` 的**同步 hydration** 实现下，wire/browser 无法稳定形成
+   hydration backlog，因此该项的 browser evidence 目前 **N/A**。
+   **不要把它写成"K 永久不可达"**：若未来 store 变为真实 async I/O、或 hydration timing 改变，
+   必须重新评估 K，并在可达时恢复 browser-level validation。
+
+   > **这不是降低 A–K 验收标准。** 全部十一项仍必须 PASS，变化的只是每项所要求的 evidence layer。
+2. `M2-P0-2` **三步全部完成**（D-057）：step 1 seam（已 DONE）、step 2 编辑器迁移（A2）、
+   step 3 收窄裸 `Awareness`（A1）；只有三步都合入后才可标 COMPLETE。
 3. `M2-P0-3` 已实现：D-046 的 **5 个回归测试**存在并通过。
 4. A6 的 restart / persistence / corruption / chaos 浏览器门禁全绿。
 5. A7 的 **P0 review** APPROVE，无 merge blocker。
@@ -464,17 +478,25 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 check，不满足则**启动失败**并给出清晰诊断，**禁止** memory-only fallback，**不新增**第三方
 SQLite 依赖。
 
-### M2-P0-2 — presence 写侧 seam
+### M2-P0-2 — presence 写侧 seam（3 步迁移）
+
+**这是三步迁移，不是一步。** 顺序冻结（D-045 设计、D-057 调度修正）：只有三步全部完成并合入，
+`M2-P0-2` 才可标 **COMPLETE**。
+
+| 步骤 | 内容 | Owner | Branch / Worktree | 状态 |
+| --- | --- | --- | --- | --- |
+| **1** | `publishPresence` 附加 seam、`updatedAt` 归协作层、写入前校验、`SHARED_CONTRACT_VERSION` 2→3 | A1 | `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence` | **DONE** —— `6714ca2` + A0 ownership 例外 `054d87e`，合入 `b40ba3c` |
+| **2** | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt` | A2 | `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（base `0075aae`） | **IN PROGRESS** |
+| **3** | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 | `agent/a1-m2-presence-narrow` / `Insighthub-wt-a1-m2-narrow`（**step 1+2 都合入后**从新的 stabilization HEAD 分叉） | **PENDING** |
 
 | 项 | 内容 |
 | --- | --- |
-| Owner | **A1**（seam 实现）→ **A2**（编辑器迁移） |
-| Branch / Worktree | A1: `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence`<br>A2: `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（**在 A1 分支集成之后**再分叉） |
-| A1 Owned Files | `packages/shared/src/collab-session.ts`（**仅 A0 预批准的那一处附加**）、`apps/web/src/collab/internal/{document-session,awareness,public}.ts`、`apps/web/src/collab/tests/**` |
-| A2 Owned Files | `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx`、`apps/web/src/features/editor/**/*.test.ts` |
+| Owner | **A1**（step 1、step 3）→ **A2**（step 2）→ **A1**（step 3 收口） |
+| A1 Owned Files | `packages/shared/src/collab-session.ts`（**仅 A0 预批准的那一处附加** + step 3 的类型收窄）、`apps/web/src/collab/internal/{document-session,awareness,public}.ts`、`apps/web/src/collab/tests/**` |
+| A2 Owned Files | `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx`、`apps/web/src/features/editor/**/*.test.ts`、`apps/web/src/features/editor/testing/fakeCollaborativeSession.ts` |
 | Do Not Touch（双方） | `apps/server/**`、`tests/browser/**`、wire framing、错误码词表 |
-| Dependencies | A2 依赖 A1 的 seam 先合入；A1 依赖 A0 对 `SHARED_CONTRACT_VERSION` 2→3 的批准 |
-| Acceptance | A2 不再写 `updatedAt`；非法 patch 在写入前抛错；裸 `Awareness` 不再有生产写入点；版本号提升并记录；`pnpm typecheck/test/build` 全绿 |
+| Dependencies | step 2 依赖 step 1 已合入；step 3 依赖 step 1+2 都已合入（否则收窄会先打断编辑器） |
+| Acceptance | step 1：seam 存在且校验先于写入、版本 3、wire 不变。step 2：`features/**` 内 `setLocalStateField` 与 `'updatedAt'` 写入均为 0；每次光标变化只有 1 次 awareness 写入。step 3：裸 `Awareness` 不再有生产写入口，类型上不可写。三者都需 `pnpm typecheck/test/build` 全绿 |
 
 ### M2-P0-3 — 注入式 IndexedDB 工厂生命周期
 
@@ -491,8 +513,8 @@ SQLite 依赖。
 
 | Agent | M2 角色 | 说明 |
 | --- | --- | --- |
-| **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。需要能**真实重启 server 进程**、构造损坏库、注入写失败；M2-P0-1 的 A–G 必须在真实浏览器层再验一遍 |
-| **A7** | 最终架构 + 发布终审 | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层）逐项判定；独立于 A0 |
+| **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。能**真实重启 server 进程**、构造损坏库、注入写失败。**已交付**（`231253a`，36/36）。证据层分工见 D-056：A/B/C/E/F/G/J 必须有浏览器证据；D/H/I 允许 Node 级；K 在同步 store 下 browser N/A |
+| **A7** | 最终架构 + 发布终审 | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层 + D-056 的证据层分层）逐项判定。**启动条件：P0-1 + P0-2（step 1/2/3 全部）+ P0-3 都已合入，且 A6 门禁在集成后的 HEAD 上绿。** 在 P0-2 step 3 完成前不得启动（D-057） |
 | **A5** | **本轮不分配** | 文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证）；M2 不新增 HTTP 端点，授权面未变。若 M2 后续开放文档删除 API，再引入 A5 审授权 |
 | **A4** | **idle** | M3 才启动 |
 
@@ -502,19 +524,22 @@ SQLite 依赖。
 m1-closed (tag, f3c353e, immutable)
   └ m2-stabilization            ← 本 worktree：Insighthub-wt-m2
       └ [Architecture Freeze commit]  ← 只有文档
-          ├ agent/a3-m2-persistence   → Insighthub-wt-a3-m2
-          ├ agent/a1-m2-idb-lifecycle → Insighthub-wt-a1-m2-idb
-          ├ agent/a1-m2-presence      → Insighthub-wt-a1-m2-presence
-          │    └ (集成后) agent/a2-m2-presence-ui → Insighthub-wt-a2-m2-presence
-          └ agent/a6-m2-chaos         → Insighthub-wt-a6-m2
+          ├ agent/a3-m2-persistence   → Insighthub-wt-a3-m2          ← 已合入
+          ├ agent/a1-m2-idb-lifecycle → Insighthub-wt-a1-m2-idb      ← 已合入
+          ├ agent/a1-m2-presence      → Insighthub-wt-a1-m2-presence ← 已合入（step 1）
+          │    └ agent/a2-m2-presence-ui → Insighthub-wt-a2-m2-presence   ← step 2
+          │         └ (step 2 合入后) agent/a1-m2-presence-narrow
+          │              → Insighthub-wt-a1-m2-narrow                ← step 3
+          └ agent/a6-m2-chaos         → Insighthub-wt-a6-m2          ← 已合入
 ```
 
 规则：
 
-1. **所有 Agent worktree 都从 Architecture Freeze commit 分叉**，不从 `main`、不从 tag 直接分叉。
+1. **Agent worktree 一律从当时的 `m2-stabilization` HEAD 分叉**（不是从 `main`、不是从 tag）。
+   Freeze commit 之后每次派发都以当前 HEAD 为 base，并在派发单里写明 SHA。
 2. `m2-stabilization` 只由 A0 写入（集成 + 文档），Agent 一律在自己的 worktree 里改。
-3. **presence seam 的顺序是硬约束**：A1 先合入 seam，A2 再从新的 `m2-stabilization` 分叉；
-   否则 A2 会基于一个不存在的 API 编码。
+3. **presence seam 的三步顺序是硬约束**（D-057）：step 1 seam → step 2 编辑器迁移 → step 3 收窄裸
+   `Awareness`。任一步跳过或颠倒都会留下"编辑器无法编译"或"调用方仍在写裸实例"的窗口。
 4. `m1-closed` tag 保持不动；M2 不动 `main`。
 
 ## M3 — AI suggestions (sketch)
