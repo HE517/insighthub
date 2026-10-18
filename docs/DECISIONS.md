@@ -1634,3 +1634,57 @@ M2-P0-3 把"保存快照再还原"改为租约栈，"install"一词已不能描�
 **后果。** 集成期没有出现需要项目负责人裁决的架构冲突；四项文本不一致（`append` 返回类型、
 `:memory:` 回退、compaction 范围、close code）被就地修正，两项（test seam、no-store seam）被
 明确追认并附上 A7 可核查的义务。
+
+---
+
+## D-055 · 2026-10-18 · accepted · M2-P0-2 seam 合入：A0 ownership 例外与 A6 交付追认 (M2)
+
+**背景。** A1（`6714ca2`）交付 presence 写侧 seam，A6（`231253a`）交付 durable persistence 的浏览器
+门禁。A1 的报告标 `partial`：**给冻结 seam 加必需成员会把 A2 的测试替身打断**，而那个文件属 A2。
+A6 的报告提出四项需要定性的问题。本条记录本轮的处置。
+
+### 1. A1 的卡点成立，A0 以具名 ownership 例外补齐（已解决）
+
+**被复现的事实**：`FakeCollaborativeSession` 用 `implements CollaborativeSession` 声明自己是
+**编译期实现者**；给接口加必需成员后 `apps/web/src/features/**` 出现 **21 个 tsc 错误**，A1 的代码
+**0 个**。`docs/CONTRACTS.md` §15.3 写的 "additive, no callers yet" 只描述了**调用方**，漏掉了
+**实现者** —— 这是冻结文本的措辞缺陷，不是 A1 的实现缺陷。
+
+**处置**：A0 在 `agent/a1-m2-presence` 上加一个提交（`054d87e`），只改
+`apps/web/src/features/editor/testing/fakeCollaborativeSession.ts` 一个文件（+23 行），提交信息
+点名例外。先例：D-039 §1。
+
+**比 A1 建议的写法更保守的地方**：替身**复用** `@insighthub/shared` 的 `parsePresencePatch`，
+而不是手抄一份合并/校验逻辑。理由与 A1 选择把校验放在 shared 的理由相同——替身若自带第二套规则，
+测试就会在"生产会拒绝的 patch"上通过，等于把 seam 要消除的漂移搬到测试里。
+
+**为什么不让 A2 先做**（否决选项 B）：A2 的分支此刻还没有 `parsePresencePatch`，只能先手抄一份，
+之后又要改一次；那是在引入该 seam 正要消除的重复规则。
+
+**为什么不允许把成员改成可选**（否决选项 C）：偏离 §15 冻结形状，且替身不实现时 A2 的测试会
+静默通过（presence 永不发布）。
+
+**结果**：本分支 typecheck 21 → **0**，`pnpm test` **284 + 105** 全绿，`pnpm build` exit 0；
+随后合入 `m2-stabilization`（`b40ba3c`）。
+
+### 2. A6 的交付追认
+
+| 项 | 处置 |
+| --- | --- |
+| harness 缺陷（`DevToolsActivePort` 读取竞态导致 `EBUSY` 假失败） | **接受修复**：假失败会污染证据，比产品缺陷更危险。属 A6 域（`tests/browser/lib/chrome.mjs`） |
+| `tests/browser/lib/durable-store.mjs` 绕开服务端直读 `insighthub.db` | **保留为常驻工具**。代价是与生产 schema 和 `Y.Text` 键名 `'content'` 耦合；schema 变更时必须同步，否则它会"找不到"（不会静默通过）。已列入 schema 变更 checklist |
+| F 的失败注入依赖 `SQLITE_BUSY_TIMEOUT_MS = 5000` | **接受**：调大该常量会让 F 超时变红，不会假绿 |
+| K / D / H / I 的覆盖率 | **不在本条决定**，作为 Gate 判据问题上报项目负责人（见报告 Need Owner Decision 第 1 条） |
+
+### 3. 无编辑 join 仍写 2 字节 update：记录为已接受偏差
+
+A6 观察到打开文档但不输入时，durable 日志每次 join 仍增加 1 行（2 字节）。原因：客户端回复的
+`SyncStep2` 会走 `apply → persist → broadcast`，空文档的 `encodeStateAsUpdate` 是 2 字节。
+
+**处置：接受为已记录的偏差，不修，进 backlog。** 理由：无内容污染、无数据丢失；修法是"不改变
+struct 时跳过 persist"，那要改持久化热路径并判断"空 update"，风险大于收益，且扩出 P0 范围。
+`ARCHITECTURE` §7.3 的 "persists it on first write" 已按实际行为改为 "on first join or write"，
+避免文档与实现继续分叉。
+
+**后果。** 本轮没有出现需要项目负责人裁决的技术冲突：一处集成顺序缺陷被复现并用最小补丁闭合，
+四处 A6 的建议被追认或记录，一项文档措辞与实现对齐。A1 报告的 `partial` 因此转为**已合入且全绿**。

@@ -380,7 +380,7 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 | ID | 内容 | 本轮状态 | 代码状态 |
 | --- | --- | --- | --- |
 | `M2-P0-1` | 服务端 durable persistence | **FROZEN** | NOT IMPLEMENTED |
-| `M2-P0-2` | presence 写侧 seam | **FROZEN** | NOT IMPLEMENTED（需 `SHARED_CONTRACT_VERSION` 2→3） |
+| `M2-P0-2` | presence 写侧 seam | **步骤 1 IMPLEMENTED**（seam + `SHARED_CONTRACT_VERSION` 3） | 编辑器迁移（A2）与收窄裸 `Awareness` 待做 |
 | `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **FROZEN** | NOT IMPLEMENTED |
 
 **不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
@@ -425,7 +425,8 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | Owner（预计） | A5（权限/认证）+ A3（服务端权威判定点） |
 | 状态 | **NOT STARTED**；本次冻结只锁定顺序，不确定其契约 |
 
-**Backlog（不属于任何 Gate）**：**idle/background compaction**（M2-P0 只做 eviction-time，D-054）、
+**Backlog（不属于任何 Gate）**：**无编辑 join 仍 append 2 字节空 update**（D-055 §3，无内容影响）、
+**idle/background compaction**（M2-P0 只做 eviction-time，D-054）、
 键击通知扇出优化（D-039 L2）、主 bundle 分块、
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。

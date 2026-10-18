@@ -402,7 +402,10 @@ interface StoredDocument {
 ```
 
 `load` returning `null` means "never stored", not "empty": a join for an unknown document
-creates a fresh empty document and persists it on first write. `delete` is frozen now so
+creates a fresh empty document and persists it on the first join or write. (A join alone can
+append a 2-byte empty update, because a client's `SyncStep2` goes through the same
+`apply → persist → broadcast` path; recorded as an accepted deviation in D-055 §3 rather than
+special-cased on the persist hot path.) `delete` is frozen now so
 no caller has to guess later whether it is a soft flag or a real removal — it is a real
 removal, and callers must treat the document as gone.
 

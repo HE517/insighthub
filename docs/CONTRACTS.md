@@ -637,10 +637,12 @@ reported as `FRAME_TOO_LARGE` (reserved for a single frame exceeding the frame-s
 them. The server log may tag the event `HYDRATION_BACKLOG_OVERFLOW`; that tag is **not** part
 of the wire error vocabulary (§7) and does not change `PROTOCOL_VERSION`.
 
-## 15. Presence write seam (M2-P0-2 — FROZEN design, NOT implemented)
+## 15. Presence write seam (M2-P0-2 — IMPLEMENTED 2026-10-18; editor migration pending)
 
-> **Status: FROZEN (design) / NOT IMPLEMENTED.** `packages/shared` is unchanged this round.
-> Implementing it is a breaking contract addition and requires the version bump in §15.5.
+> **Status: IMPLEMENTED (step 1 of 3).** `CollaborativeSession.publishPresence`, `PresencePatch`,
+> `parsePresencePatch` and `PresencePatchError` ship today; `SHARED_CONTRACT_VERSION` is **3**
+> (§15.5) and `PROTOCOL_VERSION` is unchanged. Steps 2 (A2 editor migration) and 3 (narrowing the
+> raw `Awareness`) are still open — see §15.3 and `docs/TASKS.md` M2-P0-2.
 
 ### 15.1 The gap
 
