@@ -357,16 +357,20 @@ describe('CORS', () => {
     assert.equal(actual.headers.get('access-control-allow-credentials'), 'true');
   });
 
-  it('refuses to start with a wildcard origin', () => {
+  it('refuses to start with a wildcard origin', async () => {
     const config: ServerConfig = {
       port: 0,
       host: '127.0.0.1',
       corsOrigin: '*',
       wsPath: '/ws',
     };
+    // `createApp` requires an authorization service since the integration commit
+    // (`docs/DECISIONS.md` D-062 §2). The CORS guard runs before `authz` is used, so a real
+    // service from a harness satisfies the signature without weakening the test.
+    const harness = await newHarness();
     // `*` with credentials is illegal for browsers, and "fix it by dropping credentials" would
     // silently disable the session cookie. Fail at construction instead.
-    assert.throws(() => createApp(config), /CORS_ORIGIN/);
+    assert.throws(() => createApp(config, harness.authz), /CORS_ORIGIN/);
   });
 });
 

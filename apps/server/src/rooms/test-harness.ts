@@ -36,6 +36,7 @@ import { WebSocket } from 'ws';
 import * as Y from 'yjs';
 
 import { createApp } from '../app.js';
+import { createAuthz } from '../authz/public.js';
 import type { ServerConfig } from '../config.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
@@ -112,7 +113,16 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(dataPath === undefined ? {} : { dataPath }),
   };
 
-  const server: Server = createServer(createApp(config));
+  // M2 Phase 2: `createApp` requires an authorization service (A0 integration exception,
+  // `docs/DECISIONS.md` D-062 §2). These suites are about room and transport behaviour rather
+  // than authorization, so the service is real but no enforcement point consumes it until A3
+  // wires the WebSocket side. When the store was injected there is no data directory, so the
+  // membership table gets a temporary one of its own.
+  const authzDirectory = dataPath ?? mkdtempSync(join(tmpdir(), 'insighthub-authz-test-'));
+  const authz = await createAuthz({ dataPath: authzDirectory });
+  const ownsAuthz = dataPath === undefined;
+
+  const server: Server = createServer(createApp(config, authz));
   const handle = attachWebSocketServer(server, config, { ...transportOptions, store });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
@@ -127,12 +137,16 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     dataPath,
     close: async () => {
       await handle.close();
-      // Close the database before removing its directory: on Windows an open handle makes
+      // Close the databases before removing their directories: on Windows an open handle makes
       // the removal fail, and a leaked temp directory per test run is its own bug.
+      authz.close();
       await store.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       if (ownsStore && dataPath !== undefined) {
         rmSync(dataPath, { recursive: true, force: true });
+      }
+      if (ownsAuthz) {
+        rmSync(authzDirectory, { recursive: true, force: true });
       }
     },
   };

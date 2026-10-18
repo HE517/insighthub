@@ -83,18 +83,18 @@ interface BootstrapBody {
  *
  * ## Why `authz` is optional, and why that cannot widen access
  *
- * The parameter is optional for exactly one reason: `apps/server/src/rooms/test-harness.ts`
- * (A3-owned, off-limits to this change) constructs a **realtime-only** app for the WebSocket
- * integration suites. Making the parameter required would have forced an edit in a file this
- * round must not touch.
+ * ## Why `authz` is required
  *
- * The important part is the failure direction. Absence of `authz` does **not** mean "skip the
- * check and allow the request": the session and document routes are simply **not mounted**, so
- * every one of them falls through to the `404` catch-all. A misconfiguration therefore denies,
- * which is the safe direction, and it is visibly broken rather than quietly permissive. Every
- * production call site (`index.ts`) passes a real `authz`.
+ * It was optional in A5's branch for exactly one reason: making it required would have forced an
+ * edit in `rooms/test-harness.ts`, which is A3-owned. That reason expired at integration. An
+ * optional parameter means a production wiring mistake silently unmounts every session and
+ * document route, so the server answers `404` for everything — a failure that reads like a data
+ * problem for hours. A required parameter turns the same mistake into a compile error.
+ *
+ * Absence is therefore no longer representable. `rooms/test-harness.ts` constructs a real
+ * `createAuthz` (A0 integration exception, `docs/DECISIONS.md` D-062 §2).
  */
-export function createApp(config: ServerConfig, authz?: AuthzService): Express {
+export function createApp(config: ServerConfig, authz: AuthzService): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
     // rejects, and "fix it by dropping credentials" would silently turn cookies off.
@@ -120,7 +120,7 @@ export function createApp(config: ServerConfig, authz?: AuthzService): Express {
     });
   });
 
-  if (authz !== undefined) mountAuthorizationRoutes(app, authz);
+  mountAuthorizationRoutes(app, authz);
 
   /* ---------------------------------------------------------------- *
    * Fallbacks
