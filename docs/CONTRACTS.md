@@ -637,12 +637,14 @@ reported as `FRAME_TOO_LARGE` (reserved for a single frame exceeding the frame-s
 them. The server log may tag the event `HYDRATION_BACKLOG_OVERFLOW`; that tag is **not** part
 of the wire error vocabulary (§7) and does not change `PROTOCOL_VERSION`.
 
-## 15. Presence write seam (M2-P0-2 — IMPLEMENTED 2026-10-18; editor migration pending)
+## 15. Presence write seam (M2-P0-2 — steps 1+2 IMPLEMENTED; narrowing pending)
 
-> **Status: IMPLEMENTED (step 1 of 3).** `CollaborativeSession.publishPresence`, `PresencePatch`,
-> `parsePresencePatch` and `PresencePatchError` ship today; `SHARED_CONTRACT_VERSION` is **3**
-> (§15.5) and `PROTOCOL_VERSION` is unchanged. Steps 2 (A2 editor migration) and 3 (narrowing the
-> raw `Awareness`) are still open — see §15.3 and `docs/TASKS.md` M2-P0-2.
+> **Status: IMPLEMENTED (steps 1 and 2 of 3).** `CollaborativeSession.publishPresence`,
+> `PresencePatch`, `parsePresencePatch` and `PresencePatchError` ship today; the A2 editor
+> publishes exclusively through the seam (no raw `Awareness` write and no `updatedAt` bookkeeping
+> remain in `apps/web/src/features/**` production code); `SHARED_CONTRACT_VERSION` is **3** (§15.5)
+> and `PROTOCOL_VERSION` is unchanged. **Step 3 — narrowing the raw `Awareness` to a
+> binding-input-only type — is still open** (§15.3, `docs/TASKS.md` M2-P0-2).
 
 ### 15.1 The gap
 
