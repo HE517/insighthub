@@ -11,6 +11,7 @@ import {
   waitFor,
   type TestContext,
 } from './support/scenarios.js';
+import { FakeIndexedDb } from './support/fake-indexeddb.js';
 import type {
   CollaborativeSession,
   CollaborativeSessionOptions,
@@ -177,5 +178,93 @@ describe('frozen public seam', () => {
       'the failed transport to enter reconnect backoff',
     );
     expect(() => session.destroy()).not.toThrow();
+  });
+
+  /**
+   * M2-P0-3 / D-046 at the seam level.
+   *
+   * `internal/persistence.ts` pins the lease semantics directly; this test exists to
+   * prove the fix survives the path a real caller takes — two sessions created through
+   * the public factory, each injecting a different IndexedDB, one of them destroyed
+   * while the other is live.
+   *
+   * The pre-fix module restored a single snapshot, so destroying the *earlier* session
+   * put the ambient factory back while the later one was still running: a live session
+   * silently resolved a database it never injected, and the last teardown left the
+   * earlier session's factory on the global permanently (`docs/DECISIONS.md` D-039 §4).
+   *
+   * The global-identity assertions are the discriminator; the record assertions guard
+   * the symptom (nothing may leak into a factory the session did not inject).
+   */
+  it('keeps overlapping injected factories independent through the public seam', async () => {
+    const ambient = new FakeIndexedDb();
+    const restoreGlobals = ambient.install();
+    const factoryA = new FakeIndexedDb();
+    const factoryB = new FakeIndexedDb();
+    const initialDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+    const currentFactory = (): unknown => (globalThis as { indexedDB?: unknown }).indexedDB;
+    const offlineTransport = function FailingSocket() {
+      throw new Error('no transport');
+    } as unknown as typeof testSocketFactory;
+    let first: CollaborativeSession | undefined;
+    let second: CollaborativeSession | undefined;
+
+    try {
+      first = await createCollaborativeSession({
+        documentId: 'm2-p0-3-a',
+        user: { id: 'user-a', name: 'User A' },
+        persistenceKey: 'm2-p0-3-a',
+        indexedDB: factoryA,
+        wsUrl: 'ws://127.0.0.1:9/ws',
+        wsSocketFactory: offlineTransport,
+      });
+      expect(currentFactory()).toBe(factoryA);
+
+      second = await createCollaborativeSession({
+        documentId: 'm2-p0-3-b',
+        user: { id: 'user-b', name: 'User B' },
+        persistenceKey: 'm2-p0-3-b',
+        indexedDB: factoryB,
+        wsUrl: 'ws://127.0.0.1:9/ws',
+        wsSocketFactory: offlineTransport,
+      });
+      expect(currentFactory()).toBe(factoryB);
+
+      // The earlier session ends first. Its teardown must not hand the global back to
+      // the ambient factory while the later session is still alive.
+      first.destroy();
+      first = undefined;
+      // `DocumentSession.destroy()` does not block on the persistence provider (it
+      // fires the release and returns), so give the teardown a task boundary before
+      // asserting. Without this the assertion would read the pre-teardown global and
+      // pass even against the broken module.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // ← RED pre-fix: the single-snapshot restore put the ambient factory back here.
+      expect(currentFactory()).toBe(factoryB);
+
+      // The still-live session keeps writing to the replica it injected.
+      second.transact((text) => text.insert(0, 'still mine'));
+      await waitFor(
+        () => factoryB.records('m2-p0-3-b').length > 0,
+        "the live session's update to reach its own injected factory",
+      );
+      expect(factoryA.records('m2-p0-3-b')).toEqual([]);
+      expect(ambient.createdNames).toEqual([]);
+
+      second.destroy();
+      second = undefined;
+      // ← RED pre-fix too: the last teardown restored the *first* session's factory, so
+      // a fake factory stayed on the global with nobody owning it.
+      await waitFor(
+        () => currentFactory() === ambient,
+        'the original ambient factory to be restored',
+      );
+      expect(Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')).toEqual(initialDescriptor);
+      expect(currentFactory()).toBe(ambient);
+    } finally {
+      first?.destroy();
+      second?.destroy();
+      restoreGlobals();
+    }
   });
 });
