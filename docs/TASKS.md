@@ -84,17 +84,25 @@ pnpm --filter @insighthub/server verify:m0
 
 ## M1 — Collaboration core
 
-Status: **M1-P0 stabilised on `m1-stabilization` @ `9be0e1a`. M1 is NOT complete.**
+Status: **M1 implementation complete; final closing review pending.** (`m1-stabilization`)
 
-A1 / A2 / A3 delivered and integrated; A6's real-browser gate exists and is green (27/27);
-A7 reviewed independently. Still open before M1 can be called complete:
+| M1 area | State |
+| --- | --- |
+| Implementation (A1 / A2 / A3) | **DONE** |
+| Browser / Chaos Gate (A6) | **DONE** — 27/27 real-Chromium scenarios, no shim, no pins |
+| P0 Stabilisation (A1 / A2 + integration) | **DONE** — baseline `9be0e1a`; C1 integrated in `f2dfe1a` |
+| Final Review (A7) | **PENDING FINAL CLOSING REVIEW** — verdict *APPROVE WITH CONDITIONS*, archived at `docs/agent-governance/A7-m1-p0-review.md`; both conditions (C1, C2) satisfied |
+| Merge to `main` | **PENDING** — `main` is still at `47e96e3` |
+| M2 Durable Persistence | **NOT STARTED** — see `M2-P0-1` |
 
-- **No durable server-side persistence** — a room dies with its last member, so a *fresh*
-  client cannot recover content (tracked as **M2-P0** below).
-- Presence **write** path is outside the frozen seam, and the injected IndexedDB factory has
-  no reference count — both accepted as risk, both owned by M2 (`docs/DECISIONS.md` D-039).
-- A7's review report is not archived in the repo (`docs/DECISIONS.md` D-039 §5).
-- Merging M1 into `main` has not been decided (`main` is still at `47e96e3`).
+Two accepted risks travel with this baseline and are **not** closed by it
+(`docs/DECISIONS.md` D-039 §3/§4): the presence **write** path is outside the frozen seam, and
+the injected IndexedDB factory has no reference count.
+
+> **Durable server-side persistence is an M1 known limitation, tracked as `M2-P0-1`. It is NOT a
+> blocker for the merge decision.** The blocker list is what A7 named — C1 and C2 — and both are
+> closed. What persistence affects is the *release note*: the only durable copy of a document is
+> each client's IndexedDB, so a user who loses every local replica loses the content.
 
 ### M1-A0.1 — Pre-Parallel Cleanup ✅ done
 
@@ -160,8 +168,10 @@ agents.
 | M1-A3 | Document rooms, sync relay, presence, connection lifecycle | A3 | **done** — integrated in `47e96e3`; 58 server tests green |
 | M1-A6 | Chaos tests: reconnect, duplicate frames, out-of-order, ghost awareness | A6 | **done** — real-browser + chaos gate delivered in `f031063`; found P0-1/2/3 |
 | M1-P0 | Stabilisation of the defects A6 found (A1, A2) and their integration | A1 / A2 / A0 | **done** — baseline `9be0e1a`; see the section below |
-| M1-A7 | Integration gate: typecheck, tests, build, wire-format review | A7 | **review** — reviewed `9be0e1a`; four items, `docs/DECISIONS.md` D-039 |
-| M1-MERGE | Merge M1 into `main` | A0 | todo — blocked on A7 closure and the M2-P0 decision |
+| M1-A7 | Integration gate: typecheck, tests, build, wire-format review | A7 | **review closed, sign-off pending** — verdict *APPROVE WITH CONDITIONS*, archived verbatim at `docs/agent-governance/A7-m1-p0-review.md`; C1 + C2 satisfied; final closing review outstanding |
+| M1-MERGE | Merge M1 into `main` | A0 | **pending** — `main` still at `47e96e3`; not blocked by `M2-P0-1` (that is an M1 known limitation) |
+| M1-C1 | A7's condition C1: make the fatal-reconnect pin observable | A1 | **done** — `dd36169` based on `85a1b7c`, integrated in `f2dfe1a` |
+| M1-C2 | A7's condition C2: decision record + fix the dangling `defect-pins.mjs` reference | A0 | **done** — `a06b6ff` (D-039, reference fix) |
 
 ### M1 exit criteria — status
 
@@ -170,7 +180,7 @@ agents.
 | Two browser sessions converge | **yes** | `realtime/two-tabs-converge`, `indexeddb/D-two-tabs-share-one-replica`, `indexeddb/C-offline-then-reconnect-converges` |
 | Offline loses no keystroke | **yes in substance** | Real socket refusal, then reconnect: `indexeddb/B-offline-edits-survive-reopen`, `chaos/offline-reconnect`. The criterion's literal **30 s** is *not* asserted by a dedicated timer — the scenarios exercise a real outage of unspecified length |
 | Reconnect transfers a delta, not the document | **yes** | Server `M1-A3 incremental sync (acceptance criterion 4)`; the transfer is bounded by the state vector |
-| `typecheck` / tests / build green | **yes** | On `9be0e1a`: `pnpm typecheck` exit 0, `pnpm test` exit 0 (250 vitest + 58 server), `pnpm build` exit 0 |
+| `typecheck` / tests / build green | **yes** | On `f2dfe1a`: `pnpm typecheck` exit 0, `pnpm test` exit 0 (251 vitest + 58 server), `pnpm build` exit 0 |
 | Browser evidence for the above | **yes — but one browser** | `node tests/browser/run.mjs` → **27 pass / 0 fail / 0 error**. Chrome 155 on Windows on one machine; cross-browser and cross-platform are **unverified** |
 
 ### M1-P0 — Stabilisation ✅ done
@@ -185,11 +195,11 @@ their own branches; A0 integrated both and made the gate trustworthy. Decisions 
 | M1-P0-2 | Local edits flushed only at 64 queued changes → keystrokes never reached `Y.Text` (no persist, no share, no undo) | A2 | **done** | `0b79a93`; nine pinned scenarios turned green; editor length == `Y.Text` length |
 | M1-P0-3 | `ViewPlugin` dispatched from its own constructor → the plugin crashed on mount, so no remote caret ever rendered | A2 | **done** | `a679856`; `cursors/remote-caret-and-selection-render` green |
 | M1-P0-4 | Two harness assertions failed when the product was **correct** (absolute `editorMounts === 1`; zero carets after switching into a room that has a peer) | A0 — A6-owned, delegated | **done** | `19587fc`; `mounts 2→2`, `viewId 1→1`, caret attributed to the new room's collaborator |
-| M1-P0-5 | `sync.test.ts` fatal-error assertion compared a *live* socket count → flaky, and vacuous whenever both reads were 0 | A0 — A1-owned, ownership exception | **done** | `9be0e1a`; 10/10 targeted runs, 3/3 full gates |
+| M1-P0-5 | `sync.test.ts` fatal-error assertion compared a *live* socket count → flaky, and vacuous whenever both reads were 0 | A0 — A1-owned, ownership exception | **done, superseded by C1** | `9be0e1a` fixed the counting semantics; A7 then showed the *window* was still too short (120 ms vs a 1000 ms backoff), and `f2dfe1a` replaced the whole test with C1. The duplicate counter was consolidated into A1's single monotonic `totalConnections` |
 | M1-P0-6 | P0 pins, the P0-1 shim and stale "defect still open" comments retired | A0 — A6-owned, delegated | **done** | `19587fc`, `fc542f8`; 27 scenarios, no shim, no `knownDefect` tags |
-| M1-P0-7 | **Durable server-side persistence** — M1 has none | — | **not done → M2-P0** | A room dies with its last member; a *fresh* client cannot recover prior content |
-| M1-P0-8 | Presence write-side seam missing; injected IndexedDB factory has no reference count | — | **accepted risk → M2** | `docs/DECISIONS.md` D-039 §3 / §4 |
-| M1-P0-9 | A7's review report is not archived in the repo | A0 | **open** | `docs/DECISIONS.md` D-039 §5 |
+| M1-P0-7 | **Durable server-side persistence** — M1 has none | — | **not done → `M2-P0-1`** | A room dies with its last member; a *fresh* client cannot recover prior content. Known limitation, not a merge blocker |
+| M1-P0-8 | Presence write-side seam missing; injected IndexedDB factory has no reference count | — | **accepted risk → `M2-P0-2` / `M2-P0-3`** | `docs/DECISIONS.md` D-039 §3 / §4; both recorded, neither fixed |
+| M1-P0-9 | A7's review report was not archived in the repo | A0 | **closed** | `docs/agent-governance/A7-m1-p0-review.md` (verbatim); D-039 §5 rewritten to point at it |
 
 > The browser results above describe **M1's collaboration surface only**. They say nothing about
 > M2 permissions, M3 AI or M4 hardening, and must not be quoted as if they did.
@@ -371,10 +381,10 @@ guards and document-switch race protection. Owner: A5.
 
 | ID | Task | Owner | Status | Why it is P0 |
 | --- | --- | --- | --- | --- |
-| M2-P0-1 | Durable server-side document persistence | A3 | **todo** | M1 keeps rooms in memory only: a room dies with its last member, so a *fresh* device cannot recover content that existed before. Data-loss window, not a nicety |
-| M2-P0-2 | Presence write-side seam (`publishPresence`), validated before write; narrow `readonly awareness` to binding-input-only | A1 + A0 (contract) | **todo** | Today A2 writes presence through the raw `Awareness`, so the published shape is ungoverned while the read side is validated (`docs/DECISIONS.md` D-039 §3) |
-| M2-P0-3 | Reference-counted IndexedDB factory installation (install stack, identity-guarded restore) + overlapping-session regression test | A1 | **todo** | Two overlapping sessions with injected factories can leave a fake factory on the global and silently read the wrong database (`docs/DECISIONS.md` D-039 §4). Currently **unverified**, not merely unfixed |
-| M2-P0-4 | Archive A7's review report as `docs/agent-governance/A7-m1-p0-review.md` | A0 | **todo** | The audit chain has a missing document; D-039 records A7's conclusions by relay only |
+| M2-P0-1 | Durable server-side document persistence | A3 | **not started** | M1 keeps rooms in memory only: a room dies with its last member, so a *fresh* device cannot recover content that existed before. Data-loss window, not a nicety. **This is an M1 known limitation and explicitly NOT a blocker for merging M1 into `main`** |
+| M2-P0-2 | Presence write-side seam (`publishPresence`), validated before write; narrow `readonly awareness` to binding-input-only | A1 + A0 (contract) | **not started** | Today A2 writes presence through the raw `Awareness`, so the published shape is ungoverned while the read side is validated (`docs/DECISIONS.md` D-039 §3) |
+| M2-P0-3 | Reference-counted IndexedDB factory installation (install stack, identity-guarded restore) + overlapping-session regression test | A1 | **not started** | Two overlapping sessions with injected factories can leave a fake factory on the global and silently read the wrong database (`docs/DECISIONS.md` D-039 §4). Currently **unverified**, not merely unfixed |
+| M2-P0-4 | Archive A7's review report as `docs/agent-governance/A7-m1-p0-review.md` | A0 | **done** (moved to M1-P0-9) | Filed verbatim during M1 closing; kept here only so the M2 list is not silently missing an item it once promised |
 
 ## M3 — AI suggestions (sketch)
 

@@ -1091,7 +1091,7 @@ than quietly fixed, weakened, or left undocumented.
 | P0 pins and the P0-1 workaround shim | **Fixed** | §2; pins deleted, shim removed, assertions untouched |
 | Local presence write path is outside the frozen seam | **Accepted — risk open** | §3; M2 closes it with a write-side seam |
 | Global IndexedDB factory has no reference count | **Accepted — risk open and unverified** | §4; M2 adds an install stack plus a regression test |
-| A7's review report is not archived in the repo | **Open** | §5; must be filed before M1 is declared complete |
+| A7's review report is not archived in the repo | **Closed — archived** | §5; `docs/agent-governance/A7-m1-p0-review.md` (verbatim) |
 
 ### 1. A0 edited A6- and A1-owned files (resolved, recorded)
 
@@ -1130,11 +1130,13 @@ registering it), `P0_1_WORKAROUND` and the whole `withWorkaround` plumbing plus 
 recorded `testOnlyWorkaround` environment field, and nine now-obsolete `knownDefect` tags. No
 assertion was deleted or relaxed; the P0-2/P0-3 scenarios became ordinary green scenarios.
 
-*A7's independent conclusion (provenance: relayed to A0; see §5).* A7 performed the review on
-`9be0e1a` and did not require the fixes to be rolled back. It raised the four items recorded in
-this decision: the two delegated-edit/audit questions (§1, §5), the presence write path (§3) and
-the IndexedDB reference count (§4). §1 and §2 are closed by this record; §3 and §4 are accepted
-risk with an M2 owner; §5 is open until the report is filed.
+*A7's independent conclusion (archived at `docs/agent-governance/A7-m1-p0-review.md`; see §5).* A7
+performed the review on `9be0e1a` and did not require the fixes to be rolled back. Its verdict was
+APPROVE WITH CONDITIONS with two blocking items, both now satisfied (C1 in `dd36169`/`f2dfe1a`,
+C2 in `a06b6ff`). It raised the four items recorded in this decision: the two delegated-edit/audit
+questions (§1, §5), the presence write path (§3) and the IndexedDB reference count (§4). §1 and §2
+are closed by this record; §3 and §4 are accepted risk with an M2 owner; §5 is closed by the
+verbatim archive.
 
 ### 3. The local presence write path is outside the frozen seam (accepted, M2)
 
@@ -1189,16 +1191,27 @@ per-factory reference count, restore only when the current value is still ours (
 pop), and add a regression test with two overlapping injected sessions asserting that the second
 session's provider keeps its own factory and that the global ends up exactly as it started.
 
-### 5. Audit-chain gap: A7's report is not in the repository (open)
+### 5. Audit-chain: A7's report is archived verbatim (closed)
 
-A7's review exists as a delivered report, not as a repository artefact, so this decision records
-its conclusions by relay and says so rather than implying a document a future reader can open.
-§3 and §4 in particular were derived by re-reading the code, not copied from that report, so their
-*facts* are independently verifiable even though A7's phrasing is not quotable here.
+A7's review is now a repository artefact: `docs/agent-governance/A7-m1-p0-review.md`, the
+original report as delivered, unedited. This decision does not paraphrase it, and its verdict
+wording stands as A7 wrote it.
 
-*To close it before M1 is declared complete:* file the report as
-`docs/agent-governance/A7-m1-p0-review.md`, and if A7's verdict wording differs from the summary
-above, correct §2 rather than this decision's facts.
+*Why this matters here.* §1–§4 of this record were written before the report was filed and were
+derived independently (by re-reading the code and the commit history), so they remain verifiable
+facts rather than a summary of A7's prose. Where they and the archived report overlap — the
+non-reference-counted global factory, the presence write path, the delegated edits and the
+missing integration report — the two agree.
+
+*One thing the archive does not change:* the report carries relative markdown links such as
+`apps/web/src/collab/internal/persistence.ts#L127-L161`, which were written from the repository
+root and therefore do not resolve from `docs/agent-governance/`. They were left exactly as
+authored instead of being rewritten; resolve them against the repository root.
+
+*Status.* Both blocking items A7 named are now satisfied: **C1** by `dd36169` (integrated in
+`f2dfe1a`, which replaces the 120 ms window with a wired 20 ms/60 ms backoff and a 300 ms
+observation window, and adds the explicit-recovery and positive-control assertions), and **C2**
+by this record plus the `persistence.test.ts` reference fix in `a06b6ff`.
 
 **Consequences.** The M1-P0 baseline (`9be0e1a`) is auditable: every delegated edit has a stated
 basis and a named owner who should review it, pin removal is tied to evidence that does not depend
