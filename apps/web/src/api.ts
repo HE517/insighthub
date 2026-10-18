@@ -4,6 +4,17 @@
  * Every call takes an AbortSignal and enforces its own timeout, so a slow or
  * dead server can never leave a request hanging forever (M0 seed for the
  * cancellation/stale-response work owned by A5).
+ *
+ * ## M2 Phase 2: `credentials`
+ *
+ * The session travels in an `httpOnly` cookie (`docs/CONTRACTS.md` §17.2), so a call that needs
+ * the session has to opt into sending it. `credentials: 'include'` is used **only** where the
+ * cookie is required (`POST /api/session/bootstrap`) and not globally: the dev stack serves the
+ * API through the Vite proxy on one origin, and spreading `include` across every request would
+ * be a habit that breaks silently the day a second origin appears.
+ *
+ * Nothing in this module reads or writes the cookie. `document.cookie` is never touched — the
+ * session cookie is `HttpOnly`, and P2-9 requires that no JS-reachable place holds the token.
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -22,15 +33,28 @@ export interface ApiError {
 
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** JSON body, serialised here. Ignored for `GET`/`HEAD`. */
+  body?: unknown;
+  /** Defaults to `same-origin` (the browser default). Session calls pass `include`. */
+  credentials?: RequestCredentials;
+}
+
 /**
- * GET a JSON endpoint with cancellation + timeout.
- * Resolves with a discriminated result; never throws for expected failures.
+ * Perform one JSON request with cancellation + timeout.
+ *
+ * Resolves with a discriminated result; never throws for expected failures. A caller that wants
+ * to distinguish "refused" from "unreachable" reads `error.kind` / `error.status`; it never has to
+ * catch.
  */
-export async function getJson<T>(
+export async function requestJson<T>(
+  method: 'GET' | 'POST' | 'DELETE',
   path: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: ApiRequestOptions = {},
 ): Promise<ApiResult<T>> {
-  const { signal, timeoutMs = 5000 } = options;
+  const { signal, timeoutMs = 5000, body, credentials = 'same-origin' } = options;
   const controller = new AbortController();
   const onAbort = (): void => controller.abort(signal?.reason);
   signal?.addEventListener('abort', onAbort, { once: true });
@@ -39,8 +63,18 @@ export async function getJson<T>(
     timeoutMs,
   );
 
+  const headers: Record<string, string> =
+    body === undefined ? {} : { 'content-type': 'application/json' };
+
   try {
-    const response = await fetch(apiUrl(path), { signal: controller.signal });
+    const response = await fetch(apiUrl(path), {
+      method,
+      signal: controller.signal,
+      credentials,
+      headers,
+      // A GET with a body is not a thing; keeping the branch explicit avoids a silent cast.
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
     if (!response.ok) {
       return {
         ok: false,
@@ -67,6 +101,19 @@ export async function getJson<T>(
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/** GET a JSON endpoint with cancellation + timeout. */
+export function getJson<T>(
+  path: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<ApiResult<T>> {
+  return requestJson<T>('GET', path, options);
+}
+
+/** POST a JSON body. Used for the session bootstrap, which must send its cookie. */
+export function postJson<T>(path: string, options: ApiRequestOptions = {}): Promise<ApiResult<T>> {
+  return requestJson<T>('POST', path, options);
 }
 
 export function fetchHealth(options?: {

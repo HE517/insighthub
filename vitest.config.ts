@@ -23,6 +23,9 @@ import { defineConfig } from 'vitest/config';
  *   own Node transports, so it runs here unchanged.
  * - `apps/web/src/features/**` — A2's binding, cursor derivation, lifecycle and
  *   presentation logic.
+ * - `apps/web/src/session/**` — A5's M2 Phase 2 session bootstrap (identity only; the token lives
+ *   in an `httpOnly` cookie and is never reachable from JS). Added together with that code,
+ *   because a test the gate does not run is not a test.
  *
  * Excluded: `apps/server/**`, whose integration tests boot a real HTTP+WS server and run
  * through `node:test` (`pnpm test:server`).
@@ -34,6 +37,7 @@ export default defineConfig({
       'packages/**/src/**/*.test.ts',
       'apps/web/src/features/**/*.test.ts',
       'apps/web/src/collab/**/*.test.ts',
+      'apps/web/src/session/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'apps/server/**'],
   },
