@@ -22,6 +22,22 @@ export const TEST_RECONNECT_MAX_MS = 60;
 /** Awareness coalescing window used by tests (production is 50 ms). */
 export const TEST_AWARENESS_FLUSH_MS = 5;
 
+/**
+ * How long a test must watch the transport before "nothing happened" is evidence.
+ *
+ * Derived from the pacing above instead of picked by feel, because a "did not
+ * reconnect" assertion is only meaningful if the same setup *would* have reconnected
+ * in that time. With a 20 ms base and a 60 ms cap the backoff loop tries at 20 ms,
+ * 40 ms and then every 60 ms, so five cap-periods contain at least six attempts —
+ * far more than the single attempt a regression would need to show up in
+ * `totalConnections`.
+ *
+ * The 120 ms sleep this replaced was *both* shorter than one production base delay
+ * (1 000 ms, so a live retry was still pending) and applied to a context whose
+ * backoff had never been overridden, so it could not fail for the right reason.
+ */
+export const TEST_RECONNECT_OBSERVE_MS = TEST_RECONNECT_MAX_MS * 5;
+
 /** The WebSocket constructor the collab layer calls, adapted to our Node double. */
 export const testSocketFactory = TestWebSocketClient as unknown as SyncSocketFactory;
 
@@ -75,6 +91,12 @@ export function createTestContext(contextOptions: TestContextOptions = {}): Test
       {
         indexedDB: db,
         awarenessFlushDelayMs: TEST_AWARENESS_FLUSH_MS,
+        // The reconnect backoff must be owned by the context, not left at the
+        // production default: a test that asserts "no reconnect happened" is only
+        // able to observe a retry if the retry interval is shorter than its
+        // observation window (`TEST_RECONNECT_OBSERVE_MS`).
+        reconnectBaseDelayMs: TEST_RECONNECT_BASE_MS,
+        reconnectMaxDelayMs: TEST_RECONNECT_MAX_MS,
         // Sessions start disconnected by default: a test opts in to the network by
         // calling `startNetwork` itself, which keeps "local durability" assertions
         // independent of the transport.

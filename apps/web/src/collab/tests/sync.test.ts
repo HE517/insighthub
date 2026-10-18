@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { isTransitionalStatus, type ConnectionStatus } from '@insighthub/shared';
+
 import {
+  TEST_RECONNECT_OBSERVE_MS,
   createTestContext,
   testSocketFactory,
   waitFor,
@@ -187,24 +190,91 @@ describe('realtime sync over the frozen wire', () => {
     server = new ContractTestServer('sync-fatal');
     const url = await server.start();
     const session = await ctx().create({ documentId: 'sync-fatal' });
+
+    // Record every status the session publishes, so "it never went back to the
+    // network" can be checked as a sequence instead of a single final value.
+    const statuses: ConnectionStatus[] = [];
+    const unsubscribe = session.subscribe(() => {
+      statuses.push(session.connectionStatus);
+    });
+
     session.startNetwork(url, testSocketFactory);
     await waitFor(() => session.connectionStatus === 'connected', 'joined');
+    const connectionsAfterJoin = server.totalConnections;
 
-    server.sendRawToAll(
-      JSON.stringify({
-        type: 'error',
-        payload: { code: 'PROTOCOL_VERSION_MISMATCH', message: 'unsupported protocol version' },
-        ts: new Date().toISOString(),
-      }),
+    // The **production** fatal path (`docs/CONTRACTS.md` §7): the server sends the
+    // typed error *and* closes the socket, exactly as `sendError` does for a fatal
+    // code. Sending the error frame alone is not enough: the client then closes a
+    // socket it has already detached its handlers from, so the close event a
+    // reconnect loop would react to never reaches the provider and the assertion
+    // below could not fail no matter how long it waited.
+    server.failAllWith('PROTOCOL_VERSION_MISMATCH', 'unsupported protocol version');
+
+    // Wait on the *recorded* sequence, not on a polled value: `error` is a status the
+    // client may only hold briefly if a retry is scheduled, and a 5 ms poller can miss
+    // it. The subscriber is notified synchronously from `onStatusChange`, so this can
+    // never race the transition it is waiting for.
+    await waitFor(() => statuses.includes('error'), 'the fatal status to surface');
+    const statusesAtError = statuses.lastIndexOf('error') + 1;
+
+    // The backoff belongs to the test context (20 ms base → 60 ms cap), so this
+    // window holds at least six retry slots: a live loop would have opened a socket
+    // and reported `reconnecting`/`connecting` long before it ends.
+    await new Promise((resolve) => setTimeout(resolve, TEST_RECONNECT_OBSERVE_MS));
+
+    // 1. No reconnect attempt of any kind: no new socket was accepted, and no retry
+    //    was scheduled (a scheduled retry shows up as a transitional status).
+    expect(server.totalConnections).toBe(connectionsAfterJoin);
+    expect(session.connectionStatus).toBe('error');
+    const publishedAfterError = statuses.slice(statusesAtError);
+    expect(publishedAfterError.filter(isTransitionalStatus)).toEqual([]);
+    expect(publishedAfterError).not.toContain('connected');
+
+    // 2. The loop was stopped by clearing the provider's `active` flag, not by luck.
+    //    `SyncProvider.connect()` early-returns while that flag is set, so an explicit
+    //    recovery after the user acknowledges the error is only possible if it was
+    //    cleared. This is the assertion that catches a removed `active = false`:
+    //    check 1 cannot, because `closeSocket()` detaches the handlers that would
+    //    otherwise schedule the retry.
+    session.connect();
+    await waitFor(
+      () => session.connectionStatus === 'connected',
+      'an explicit reconnect after the fatal error is acknowledged',
     );
+    expect(server.totalConnections).toBe(connectionsAfterJoin + 1);
 
-    await waitFor(() => session.connectionStatus === 'error', 'the fatal status to surface');
-    const connectionsAfterError = server.totalConnectionsOpened;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    // A fatal code stops the reconnect loop: no new connection is *attempted*.
-    // `totalConnectionsOpened` is monotonic, so this cannot pass by comparing two
-    // zeros after the fatal close, and it cannot fail because the old socket closed.
-    expect(server.totalConnectionsOpened).toBe(connectionsAfterError);
+    unsubscribe();
+    session.destroy();
+  });
+
+  /**
+   * Positive control for the pin above.
+   *
+   * The same context, the same backoff and the same observation window, but a genuine
+   * network failure instead of a fatal error: the provider is still active, so it must
+   * retry and re-join on its own, and the new connection must be visible in
+   * `totalConnections` within `TEST_RECONNECT_OBSERVE_MS`. If this control ever goes
+   * red, the fatal pin's "no new connection" result stops being evidence.
+   */
+  it('reconnects on its own when the socket dies, inside the fatal-observation window', async () => {
+    const room = new ContractTestServer('sync-reconnect-control');
+    server = room;
+    const url = await room.start();
+    const session = await ctx().create({ documentId: 'sync-reconnect-control' });
+    session.startNetwork(url, testSocketFactory);
+    await waitFor(() => session.connectionStatus === 'connected', 'joined');
+    const connectionsAfterJoin = room.totalConnections;
+
+    // Drop the TCP socket without a close handshake — what a network failure looks
+    // like, and the event the fatal path must *not* produce a retry for.
+    room.dropAllConnections();
+
+    await waitFor(
+      () => room.totalConnections > connectionsAfterJoin,
+      'an automatic reconnect after the socket was dropped',
+      TEST_RECONNECT_OBSERVE_MS,
+    );
+    await waitFor(() => session.connectionStatus === 'connected', 're-joined after the drop');
     session.destroy();
   });
 

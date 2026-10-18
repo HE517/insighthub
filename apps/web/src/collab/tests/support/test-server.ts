@@ -98,9 +98,20 @@ export class ContractTestServer {
 
   private readonly connections = new Map<string, ClientRecord>();
 
-  private connectionsOpened = 0;
-
   private readonly sockets = new Set<Duplex>();
+
+  /**
+   * Every upgrade this server has ever accepted, including connections that have
+   * since closed.
+   *
+   * Monotonic on purpose: `connectionCount` is a *live* set, so after a fatal error
+   * it drops to zero when the client (or this server) closes the socket. A regression
+   * that opens one more socket would then be invisible to a `connectionCount`
+   * comparison — "0 stayed 0" and "1 → 0 → 1" look alike — while a monotonic counter
+   * makes "did another connection attempt ever happen?" a total, order-independent
+   * fact.
+   */
+  private acceptedConnections = 0;
 
   private server: http.Server | undefined;
 
@@ -131,16 +142,9 @@ export class ContractTestServer {
     return this.connections.size;
   }
 
-  /**
-   * Connections ever accepted, never decremented.
-   *
-   * `connectionCount` is the live set, so it drops when a socket closes - which a fatal
-   * error does on purpose. "Did the reconnect loop stop?" is a question about attempts,
-   * so it needs a monotonic counter: a loop that opens and immediately closes would keep
-   * the live count at zero while reconnecting forever.
-   */
-  get totalConnectionsOpened(): number {
-    return this.connectionsOpened;
+  /** Total connections ever accepted (monotonic; see `acceptedConnections`). */
+  get totalConnections(): number {
+    return this.acceptedConnections;
   }
 
   /** Client ids currently in the room (this is what "presence" means server-side). */
@@ -222,6 +226,7 @@ export class ContractTestServer {
    * ---------------------------------------------------------------- */
 
   private registerClient(socket: Duplex): void {
+    this.acceptedConnections += 1;
     this.sockets.add(socket);
     const record: ClientRecord = {
       id: randomUUID(),
@@ -241,7 +246,6 @@ export class ContractTestServer {
       syncOrigin: { socket: randomUUID() },
     };
     this.connections.set(record.id, record);
-    this.connectionsOpened += 1;
 
     const reader = new WebSocketFrameReader(
       (data) => this.handleFrame(record, data),
@@ -520,6 +524,35 @@ export class ContractTestServer {
     for (const record of this.connections.values()) {
       if (record.joined) record.socket.send(json);
     }
+  }
+
+  /**
+   * Reject every joined client with a typed error, on the **production** fatal path.
+   *
+   * This goes through `sendError`, so a fatal code writes the error frame *and* closes
+   * the socket (`docs/CONTRACTS.md` §7), which is what A3's server does. That
+   * combination is the whole point: `sendRawToAll` alone leaves the socket open, so the
+   * client closes it itself and detaches its handlers first — meaning the close event a
+   * still-active provider would react to never reaches it, and a "fatal must not
+   * reconnect" test built on it can never fail.
+   */
+  failAllWith(code: WsErrorCode, message: string): void {
+    for (const record of [...this.connections.values()]) {
+      if (record.joined) this.sendError(record, code, message);
+    }
+  }
+
+  /**
+   * Drop every live socket without a close handshake, as a network failure would.
+   *
+   * Used as the positive control for the fatal-error pin: it proves that the client's
+   * own reconnect path *is* observable through `totalConnections` inside
+   * `TEST_RECONNECT_OBSERVE_MS`, so "no new connection" in that same window is
+   * evidence rather than a race.
+   */
+  dropAllConnections(): void {
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
   }
 
   /** The frozen `room-joined` payload shape, for the D-022 regression assertion. */
