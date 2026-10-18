@@ -32,11 +32,13 @@ import {
   DOCUMENT_TEXT_KEY,
   TRANSACTION_ORIGINS,
   awarenessStateSchema,
+  parsePresencePatch,
   type AwarenessState,
   type CollaborativeSession,
   type CollaborativeSessionOptions,
   type CollaboratorInfo,
   type ConnectionStatus,
+  type PresencePatch,
   type SessionState,
   type TransactionOrigin,
   type UndoState,
@@ -157,7 +159,11 @@ export class FakeCollaborativeSession implements CollaborativeSession {
     this.doc = new Y.Doc();
     this.text = this.doc.getText(DOCUMENT_TEXT_KEY);
     this.fakeAwareness = new FakeAwareness(this.doc.clientID);
-    this.awareness = this.fakeAwareness as unknown as CollaborativeSession['awareness'];
+    // No cast (M2-P0-2 step 3): `FakeAwareness` exposes `clientID`, `getStates`, `on`
+    // and `off`, which is exactly `AwarenessBinding`. Its extra write helpers are
+    // reachable only through `fakeAwareness`, the test-control handle — never through
+    // the seam member.
+    this.awareness = this.fakeAwareness;
 
     this.undoManager = new Y.UndoManager(this.text, {
       trackedOrigins: new Set([
@@ -240,6 +246,38 @@ export class FakeCollaborativeSession implements CollaborativeSession {
   getLocalAwarenessState(): AwarenessState | null {
     const parsed = awarenessStateSchema.safeParse(this.fakeAwareness.getLocalState());
     return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Publish presence through the M2-P0-2 seam.
+   *
+   * This double reuses `parsePresencePatch` from `@insighthub/shared` instead of deriving its
+   * own rules: a second copy of "what a legal patch is" would drift, and a test would then pass
+   * on patches the production seam rejects. `updatedAt` is stamped here for the same reason -
+   * the collaboration layer owns it, never the caller.
+   *
+   * Ordering mirrors the real session (`document-session.ts` -> `awareness.ts`) so a test
+   * cannot observe a difference between the double and production:
+   *
+   * 1. validate first, so an invalid patch throws even on a destroyed session;
+   * 2. then no-op when destroyed;
+   * 3. then no-op when no local state has been published yet;
+   * 4. merge the patch (absent = leave unchanged, `null` = clear) and stamp `updatedAt`.
+   */
+  publishPresence(patch: PresencePatch): void {
+    const parsed = parsePresencePatch(patch);
+    if (this.sessionState === 'destroyed') return;
+
+    const current = this.getLocalAwarenessState();
+    if (current === null) return;
+
+    const next: AwarenessState = {
+      ...current,
+      ...(parsed.cursor === undefined ? {} : { cursor: parsed.cursor }),
+      ...(parsed.selection === undefined ? {} : { selection: parsed.selection }),
+      updatedAt: Date.now(),
+    };
+    this.setLocalAwareness(awarenessStateSchema.parse(next));
   }
 
   transact(fn: (text: Y.Text) => void, origin?: TransactionOrigin): void {

@@ -1121,7 +1121,9 @@ the harness rather than by weakening the assertions.
 
 ### 4. 注入环境的全局 IndexedDB 工厂缺少引用计数（已接受，M2 处理，未验证）
 
-**事实。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
+**事实（M1 当时的实现）。** `installGlobalIndexedDb`（`apps/web/src/collab/internal/persistence.ts:127`）快照 `Object.getOwnPropertyDescriptor(host, 'indexedDB')`，销毁时还原该 descriptor；当解析出的工厂**就是**全局时短路不改写。`attachDocumentPersistence` 用 `destroyPromise` 只保证**单个 handle** 幂等。**不存在跨 handle 的安装栈或引用计数。**
+
+> M2-P0-3 已实现该缺口：符号改名为 `acquireIndexedDbLease`，并改为 module-level 租约栈 + 每工厂引用计数（D-046、D-054）。本条保留 M1 当时的命名，因为它是历史记录。
 
 **重叠场景的失败链。** A 安装 `FA`（存下 ambient descriptor），B 安装 `FB`（存下 A 的 descriptor）。`A.destroy()` 还原 **ambient**，而 B 仍在运行 → B 的 provider 静默读到 ambient 工厂，**写进错误的数据库且不报错**；`B.destroy()` 再还原 `FA` → **一个假工厂永久留在全局上**。
 
@@ -1160,3 +1162,722 @@ A1 执行的三组变异（临时修改生产代码 → 观察目标用例 → �
 **为什么这条更正必须写进决策记录。** "测试存在"与"测试能抓住它声称守护的回归"是两件事，后者只能靠变异证明。此前把"我没做这个实验"说成"证据链有空缺"，会让读者以为 C1 的证据强度不足；事实相反——实验做了，只是执行者是 A1 与 A7 的独立复核，而不是 A0 在合并阶段重做。
 
 **后果。** M1-P0 基线现在可审计：每处代改都有陈述清楚的依据与应当复核它的具名 owner；pin 退场绑定在不依赖 shim 的证据上；两项剩余缺口有 owner、有里程碑、有具体方向，而不是一句含糊的"已知问题"。代价是两项被接受的风险带入 M2——这才是诚实的当前状态。这里没有为了让套件变绿而削弱任何断言，也没有为了让风险消失而改动任何冻结契约。
+
+---
+
+## D-040 · 2026-10-18 · accepted · M2 范围与状态词：只冻结 P0 三项 (M2-Kickoff)
+
+**背景。** M1 已 CLOSED（`main` = `f3c353e`，tag `m1-closed`）。M2 不能一开工就发散到
+权限重设计、AI 编辑器或 UI 改版；它要先把 M1 遗留的三项 P0 收掉。
+
+**决策：M2 只做三项 P0。**
+
+| ID | 内容 | 归属本轮 |
+| --- | --- | --- |
+| `M2-P0-1` | 服务端 durable persistence | 架构冻结（本轮）/ 实现（下一轮） |
+| `M2-P0-2` | presence 写侧 seam | 设计冻结（本轮）/ 实现（下一轮） |
+| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | 设计冻结（本轮）/ 实现（下一轮） |
+
+明确**不属于** M2：AI 编辑器（M3）、权限模型重设计、UI 重设计、wire framing 变更。
+触发重新讨论的条件是出现与持久化正确性直接冲突的证据，而不是"顺手做"。
+
+**Exit Criteria（M2 完成的判据）** —— 只有 `M2-P0-1` 的 A–G 七个验收场景全部通过，
+**且** `M2-P0-2`/`M2-P0-3` 已实现并有其回归测试，**且** A6 的 restart/corruption 浏览器门禁
+全绿，**且** A7 终审 APPROVE。否则 M2 不关闭。
+
+**Backlog（不在 Exit Criteria 内）**：键击通知扇出优化（D-039 L2）、主 bundle 分块、
+`void persistence.destroy()` 的未处理拒绝（L5）、跨浏览器验证。
+
+**状态词，本里程碑强制使用**（此前 M1 多次出现"设计被读成已实现"）：
+
+| 词 | 含义 |
+| --- | --- |
+| `PROPOSED` | 有价值但未定，可能被否 |
+| `FROZEN` | 设计已定，实现方不得自行更改；代码可能还不存在 |
+| `IMPLEMENTED` | 代码已合入，测试通过 |
+| `VERIFIED` | 有真实运行证据（含浏览器/重启等），可对外声称 |
+
+**后果。** 本轮所有交付一律标注 `FROZEN (design) / NOT IMPLEMENTED`；任何文档不得把
+尚未存在的实现写成已具备。代价是文档里出现大量"设计已定但没代码"的段落，这是刻意的：
+M2 的第一风险不是设计错，而是设计与实现悄悄分叉。
+
+---
+
+## D-041 · 2026-10-18 · accepted · 服务端持久化后端选用 `node:sqlite` (M2-P0-1)
+
+**背景。** 需要一个能在本仓库既有条件下可靠工作的持久化后端：Windows、Node 22.14.0、
+pnpm workspace、无 CI 配置、`AGENTS.md` R3 要求新增生产依赖需 A0 批准。
+
+**决策：使用 Node 内置 `node:sqlite`（`DatabaseSync`），不新增任何依赖。**
+
+**实测证据**（本轮在本机实际执行，非查文档）：
+
+| 能力 | 实测结果 |
+| --- | --- |
+| 无需 flag 即可 `require('node:sqlite')` | 成功（仅一条 `ExperimentalWarning`） |
+| WAL 模式 | `PRAGMA journal_mode` → `wal` |
+| BLOB 往返（含 NUL 字节） | 逐字节一致 |
+| BEGIN / ROLLBACK | 回滚后行确实消失 |
+| 快照替换 + 日志截断同一事务 | `snapshot_seq=3`、`remaining_updates=0`（原子压缩可行） |
+| 关闭后重开 | 数据仍在（`snapshot_seq=3`，7 字节） |
+| 文件损坏 | 抛 `ERR_SQLITE_ERROR: file is not a database` |
+| 目录不存在 | 抛 `ERR_SQLITE_ERROR: unable to open database file` |
+
+**一个必须记住的细节**：损坏的文件在 `new DatabaseSync(path)` 时**不一定抛**，要执行第一条
+语句才抛。所以"打开成功"不是健康检查，健康检查必须是 `PRAGMA schema_version` 之类的实际查询。
+
+**被否决的方案与理由：**
+
+| 方案 | 否决理由 |
+| --- | --- |
+| `better-sqlite3` | 原生模块，Windows 需要 MSVC 构建工具链；新增生产依赖；CI 可移植性下降 |
+| `sqlite3` (node-sqlite3) | 原生、需构建、维护性差；异步 API 的收益抵不过部署成本 |
+| 手写文件（每文档一个目录 + append-only 文件） | 零依赖，但崩溃一致性、快照原子切换、截断检测都要自己实现；SQLite 免费给出事务 |
+| LevelDB / RocksDB | 原生依赖，M2 规模不需要 LSM |
+| 内存 + 定期落盘 | 正是 M1 的问题，直接否决 |
+
+**已知代价（写入 D-046 相邻风险清单）：**
+
+1. `node:sqlite` 在 Node 22 标记为 experimental，API 可能变化 → 由 `DocumentStore` 适配器隔离，
+   并在升级 Node 时按实测清单复验（见上表）。
+2. `DatabaseSync` 是**同步** API，会阻塞事件循环 → 单条 Yjs update 是几十到几百字节，
+   可以接受；**snapshot 压缩**可能写整篇文档，必须移出热路径（空闲或驱逐时执行），且要用
+   测量而不是猜测定阈值（见 D-042）。
+
+**后果。** M2-P0-1 可以在不新增依赖、不改 CI 的前提下实现，且后端仍可替换（适配器 seam）。
+代价是接受一个 experimental API 与同步 I/O 的约束，两者都写进了风险清单而不是被忽略。
+
+---
+
+## D-042 · 2026-10-18 · accepted · 持久化表示：snapshot + update log，Yjs 二进制为权威 (M2-P0-1)
+
+**决策。** 每个文档存 **一份 snapshot + 一条 append-only 的 Yjs update 日志**：
+
+```text
+document        (document_id PK, snapshot BLOB, snapshot_seq INT, updated_at INT)
+document_update (document_id, seq INT, update_bytes BLOB, created_at, PK(document_id, seq))
+```
+
+恢复 = `applyUpdate(snapshot)` → 按 `seq` 升序逐条 `applyUpdate(update)`。
+
+**为什么不用 Markdown 作为服务端 Source of Truth。** 渲染后的 Markdown 丢掉了 CRDT 合并
+所需的一切：client id、时钟、删除墓碑、格式标记。用它恢复会把"两个从未离线过的客户端"
+变成并发写者，并让已删除内容复活。Markdown 是**投影**，需要时生成，永不作为权威——
+与 §0 的单一真相一致。
+
+**去重与幂等（明确决定，不过度设计）。**
+
+- **允许重复 update**：Yjs update 本身是幂等的，重复 apply 不改变状态。
+- **不做内容 hash 去重**：为了省几行日志而引入哈希表与碰撞语义，收益不抵复杂度；重复
+  写入的代价只是日志里多几行，重放时被 Yjs 吸收。
+- **`seq` 的用途只有一个**：给日志一个确定的全序，使重放顺序稳定、压缩时能表达
+  "已消费到哪一条"（`snapshot_seq`）。它不是业务语义的版本号。
+- **重放最终一致**：因为只做 `applyUpdate`，且 update 之间可交换，重放顺序不影响收敛结果；
+  `seq` 只是让行为可重复、可测试。
+
+**压缩（compaction）。**
+
+| 项 | 决定 |
+| --- | --- |
+| 触发条件 | `document_update` 行数 > 200 **或** 日志字节 > 1 MB，先到者触发；两个阈值都是确定性常量 |
+| snapshot 生成 | `Y.encodeStateAsUpdate(doc)`（整个 state），`snapshot_seq` = 被消费的最大 seq |
+| 原子性 | 快照替换与日志删除在**同一事务**内完成（已实测可行） |
+| 失败恢复 | 事务未提交则快照与日志都保持旧状态，下次重放仍从旧快照开始，不会丢数据 |
+| 何时执行 | 不在 update 热路径上；在房间驱逐（最后成员离开）或空闲时执行，避免同步 API 阻塞打字路径 |
+
+阈值是 `FROZEN` 的，但**必须由测试证明**：M2-P0-1 的验收场景 E 要求在超过阈值后压缩、
+重启，文档与压缩前逐字节一致（对渲染文本与 `Y.Doc` 内容长度双重断言）。
+
+---
+
+## D-043 · 2026-10-18 · accepted · Hydration barrier：成员关系仍同步，只推迟确认 (M2-P0-1)
+
+**背景。** `joinRoom` 目前在 `RoomRegistry` 里是**同步**的，且 M1 把"单个同步状态转换"写成
+了显式不变量并有测试（原子替换、无中间态）。durable hydration 需要异步 I/O。
+
+**被否决的方案：把 `joinRoom` 改成 async。** 它会重新打开 M1 刚关闭的那一类 bug：在 await
+期间，socket 可能已经"离开 A 但还没进入 B"，而 `room-joined` 的语义、原子替换的测试和
+"一个 socket 最多一个房间"的推理都建立在"这一步不会中途让出"之上。
+
+**决策：两阶段 join。**
+
+```text
+阶段 1（同步，保持不变）
+  joinRoom 完成成员关系变更：原子替换、peers 计算、旧房驱逐
+阶段 2（异步，新增屏障）
+  room 需要 hydrate 时，room-joined 推迟到 hydrate 完成之后再发送
+```
+
+由此：
+
+1. **成员关系的不变量原样保留**，M1 的原子替换测试继续有效。
+2. `room-joined` 本来就是契约里"数据面之前"的那道门（CONTRACTS §4），把延迟放在这里
+   不需要改协议。
+3. **single-flight**：同一文档的并发 join 共享一次 hydration（一个 Promise），否则 N 个
+   加入者会触发 N 次读盘。
+4. **hydration 期间到达的 BINARY 帧**进入有界队列（不应用、不回复），屏障放行后按序冲刷；
+   **累计 backlog 溢出**是服务端内部条件，房间转 `UNHEALTHY`、参与者收 `INTERNAL_ERROR` 并由
+   服务端关闭——**不是** `FRAME_TOO_LARGE`（该码只表示单个 frame 超过帧大小契约）。
+   更正理由见 D-050；日志标签 `HYDRATION_BACKLOG_OVERFLOW` 不进入 wire 词表。
+5. **中途断开的 socket**：屏障完成后发现 `context.activeRoom` 已变或已断，结果直接丢弃，
+   绝不给死 socket 发 `room-joined`。
+6. **hydration 失败**（snapshot 损坏/重放抛错）：房间标记 unhealthy，参与者收到
+   `INTERNAL_ERROR` 并被断开，房间从内存移除；**不降级为空文档**——把"读不出来"变成
+   "看起来是空文档"是数据丢失的最坏形式。
+
+**Registry 与 persistence 的 ownership。** `RoomRegistry` 拥有 eviction 与屏障；
+`DocumentStore` 拥有字节与事务；`DocumentRoom` 拥有 `Y.Doc` 与 awareness。三者互不越界
+（ARCHITECTURE §7.2）。
+
+---
+
+## D-044 · 2026-10-18 · accepted · 写入顺序 `apply → persist → broadcast` 与 fail-closed 语义 (M2-P0-1)
+
+**决策。** 每条入站 update 固定三步，且 **persist 必须在 broadcast 之前完成**。
+
+**为什么不是 broadcast 优先。** 若先广播再落盘：落盘失败时对端已经应用了它，服务端却永远
+无法恢复——这正是"向 peer 宣称一个无法持久恢复的成功状态"。顺序反过来，失败时对端什么
+也没看到。
+
+**失败策略（冻结）：**
+
+1. 房间标记 **unhealthy**，拒绝后续 update。
+2. 向房内每个参与者发送 `INTERNAL_ERROR`，并由服务端**关闭连接**。
+   - 选择 `INTERNAL_ERROR` 而不是新增错误码：它已存在、语义就是"服务端内部故障，细节在日志"，
+     且按契约是 **non-fatal**——这正是我们要的客户端语义（临时存储故障不该像 fatal 那样
+     永久停掉重连循环）。
+   - **不新增错误码，wire 词表不变**（M1 已把 `ROOM_NOT_FOUND` 预留给 M2 的房间语义）。
+3. **销毁内存房间**，使内存不能与磁盘分叉：否则下一个加入者会拿到"磁盘上没有"的状态。
+4. 作者客户端本地仍持有该 update（它的 IndexedDB），重连后走**既有** state-vector 握手把它
+   重新发上来，append 重试。恢复复用既有路径，不写特例。
+5. 若同时没有任何客户端持有该 update（作者同时掉线且不再回来），它丢失——这与 M1 的暴露面
+   相同，也是这项必须是 P0 的原因。
+6. 日志记录错误（含 documentId 与 seq），**不发送**栈、路径或 SQL 给客户端（CONTRACTS §7）。
+
+**后果。** 代价是一次落盘失败会打断房内所有连接（比"只断一个"更重）。这是刻意的：
+持久化坏了就意味着整个房间的状态不可信，让所有人重连并从磁盘重新 hydrate，比让一部分人
+继续在一个不可恢复的状态上编辑更安全。
+
+---
+
+## D-045 · 2026-10-18 · accepted · presence 写侧 seam 设计冻结，实施需版本 +1 (M2-P0-2)
+
+**决策。** 冻结 `CollaborativeSession.publishPresence(patch)` 设计（正文见
+`docs/CONTRACTS.md` §15）：`updatedAt` 由协作层拥有、写入前校验、awareness 仍是唯一
+presence 通道、裸 `Awareness` 仅作 binding 输入、部分 patch 合法。
+
+**迁移顺序冻结为**：A1 加 seam（附加，无调用者）→ A2 迁移编辑器并删除自己的 `updatedAt`
+记账 → A1 收窄裸 `Awareness`。顺序颠倒会产生一个编辑器无法编译或无法写 presence 的窗口。
+
+**版本影响。** 实施时 `SHARED_CONTRACT_VERSION` 2 → 3；`PROTOCOL_VERSION` **不变**，因为
+awareness 字段早已存在，wire 无变化。
+
+**本轮不做的事。** **不改 `packages/shared`**，不实现 seam。理由：这是 breaking interface
+变更，必须单独一次改动 + 版本号 + 决策记录（CONTRACTS §13），而不是夹在架构冻结里。
+
+**后果。** M2 的契约变更被精确限定为"一次附加 + 一次收窄"，且客户端与协议各自的影响面
+写在文档里，实现方不需要再猜。
+
+---
+
+## D-046 · 2026-10-18 · accepted · IndexedDB 工厂改为 module-level 租约栈，而非单次快照 (M2-P0-3)
+
+**背景。** M1 的 `acquireIndexedDbLease` 只做"保存 descriptor → 还原 descriptor"，只有单个
+handle 的幂等（`destroyPromise`），没有跨 handle 的栈或引用计数。两个重叠会话注入不同工厂时：
+A 存 ambient、B 存 A 的 descriptor；`A.destroy()` 把全局还原成 ambient（B 仍活着，静默读到
+错的库）；`B.destroy()` 再还原成 A 的假工厂，**永久留在全局**。
+
+**决策：module-level 租约栈 + 每工厂引用计数。**
+
+```text
+install(factory) → 若 factory === 当前全局：返回 noop（生产浏览器路径，零改动）
+                 → 否则 push { factory, previousDescriptor, refCount }
+release()        → refCount-- ；归零时：仅当"当前全局仍是我们装的"才 pop 并还原 descriptor
+```
+
+必须回答的六个问题（设计冻结，逐条给结论）：
+
+| 问题 | 结论 |
+| --- | --- |
+| 嵌套工厂（nested） | 栈结构天然支持；只有栈顶租约释放时才回退到上一层 |
+| 同一工厂多引用 | 同 factory 的 install 递增 `refCount`，不重复 push |
+| 非 LIFO 销毁 | 归零的租约若不在栈顶，只标记失效、不立即还原；等它成为栈顶再回退，避免打乱其它层 |
+| destroy 幂等 | 每租约一个 `released` 标志；重复 release 是 no-op（不是抛错） |
+| 构造失败回滚 | `createProviderConstructor()` 抛错时立即 release 本次租约，恢复原状 |
+| ambient 浏览器工厂 | `factory === globalThis.indexedDB` 时**完全不动**全局，返回 noop——生产路径零退化 |
+
+**必须新增的回归测试**（M2-P0-3 的验收）：
+
+1. 两个重叠会话注入**不同**工厂 → 第二个会话在其生命周期内始终读到自己的工厂；
+2. 非 LIFO 销毁（先销毁先装的）→ 全局最终与初始完全一致（descriptor 比较，不比值）；
+3. 同一工厂两次 install → 一次 release **不**还原（refCount 仍为 1）；
+4. 构造失败 → 全局与初始一致；
+5. 生产路径（未注入）→ 全程不写全局，`window.indexedDB` 的 getter 身份不变。
+
+**不是契约问题。** 这条不改 seam、不改消息、不改 schema（CONTRACTS §16 已注明），因此不需要
+`SHARED_CONTRACT_VERSION` 变更。
+
+**后果。** 修好的是一个"生产不受影响、注入环境会静默读错库"的缺陷；代价是引入一个模块级单例
+状态，必须靠上述 5 个测试守住，而不是靠注释。
+---
+
+## D-047 · 2026-10-18 · accepted · Project Owner decisions on the M2 freeze (M2-Patch)
+
+**背景。** M2 Kickoff / Architecture Freeze 提交后，项目负责人对五处开放项给出决定，并要求
+把"P0 收口"与"里程碑关闭"分开。本条记录这些决定本身；技术不变量见 D-048…D-052。
+
+| # | 决定 | 落地位置 |
+| --- | --- | --- |
+| 1 | **权限/认证 = Option A**：三项 P0 收口后进入 **M2 Phase 2 / P1（permission & authentication consistency）**。**M2-P0 Gate ≠ M2 Milestone Closed**。里程碑顺序冻结为 `M2-P0 → permission/auth Phase 2 → M2 final gate → M3 AI`，**AI（M3）不得先于权限上下文** | `docs/TASKS.md` M2、`docs/PROJECT.md` |
+| 2 | **durability = Option C**：`synchronous` 可配置。dev/test 默认 `NORMAL`；**production 允许配置 `FULL`**。发布说明必须说明两种 durability guarantee 的差别 | `docs/ARCHITECTURE.md` §7.10、`docs/CONTRACTS.md` §14.2 |
+| 3 | **持久化失败继续复用 `INTERNAL_ERROR`**，不新增 wire error code，**`PROTOCOL_VERSION` 不变** | `docs/CONTRACTS.md` §14.4 |
+| 4 | **压缩阈值先冻结 200 updates OR 1 MB log（先到者触发）**；A6 用真实负载校准，**若校准后修改阈值必须记录 decision** | `docs/ARCHITECTURE.md` §7.4、`docs/TASKS.md` M2 |
+| 5 | **Agent worktree 按派发时创建**，不提前批量创建 | `docs/TASKS.md` M2 |
+
+**为什么把 Gate 与 Milestone 分开（决定 1 的实质）。** 三项 P0 是"把 M1 的数据丢失窗口补上"，
+权限/认证是"谁能写这个文档"。二者混在一个 Gate 里会导致两种坏结果：要么持久化被权限工作
+拖住（继续丢数据），要么里程碑在没有任何授权的情况下被宣布完成（把 `viewer` 能改文档的
+状态当成已交付）。分开之后，每个 Gate 的判据单一、可独立验证。
+
+**后果。** M2 的完成路径变成两段，且 M3（AI）被显式排在权限之后。代价是 M2 看起来"更长"；
+收益是不会有任何一个阶段以"其他部分还没做"为由宣布完成。
+
+---
+
+## D-048 · 2026-10-18 · accepted · 每个文档的 durable mutation 必须经过单一 FIFO pipeline (M2-P0-1)
+
+**决策。** 同一 document 的 durable mutation 串行化，`apply → persist → broadcast` 三个阶段的
+生命周期**不得交错**；不同 document 可以并行。
+
+**为什么这不是"实现细节"。** 如果允许 U1 的 persist 与 U2 的 broadcast 交错，就存在这样的
+窗口：服务端已经把 U2 广播给对端，而自己的持久化顺序尚未确定（甚至 U1 落盘失败）。此时
+"对端看到的状态"与"服务端能恢复的状态"出现分叉，而分叉一旦产生就无法通过重连自动修复——
+重连只会把两边的差异当成并发编辑合并。
+
+**为什么明确写成 adapter-independent。** 当前 `node:sqlite` 的 `DatabaseSync` 天然同步，串行
+是"碰巧成立"的；一旦换成异步 adapter（或有人在 persist 里加 `await`），交错就会悄悄出现。
+把不变量写在 seam 上，任何后端都必须满足；写上"不得依赖当前后端恰好同步"这条，是为了防止
+未来有人用"现在是同步的"来反驳。
+
+**失败即停（point 4 是最容易漏的）。** 首个 persist 失败后：房间 `UNHEALTHY`、不再接受
+mutation、失败的那条**不广播**、**已排队但未执行的后续 mutation 也不广播**（不是"继续排空
+队列"）、参与者收 `INTERNAL_ERROR` 并被关闭、内存房间销毁、**已提交的历史不回滚**、作者
+客户端靠自己的 Yjs 副本在重连时重新补齐。如果继续排空队列，就等于对外发布服务端无法恢复
+的状态。
+
+---
+
+## D-049 · 2026-10-18 · accepted · Room 状态机 CREATED → HYDRATING → READY → UNHEALTHY → DESTROYED (M2-P0-1)
+
+**决策。** 房间生命周期显式建模为五个状态（正文见 `docs/ARCHITECTURE.md` §7.5），并冻结
+每个状态的行为边界：
+
+| 状态 | 关键约束 |
+| --- | --- |
+| `CREATED` | 只有身份与成员关系；`Y.Doc` 为空 |
+| `HYDRATING` | single-flight 加载；**不发 `room-joined`**；**不执行** Yjs 数据面；BINARY 帧只进有界队列 |
+| `READY` | 只有此时才发 `room-joined`、冲刷队列、开始正常握手机制 |
+| `UNHEALTHY` | hydration 或 persist 失败；不再接受 update；不广播；`INTERNAL_ERROR` + 关闭 |
+| `DESTROYED` | 终态；**不删除 durable state**；下次 join 新建房间并重新 hydrate |
+
+**两条容易写漏的义务：**
+
+1. **hydrate 期间断开的 socket 不得被重新接纳**——屏障完成后必须重新校验 `activeRoom` 与
+   socket 存活状态，否则会出现"迟到的 `room-joined`"发给一个已经离开的连接。
+2. **`UNHEALTHY` 不得回到 `READY`**——恢复只能靠销毁重建，否则内存会被"半修复"成 store 里
+   并不存在的状态。
+
+**为什么用状态机而不是注释。** 这些约束跨越 registry、room、transport 三层，靠注释守不住；
+写成状态机之后，每个转换点都必须回答"现在是哪个状态、允许做什么"，也就自然产生了 D-048 与
+D-050 的判据。
+
+---
+
+## D-050 · 2026-10-18 · accepted · hydration backlog overflow 是 `INTERNAL_ERROR`，不是 `FRAME_TOO_LARGE` (M2-P0-1)
+
+**背景。** Architecture Freeze 初版写的是"队列溢出 → `FRAME_TOO_LARGE` 关闭"。那是错的。
+
+**决策。** `FRAME_TOO_LARGE` 的语义**只**表示"单个 frame 超过 frame-size contract"。
+hydration 期间**累计 backlog** 溢出是服务端内部条件，因此：房间 `UNHEALTHY` → 参与者收
+`INTERNAL_ERROR` → 服务端关闭连接。内部日志可以打 `HYDRATION_BACKLOG_OVERFLOW` 标签，但
+**该标签不进入 wire error-code vocabulary**，也不改 `PROTOCOL_VERSION`。
+
+**为什么这个区分重要。** `FRAME_TOO_LARGE` 会让客户端得出"我发的东西太大"的结论，从而
+（合理的）去拆分或减小帧——但真正的问题是服务端还没准备好接收任何数据帧。用错错误码会把
+排查方向引向协议层，而问题在生命周期层。
+
+---
+
+## D-051 · 2026-10-18 · accepted · Server 启动时必须 capability-check `node:sqlite`，禁止 memory-only fallback (M2-P0-1)
+
+**决策。** 服务端在开始监听前，必须实际验证当前 Node runtime 提供被测试过的 `node:sqlite`
+API（`DatabaseSync`、`exec`、`prepare`、`StatementSync#run/#get/#all`、BLOB 参数与结果、
+`BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`、`PRAGMA journal_mode`）。验证方式是在数据目录开一个
+一次性库、**执行一条语句**、往返一个 BLOB。
+
+- 不支持 → **启动失败**，给出指名运行时要求的清晰诊断，**不启动 realtime server**。
+- **禁止**降级为 memory-only：静默降级正是 M1 的数据丢失模式。
+- **不新增第三方 SQLite 依赖**；缺 API 的答案是升级 Node，不是加包。
+- 最小运行时要求记录在 `docs/TASKS.md`。
+
+**为什么必须执行一条语句而不是只 `new DatabaseSync()`。** 实测（D-041）：损坏或不可读的
+文件在构造时**不一定抛**，要到第一条语句才抛。只构造不查询的"健康检查"证明不了任何事。
+
+---
+
+## D-052 · 2026-10-18 · accepted · `append` 的 sequence 分配与写入必须原子 (M2-P0-1)
+
+**决策（store 不变量，不规定具体 SQL 写法）。**
+
+1. `append(documentId, update)` 必须**原子地**：为该 document 分配**严格递增**的 sequence →
+   写入 update bytes → 返回 committed sequence。
+2. **两个并发 caller 不得得到相同 sequence**。
+3. `snapshot_seq` **只能**指向已经 durable committed 的 sequence。
+4. `compact()` 的"新 snapshot + `snapshot_seq` 前进 + 删除已消费日志行"必须在**同一 SQLite
+   事务**内完成（D-042 已实测可行）。
+
+**为什么把它写成不变量而不是实现方案。** 用 `MAX(seq)+1`、用独立计数表、还是用 SQLite 的
+`AUTOINCREMENT`，都属于实现选择；但"编号不重复、不复用、快照指针不越界、压缩原子"是正确性
+条件。写成不变量后，A3 可以自选写法，A6 也能据此设计并发测试（验收 H）。
+
+**与 D-048 的关系。** D-048 保证同一文档内不会有两个 mutation 同时进入 store，因此正常路径
+下并发分配根本不会发生；D-052 仍然要求 store 自身具备该性质，因为**不变量不应依赖调用方的
+良好行为**，否则一旦 pipeline 被重构，corruption 会以"偶发重复 seq"的形式出现。
+
+---
+
+## D-053 · 2026-10-18 · accepted · Gate-driven autonomous handoff：A0 成为正式 Dispatcher (M2)
+
+**背景。** 在此之前，每一轮结束后项目负责人都要回答"下一步让谁做什么"。这不是监督，而是把调度
+工作外包给了他：他必须重新建立上下文、重新推断依赖、再口述一遍任务。M1 的实践证明这套流程能跑，
+但成本错位——最贵的人力在做最机械的编排。
+
+**决策：项目采用 Gate-driven autonomous handoff。**
+
+1. **A0 是正式 Dispatcher / Supervisor。** 每个 Gate 结束后由 A0 判定状态并直接派发。
+2. **`AUTO_CONTINUE`**（七条同时成立才可）：当前 Acceptance 全 PASS；下一步已在冻结的
+   TASKS / ARCHITECTURE / Agent Plan 中；不改 scope；不推翻 frozen decision；不产生新的产品级
+   语义；不需破坏性 Git；无 unresolved blocker。此时 A0 **必须**直接产出 Gate 判定、DAG、
+   可启动的 Agent、**每 Agent 一份完整可复制 prompt**、worktree/branch 创建指令、并行关系与
+   集成顺序——**不得**以"请项目负责人决定下一步"结束。
+3. **`OWNER_DECISION_REQUIRED`** 只在九类情形触发：产品 scope 变化；milestone 边界变化；
+   安全 / 权限 / 数据耐久性承诺变化；需推翻冻结架构或契约；wire protocol 需非预期变更；
+   引入重大新依赖或运行时约束；两个方案都合理但影响产品行为或发布承诺；需要破坏性 Git 或改写
+   共享历史；需求互相矛盾且工程判断无法解决。提问必须给 Option A/B/C + 影响 + 推荐，
+   **不让负责人从零设计**。
+4. **A1–A7 的报告必须追加 `## Next Handoff`**：状态、建议下一棒、base（branch + SHA）、为什么、
+   已满足的依赖、可直接复制的 prompt。**建议权属于 Specialist，调度权属于 A0。**
+5. **即使门禁全绿也不得由 Specialist 自行跨越**：merge main、milestone CLOSED、删除 milestone
+   tag、push / 建 remote、改 milestone scope、推翻冻结架构。merge main 与 milestone close 由 A0
+   在 A7 APPROVE 后生成操作计划并向负责人报告"已达到 release gate，准备执行"，**执行前仍需一次
+   明确授权**。
+
+**为什么这条要写进仓库而不是只停在对话里。** A1–A7 的会话读取的是 `AGENTS.md` 与
+`agent-prompts/**`；策略不落盘，Specialist 就不会输出 `Next Handoff`，A0 也就拿不到它需要的
+输入。所以本条同时改了 `AGENTS.md` §4.1（第 14 项）、`agent-prompts/COMMON.md` §8、
+`agent-prompts/A0-supervisor.md` §8。
+
+**后果。** 负责人从"每轮派活"退到"只在 Gate 与决策点出现"。代价是 A0 每轮要写更长的派发文本
+（每个 Agent 一份完整 prompt，而不是一句话）；收益是上下文与依赖的推断只做一次，且写在可审计的
+地方。风险是 A0 可能滥用 `AUTO_CONTINUE` 绕过本该询问的决策——因此七条被写成**同时成立**，
+且第 3 条把触发条件列成封闭清单：任何一条成立就必须停。
+
+---
+
+## D-054 · 2026-10-18 · accepted · M2-P0-1 / M2-P0-3 集成期的 Supervisor engineering decisions (M2)
+
+**背景。** A3（`5094ffd`）与 A1（`97f4a32`）分别交付 M2-P0-1 与 M2-P0-3，集成时出现若干需要定性的
+工程选择。它们都不改变产品语义、不改 frozen architecture 的实质、不改 wire，因此属于 Supervisor
+权限内，不上升为 Project Owner Decision。
+
+**1. A1 的 test seam：保留 `PersistenceAttachOptions.loadProviderConstructor`（批准）。**
+
+| 维度 | 判定 |
+| --- | --- |
+| 可见性 | **internal-only**：类型在 `collab/internal/persistence.ts`，不在 `CollaborativeSession`、不在 `collab/public.ts` |
+| 必需性 | **optional**，production caller 一律不传；不传时等价于 `createProviderConstructor` |
+| 用途 | 验证"provider constructor 抛错 → 租约回滚 → 全局复原"这条路径 |
+| 被否替代 | `vi.resetModules` 会重新加载模块，等于在测试里制造**第二个 module singleton**，而本任务要测的正是 module-level 租约栈；用它测出来的不是同一份状态 |
+| 边界 | 不扩大 public seam、不扩大 `CollaborativeSession`、不需要版本号变更 |
+
+**2. A3 的五项工程决定。**
+
+| # | 决定 | 理由 |
+| --- | --- | --- |
+| 1 | `DocumentStore.append` 返回 **`Promise<number>`**（committed sequence） | 与 `CONTRACTS.md` §14.7 一致：调用方需要知道自己拿到的序号，才能表达"已提交到哪一条"。`ARCHITECTURE` §7.3 的 `Promise<void>` 是冻结文本里的笔误，已修正 |
+| 2 | runtime capability check 必须验证**真实 data path**；删除"路径不可写时可退回 `:memory:`" | 生产启动若在不可写的目录上静默改用内存库，就是把 M1 的数据丢失模式换个地方重演。真实目录不可用 → **启动失败** |
+| 3 | compaction：M2-P0 只接受 **eviction-time compaction** | 空闲压缩属于性能优化，纳入 backlog；不在本 P0 扩大范围 |
+| 4 | 持久化内部故障的 WebSocket close code 保留 **1011** | 1011 = "服务端内部错误"，如实描述原因；1008 = policy violation，会误导客户端与运维。1008 仍用于协议/策略类错误 |
+| 5 | `attachWebSocketServer` 的 **no-store 兼容路径**接受为 internal/test seam | 见下三条义务 |
+
+**no-store seam 的三条义务（A7 后续检查）：**
+
+1. **production `index.ts` 必须始终打开 durable store**（`await openDocumentStore(config.dataPath)`）；
+2. **production durable 初始化失败必须拒绝启动**（`exitCode = 1` + 清晰诊断），不得降级；
+3. isolated tests 可以显式走 no-store 兼容路径，但该路径在 production 不可达。
+
+A3 还加了一条**反向**防线：`attachWebSocketServer` 在 `config.dataPath` 已配置却未收到 store 时
+**直接抛错**，让"忘了打开 store"变成启动失败而不是静默无持久化。这条比注释可靠，予以保留。
+
+**3. 符号重命名：`installGlobalIndexedDb` → `acquireIndexedDbLease`。**
+
+M2-P0-3 把"保存快照再还原"改为租约栈，"install"一词已不能描述行为。当前实现与设计文档统一改为
+`acquireIndexedDbLease`；`docs/agent-governance/A7-m1-p0-review.md` 与 D-039 的 M1 事实描述**保持
+原样**（它们记录的是当时的代码），D-039 §4 只加一句注解指向新名。
+
+**4. Tooling：本轮 root test runner 未复现挂起。**
+
+`pnpm test` 在 integrated HEAD 上 **42.7s 完成**（vitest 257 + server 105）。M1 期记录过的
+`TOOLING-P1` 间歇挂起本轮未复现，因此本轮不创建 tooling backlog，也不再把它与任何 Agent 的
+交付物关联。
+
+**后果。** 集成期没有出现需要项目负责人裁决的架构冲突；四项文本不一致（`append` 返回类型、
+`:memory:` 回退、compaction 范围、close code）被就地修正，两项（test seam、no-store seam）被
+明确追认并附上 A7 可核查的义务。
+
+---
+
+## D-055 · 2026-10-18 · accepted · M2-P0-2 seam 合入：A0 ownership 例外与 A6 交付追认 (M2)
+
+**背景。** A1（`6714ca2`）交付 presence 写侧 seam，A6（`231253a`）交付 durable persistence 的浏览器
+门禁。A1 的报告标 `partial`：**给冻结 seam 加必需成员会把 A2 的测试替身打断**，而那个文件属 A2。
+A6 的报告提出四项需要定性的问题。本条记录本轮的处置。
+
+### 1. A1 的卡点成立，A0 以具名 ownership 例外补齐（已解决）
+
+**被复现的事实**：`FakeCollaborativeSession` 用 `implements CollaborativeSession` 声明自己是
+**编译期实现者**；给接口加必需成员后 `apps/web/src/features/**` 出现 **21 个 tsc 错误**，A1 的代码
+**0 个**。`docs/CONTRACTS.md` §15.3 写的 "additive, no callers yet" 只描述了**调用方**，漏掉了
+**实现者** —— 这是冻结文本的措辞缺陷，不是 A1 的实现缺陷。
+
+**处置**：A0 在 `agent/a1-m2-presence` 上加一个提交（`054d87e`），只改
+`apps/web/src/features/editor/testing/fakeCollaborativeSession.ts` 一个文件（+23 行），提交信息
+点名例外。先例：D-039 §1。
+
+**比 A1 建议的写法更保守的地方**：替身**复用** `@insighthub/shared` 的 `parsePresencePatch`，
+而不是手抄一份合并/校验逻辑。理由与 A1 选择把校验放在 shared 的理由相同——替身若自带第二套规则，
+测试就会在"生产会拒绝的 patch"上通过，等于把 seam 要消除的漂移搬到测试里。
+
+**为什么不让 A2 先做**（否决选项 B）：A2 的分支此刻还没有 `parsePresencePatch`，只能先手抄一份，
+之后又要改一次；那是在引入该 seam 正要消除的重复规则。
+
+**为什么不允许把成员改成可选**（否决选项 C）：偏离 §15 冻结形状，且替身不实现时 A2 的测试会
+静默通过（presence 永不发布）。
+
+**结果**：本分支 typecheck 21 → **0**，`pnpm test` **284 + 105** 全绿，`pnpm build` exit 0；
+随后合入 `m2-stabilization`（`b40ba3c`）。
+
+### 2. A6 的交付追认
+
+| 项 | 处置 |
+| --- | --- |
+| harness 缺陷（`DevToolsActivePort` 读取竞态导致 `EBUSY` 假失败） | **接受修复**：假失败会污染证据，比产品缺陷更危险。属 A6 域（`tests/browser/lib/chrome.mjs`） |
+| `tests/browser/lib/durable-store.mjs` 绕开服务端直读 `insighthub.db` | **保留为常驻工具**。代价是与生产 schema 和 `Y.Text` 键名 `'content'` 耦合；schema 变更时必须同步，否则它会"找不到"（不会静默通过）。已列入 schema 变更 checklist |
+| F 的失败注入依赖 `SQLITE_BUSY_TIMEOUT_MS = 5000` | **接受**：调大该常量会让 F 超时变红，不会假绿 |
+| K / D / H / I 的覆盖率 | **不在本条决定**，作为 Gate 判据问题上报项目负责人（见报告 Need Owner Decision 第 1 条） |
+
+### 3. 无编辑 join 仍写 2 字节 update：记录为已接受偏差
+
+A6 观察到打开文档但不输入时，durable 日志每次 join 仍增加 1 行（2 字节）。原因：客户端回复的
+`SyncStep2` 会走 `apply → persist → broadcast`，空文档的 `encodeStateAsUpdate` 是 2 字节。
+
+**处置：接受为已记录的偏差，不修，进 backlog。** 理由：无内容污染、无数据丢失；修法是"不改变
+struct 时跳过 persist"，那要改持久化热路径并判断"空 update"，风险大于收益，且扩出 P0 范围。
+`ARCHITECTURE` §7.3 的 "persists it on first write" 已按实际行为改为 "on first join or write"，
+避免文档与实现继续分叉。
+
+**后果。** 本轮没有出现需要项目负责人裁决的技术冲突：一处集成顺序缺陷被复现并用最小补丁闭合，
+四处 A6 的建议被追认或记录，一项文档措辞与实现对齐。A1 报告的 `partial` 因此转为**已合入且全绿**。
+
+---
+
+## D-056 · 2026-10-18 · accepted · Persistence Acceptance Evidence 分层（M2-P0 Gate 判据） (M2)
+
+**背景。** `M2-P0 Exit Gate` 第 1 条原文是"A–K 全部通过"，且默认每项都要浏览器证据。A6 在真实
+Chrome + 真实进程 + 真实磁盘上交付后发现：其中 4 项在当前 production 实现下要么不需要浏览器证据
+（D/H/I 的确定性在 Node 层更精确），要么**结构上无法从 wire 形成**（K）。若维持字面要求，Gate 将
+永远无法通过；若直接删掉 K，则是**降低验收标准**——两者都不能接受。
+
+**决策（Project Owner，Option A）：分层而非删除。全部十一项仍必须 PASS，变化的只是每项所要求的
+evidence layer。**
+
+| 证据层 | 场景 | 要求 |
+| --- | --- | --- |
+| **Browser required** | **A / B / C / E / F / G / J** | 真实 Chrome + 真实后端进程（含 pid 变化）+ 真实磁盘；"内容还在"必须由**空 profile 的新浏览器**验证 |
+| **Node deterministic evidence sufficient** | **D / H / I** | 可复现的确定性用例（`apps/server/src/persistence/*.test.ts`），不要求浏览器 |
+| **K** | K | 见下 |
+
+**K 的正确表述（必须原样保留其限定条件，不得简化为"K 永久不可达"）：**
+
+> Node 级可控 hydration 测试 + room-state-machine / error-code 机制证明；
+> 在当前 production `SqliteDocumentStore` 的**同步 hydration** 实现下，wire/browser 无法稳定形成
+> hydration backlog，因此该项的 browser evidence 目前 **N/A**。
+> **若未来 store 变为真实 async I/O，或 hydration timing 改变，必须重新评估 K，并在可达时恢复
+> browser-level validation。**
+
+**机制根据（由 A6 实测，非推测）**：`SqliteDocumentStore.load` 虽为 `async`，内部 SQLite 工作同步，
+`await` 之后的续体在同一轮微任务内完成重放并释放屏障。因此**在 production 的同步 store 加常规浏览器
+客户端下，backlog 不可稳定构造**：客户端通常每帧一次 flush，微任务队列会在下一个宏任务前清空。
+实测：6001 行日志 + 400 帧突发，`room-joined` 27 ms 到达，无 `FRAME_TOO_LARGE`，服务端正常应答 553 帧。
+
+> **措辞更正（A7 · P3，2026-10-18）。** 本节原写"每个 WebSocket 帧是独立宏任务，因此 BINARY 帧抵达时
+> 房间**必然**已是 `READY`"——那说得过强。同一 TCP 读内的多帧会被 `ws` 在**同一宏任务**里同步 emit，
+> 而 `handleBinaryFrame` 的生命周期门在任何 `await` 之前同步判定，所以一次性写入 `join-room` + 大量
+> BINARY 帧的客户端**可以**进入 `HYDRATING`。这正是 K 的 Node 用例（用可控 store 阻塞 hydration）
+> 能稳定触发该分支的原因。**结论不变**：该分支是**正确且被 Node 覆盖**的，只是"浏览器层不可稳定构造"，
+> 不是"不可达"。不要因为它难构造就把它当成死代码删除。
+
+**明确不做的事：不为 K 添加 production delay seam。** 把一个不可达路径变成可注入延迟，会增加攻击面
+与热路径分支，只为让一个测试可见；代价与收益不成比例。若将来 store 真变为异步 I/O，K 自然可达，
+届时补浏览器证据即可。
+
+**后果。** Gate 判据与可获得的证据一致，且没有一项被豁免：K 仍有 Node 级用例与机制证明，只是承认
+它在当前实现下的浏览器层 N/A，并写明了**重新评估的触发条件**。代价是判据表达从"一句话"变成"分层
+表格"——但一句永远无法满足的话不是判据。
+
+---
+
+## D-057 · 2026-10-18 · accepted · M2-P0-2 是三步迁移；A7 不得在 step 3 前启动 (M2)
+
+**背景。** 上一轮派发 A2 后，A0 的 Next Handoff 写成了"A2 完成后 → A7 M2-P0 Exit Review"。这是
+**调度错误**：`M2-P0-2` 是三步迁移，A2 只做第 2 步。
+
+**正确的三步（顺序冻结，源自 D-045 §15.3）：**
+
+| 步骤 | 内容 | Owner |
+| --- | --- | --- |
+| 1 | `publishPresence` 附加 seam + `updatedAt` 归协作层 + 写入前校验 + `SHARED_CONTRACT_VERSION` 2→3 | A1 |
+| 2 | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt` | A2 |
+| 3 | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 |
+
+**决策：**
+
+1. **`M2-P0-2` 只有 step 1/2/3 全部完成并合入后，才可标记 COMPLETE。** step 2 完成不等于
+   presence seam 完成——此时调用方已迁移，但**类型层面仍允许**任何人写裸实例。
+2. **A7 的 M2-P0 Exit Review 必须在 step 3 合入之后启动。** 修正后的 DAG：
+
+```text
+A2 step 2  →  A0 integrate  →  A1 step 3  →  A0 integrate
+           →  integrated full gates + A6 regression（必要时）
+           →  A7 M2-P0 Exit Review
+```
+
+3. **step 3 的 base 必须是 step 2 合入后的 `m2-stabilization` HEAD**，否则收窄会先打断编辑器
+   （step 2 之前编辑器仍是裸实例的写者）。
+
+**为什么这个顺序不能压缩。** step 3 是"把写入口撤掉"：在 step 2 之前做，编辑器会编译失败或无法
+发布 presence；在 step 2 之后跳过它，`D-045` 承诺的"裸 `Awareness` 只作 binding input"就只是注释，
+而 `D-039 §3` 记录的缺口（写侧无治理）只修了一半——调用方守规矩了，类型并没有拦人。
+
+**后果。** M2-P0 的完成路径多了一个往返（A1 回来做 step 3），换到的是"契约承诺真的被类型执行"而
+不是"大家记得别乱写"。同时这条修正记录在案，避免下一次把三步当成一步。
+
+---
+
+## D-058 · 2026-10-18 · accepted · presence seam 收窄为 `AwarenessBinding`，`SHARED_CONTRACT_VERSION` 3 → 4 (M2-P0-2 step 3)
+
+**背景。** `M2-P0-2` 的三步里，前两步（seam、编辑器迁移）让**调用方**只走一条写路径，但
+`readonly awareness` 的类型仍是裸 `Awareness`：任何调用方可以重新 `setLocalState*`，绕过
+`parsePresencePatch` 校验与 `updatedAt` 归属，编译器不会拦。也就是说 §15.2 规则 4 当时只是**注释**。
+
+**决策。**
+
+1. **新增 `AwarenessBinding` 并把它作为 seam 上 `awareness` 的类型：**
+
+```ts
+export interface AwarenessBinding
+  extends Pick<awarenessProtocol.Awareness, 'clientID' | 'on' | 'off'> {
+  getStates(): ReadonlyMap<number, unknown>;
+}
+```
+
+2. **`SHARED_CONTRACT_VERSION` 3 → 4。** 这是**移除成员**，v3 下能编译的
+   `session.awareness.setLocalStateField(...)` 在 v4 下是 `TS2339`。机械证据：把 seam 改回宽类型后，
+   `@ts-expect-error` 立即变成 `TS2578`（未使用的指令）——同一份代码在两种类型下一个能编译、一个不能，
+   这就是 breaking 的定义。留在 3 等于向后续依赖版本号判断兼容性的 Agent 发错误信号。
+3. **`PROTOCOL_VERSION` 保持 2。** wire 未变：awareness 帧本来就带 cursor/selection，本轮只改 TS 面。
+4. **`getStates()` 声明为 `ReadonlyMap` 而不是 `Pick<Awareness,'getStates'>`。** 上游签名返回**活 Map**，
+   直接 `Pick` 会留下 `getStates().set(...)` 这条披着读接口的写通道。
+5. **`clientID` 保留为必需成员**（与我派发单里写的"可选"不一致）。依据是消费方实测：A2 的
+   `remoteCursors.ts` 中 `AwarenessView` 把 `clientID` 声明为必需，而 `session.awareness` 正是被传进那个
+   参数位置的。**下限由消费方实测决定，不由派发单的措辞决定**——这是本轮派发单的一处偏差，以实测为准。
+6. **`DocumentSession` 的类成员也收窄，不只是接口。** 先用实测确认：只改接口时 `typecheck` 是 0 错误，
+   但 `session.awareness.setLocalState(...)` 在 A1 自己的测试里**仍然可编译**（结构化协变允许宽类满足
+   窄接口）。验收要求"在 `apps/web/src/collab/**` 中不可编译"，所以必须连具体类一起收窄。
+
+**验收由负向类型断言承担，而非注释**：17 条 `@ts-expect-error`（shared 11 + collab 6），撤销收窄即
+`TS2578` 变红。A0 另用一次性探针在 `features/**` 中独立验证：`setLocalStateField` →
+`TS2339: Property 'setLocalStateField' does not exist on type 'AwarenessBinding'`，
+`getStates().set()` → `TS2339`（探针已删除）。
+
+**已知边界（不做的事）：** 只读是**类型级**的，运行时仍返回真实 `Map` 实例（不包装，以免破坏
+`collectValidAwarenessStates` 与 `y-protocols` 语义）。因此 `getStates() as Map<...>` 这类**显式**下行
+转换仍可写——那是一次代码评审能看见的逃逸，不是类型漏洞。要做成运行时不可写需要返回包装对象，
+代价是引入假的 `ReadonlyMap` 与身份不等，收益不抵成本。
+
+**后果。** `M2-P0-2` 三步齐备，"裸 `Awareness` 只作 binding input"从注释变成类型约束；代价是版本号
+跳到 4（workspace 内已被 `tsc` 全量覆盖，无隐藏破坏），以及 `getStates()` 的只读只是类型级这一条
+已记录的边界。
+
+---
+
+## D-059 · 2026-10-18 · accepted · M2-P0 Exit Review 后的四项修正与留痕补记 (M2)
+
+**背景。** A7 在 `be6955e` 上完成 M2-P0 Exit Review，结论 **APPROVE**，同时 pin 住 4 项缺陷
+（P1 文档状态、P2 跨域留痕、P3 措辞、P4 evidence note）。四项均非 Gate 阻断项，但 A7 判定 P1
+必须在 release commit 内修正后再打 tag。本条记录修正内容与 A0 的流程失误。
+
+### P1（文档事实错误，已修正）
+
+契约与架构的 **section 头**在 P0-1/P0-3 合入后仍写着 "NOT implemented" / "No code exists yet"，
+TASKS 的 M2 章节头与范围表也还写着"没有任何 M2 生产代码"。这是**与实现相反的事实陈述**：下一位读者
+（尤其 M3 的 AI 工作）会据此误判 store seam 是否可用。
+
+| 位置 | 修正 |
+| --- | --- |
+| `CONTRACTS` §14 标题与状态行 | `FROZEN design, NOT implemented` → **`IMPLEMENTED (M2-P0-1)`**，指向 `apps/server/src/persistence/**` |
+| `ARCHITECTURE` §7 标题与状态行 | 同上；并指向 §7.13 的集成期 scope 决定 |
+| `TASKS` M2 章节头 | `KICKOFF: architecture FROZEN, implementation NOT started` → **`M2-P0 Gate: PASS — reviewed by A7`** |
+| `TASKS` M2 范围表 | `M2-P0-1` / `M2-P0-3` 从 `FROZEN / NOT IMPLEMENTED` → **`COMPLETE` / `IMPLEMENTED`** |
+| `TASKS` 决策范围 | `D-040…D-052` → **`D-040…D-058`**（现已到 D-059） |
+| `TASKS` Gate 章节 | 新增**判定结果表**（六条判据逐项 PASS + 证据） |
+
+**为什么这属于 Gate 工作而不是"顺手改文案"**：里程碑 tag 一旦打出，这批文档就是该 tag 的说明。
+让 tag 里的权威文档断言"功能未实现"，比留一段没写的文档更糟。
+
+### P2（A0 的流程失误，已补记）
+
+A7 指出 A1 的 step 1/step 3 修改了未在 Owned Files 里枚举的文件：`packages/shared/src/index.ts`
+（版本常量）、`packages/shared/src/collab-session.test.ts`（负向类型测试），以及 step 3 删除了 A2
+测试替身里的 `as unknown as`（后者我在派发时已明确授权）。前两者是**我派发单的问题**，不是 A1 的：
+
+> 我的派发单写的是 `packages/shared/src/collab-session.ts`（仅 A0 预批准的那一处附加），
+> 但一次契约级变更必然要动版本常量与其契约测试。**枚举 Owned Files 时应按"这次变更最小完整面"
+> 写，而不是按"最不想被碰的那个文件"写。**
+
+留痕规则（本条之后生效）：契约级任务的 Owned Files 必须列全 `packages/shared/src/index.ts` 与
+对应 `*.test.ts`；跨域改动一律在决策记录里点名，不只在 commit message 里。
+
+### P3（措辞过强，已修正）
+
+D-056 原写"每个 WebSocket 帧是独立宏任务，因此 BINARY 帧抵达时房间**必然**已是 `READY`"。A7 指出
+这说过强：同一 TCP 读内的多帧会被 `ws` 在**同一宏任务**里同步 emit，而生命周期门在任何 `await`
+之前同步判定，因此一次性写入 `join-room` + 大量 BINARY 帧的客户端**可以**进入 `HYDRATING`——
+这也正是 K 的 Node 用例能稳定触发该分支的原因。
+
+**已改为"在 production 的同步 store 加常规浏览器客户端下，backlog 不可稳定构造"**，并明确：
+该分支**正确且被 Node 覆盖**，只是浏览器层难以稳定构造，**不是不可达**；不要因为难构造就当死代码删掉。
+**D-056 的结论与重评触发条件不变。**
+
+### P4（evidence note 过期，已修正）
+
+`tests/browser/suite/10-m2-durability.mjs` 的 no-edit-join 观察项 note 仍引用 §7.3 的旧措辞
+"on first write"，已改为指向 D-055 §3 与现行措辞 "the first join or write"。只改 evidence 文案，
+**未改任何断言**。
+
+**这条改动的 ownership 说明**：`tests/browser/**` 属 A6。为免为一个字符串再走一轮派发，A0 在 release
+commit 内直接修正，并在 commit message 点名（沿用 D-055 §1 的具名例外做法）。
+
+**后果。** 四项修正都不改变任何 Gate 判据，但让 release commit 里的文档与代码一致、审计链完整、
+且不会把"这个分支不可达"的错误印象留给后续里程碑。A7 的 P3 是一次**技术上正确**的纠错——它保护的是
+一个被 Node 用例覆盖、但观察者容易误判为死代码的分支。

@@ -57,7 +57,14 @@ interface IndexedDbProvider {
   destroy(): Promise<void> | void;
 }
 
-type IndexedDbProviderConstructor = new (name: string, doc: Y.Doc) => IndexedDbProvider;
+/**
+ * Constructor shape of the provider.
+ *
+ * Exported because `PersistenceAttachOptions` accepts an override for it: making
+ * provider *construction* fail is the only way to exercise the rollback path that
+ * `docs/DECISIONS.md` D-046 requires, and a real `y-indexeddb` import does not fail.
+ */
+export type IndexedDbProviderConstructor = new (name: string, doc: Y.Doc) => IndexedDbProvider;
 
 /**
  * Namespace prefix for the local replica.
@@ -86,14 +93,18 @@ export function ambientIndexedDb(): IndexedDbLike | undefined {
 /** The global object, seen as the single property this module installs. */
 type IndexedDbGlobalHost = { indexedDB?: unknown };
 
+/* ---------------------------------------------------------------------- *
+ * Injected-factory leases (M2-P0-3 / D-046)
+ * ---------------------------------------------------------------------- */
+
 /**
- * Install `factory` as the global `indexedDB` that `lib0` reads, returning a
- * function that restores the previous state of the property.
+ * Why the global is touched at all, and why installing is a *stack* rather than a
+ * snapshot.
  *
- * `lib0/indexeddb.js` (and therefore `y-indexeddb`) reads the **global**
- * `indexedDB` by bare identifier inside its helpers rather than taking it as a
- * parameter, so an injected implementation can only be honoured by putting it on
- * the global object for the lifetime of the provider.
+ * `lib0/indexeddb.js` (and therefore `y-indexeddb`) reads the **global** `indexedDB`
+ * by bare identifier inside its helpers rather than taking it as a parameter, so an
+ * injected implementation can only be honoured by putting it on the global object for
+ * the lifetime of the provider.
  *
  * ## Why this is not `globalThis.indexedDB = factory` (DEFECT P0-1)
  *
@@ -106,43 +117,170 @@ type IndexedDbGlobalHost = { indexedDB?: unknown };
  * ```
  *
  * That rejected `createCollaborativeSession` for every document in every real
- * browser — the editor never opened. Workspace Node tests could not see it, because
- * there the property is absent and assignment simply creates a new data property.
- * The browser's accessor is `configurable`, so `Object.defineProperty` may legally
- * replace it; that is the mechanism used here.
+ * browser — the editor never opened. The browser's accessor is `configurable`, so
+ * `Object.defineProperty` may legally replace it; that is the mechanism used here,
+ * and `restoreDescriptor` puts the original accessor back rather than a value.
  *
- * Two rules follow, and both are load-bearing:
+ * ## Why a stack instead of one snapshot (M2-P0-3 / D-039 §4)
  *
- * 1. **Do not touch the property when it already is the factory.** In production the
- *    factory resolved by `attachDocumentPersistence` *is* `globalThis.indexedDB`, so
- *    there is nothing to install and Chromium's descriptor is left exactly as it
- *    defined it. Only a genuinely different, injected implementation is written.
- * 2. **Restore the descriptor, not the previous value.** Capturing
- *    `Object.getOwnPropertyDescriptor` and putting that descriptor back restores the
- *    original accessor. Remembering only the *value* (what assignment did) would
- *    leave a writable data property on `window` forever after `destroy()` — a
- *    permanent mutation of the host page, and one that leaked whenever two sessions
- *    overlapped.
+ * A single snapshot ("remember the descriptor, put it back on release") is only
+ * correct for one handle at a time. With two overlapping sessions it silently
+ * corrupts the global:
+ *
+ * ```text
+ * A installs FA  → snapshots the ambient descriptor
+ * B installs FB  → snapshots A's descriptor
+ * A.destroy()    → restores the ambient descriptor  ← B is still live and now reads it
+ * B.destroy()    → restores A's descriptor          ← a fake factory, permanently global
+ * ```
+ *
+ * There is no error in that sequence; the second session just writes to the wrong
+ * database. The fix is a module-level stack of installation layers plus a reference
+ * count per layer, so a release only unwinds what is actually on top and nothing that
+ * another live holder still depends on (`docs/DECISIONS.md` D-046).
+ *
+ * The production browser path never reaches any of this: when the resolved factory
+ * already *is* the global, `acquireIndexedDbLease` returns a no-op and the page's
+ * property is not written at all, not even with an identical value.
  */
-function installGlobalIndexedDb(factory: IndexedDbLike): () => void {
+
+/**
+ * One installation layer.
+ *
+ * Layers are pushed in install order and popped from the top, so
+ * `previousDescriptor` always describes exactly the property state the layer found.
+ * Unwinding top-down therefore restores the property correctly even when the
+ * *releases* happen in a different order than the installs.
+ */
+interface IndexedDbLeaseLayer {
+  /** The factory this layer wrote onto the global. */
+  readonly factory: IndexedDbLike;
+  /** `globalThis.indexedDB` immediately before this layer installed. */
+  readonly previousDescriptor: PropertyDescriptor | undefined;
+  /** Live acquisitions of this layer. Reaches zero when the last holder releases. */
+  refCount: number;
+  /** True once `refCount` hit zero. A retired layer unwinds when it reaches the top. */
+  retired: boolean;
+}
+
+/** Release one acquisition. Idempotent: extra calls are no-ops, never errors. */
+export type IndexedDbLeaseRelease = () => void;
+
+/** Nothing was installed, so there is nothing to undo. */
+const noopRelease: IndexedDbLeaseRelease = () => {};
+
+/**
+ * The module-level installation stack.
+ *
+ * Empty on the production browser path and empty again after the last injected
+ * session releases. It is deliberately a module singleton rather than per-session
+ * state: the global property it protects is itself a module singleton, and the whole
+ * point is that concurrent sessions agree on who owns it.
+ */
+const leaseStack: IndexedDbLeaseLayer[] = [];
+
+function topLeaseLayer(): IndexedDbLeaseLayer | undefined {
+  if (leaseStack.length === 0) return undefined;
+  return leaseStack[leaseStack.length - 1];
+}
+
+/**
+ * Put `descriptor` back on the global property.
+ *
+ * `undefined` means the property did not exist (the Node test environment before a
+ * double is installed), so the correct restore is to delete it rather than to leave a
+ * stray `indexedDB: undefined` data property behind.
+ */
+function restoreDescriptor(
+  host: IndexedDbGlobalHost,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    delete (host as Record<string, unknown>).indexedDB;
+    return;
+  }
+  Object.defineProperty(host, 'indexedDB', descriptor);
+}
+
+/**
+ * Unwind every retired layer that has reached the top of the stack.
+ *
+ * A retired layer that is *not* on top stays put and is skipped over, because the
+ * layers above it are still live and the property must keep reading their factory.
+ * It unwinds on a later release, once everything above it is gone — which is what
+ * makes a non-LIFO teardown order safe.
+ */
+function drainRetiredLayers(): void {
   const host = globalThis as IndexedDbGlobalHost;
-  const previous = Object.getOwnPropertyDescriptor(host, 'indexedDB');
+  for (;;) {
+    const top = topLeaseLayer();
+    if (top === undefined || !top.retired) return;
+    leaseStack.pop();
+    // Identity guard: only put back what this layer installed. If something else has
+    // written the property since — a foreign writer, or a page that re-defined it —
+    // restoring here would clobber an owner this module does not own. The layer is
+    // retired either way; leaving the foreign value alone is the conservative choice.
+    if (host.indexedDB === top.factory) restoreDescriptor(host, top.previousDescriptor);
+  }
+}
 
-  // Rule 1. `host.indexedDB` is the very expression `lib0` evaluates, so identity
-  // with the factory means the provider will read the right object with no change.
-  if (host.indexedDB === factory) return () => {};
+/**
+ * Build the release function for **one acquisition** of `layer`.
+ *
+ * The idempotency flag is per acquisition, not per layer: two acquisitions can share
+ * a layer through its `refCount`, and each must decrement exactly once. Calling one
+ * acquisition's release twice is a no-op rather than an error, so a double
+ * `destroy()` cannot over-decrement and pop the global from under a sibling.
+ */
+function createLeaseRelease(layer: IndexedDbLeaseLayer): IndexedDbLeaseRelease {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    layer.refCount -= 1;
+    if (layer.refCount > 0) return;
+    layer.retired = true;
+    drainRetiredLayers();
+  };
+}
 
+/**
+ * Install `factory` as the global `indexedDB` that `lib0` reads, or register another
+ * reference to the installation that is already there.
+ *
+ * Returns the release function for this acquisition. Idempotent, and safe to call for
+ * a factory that needs no installation.
+ */
+function acquireIndexedDbLease(factory: IndexedDbLike): IndexedDbLeaseRelease {
+  const host = globalThis as IndexedDbGlobalHost;
+
+  // Fast path — and the entire production browser path. The property already reads as
+  // this factory, so `lib0` will resolve the right object with no write at all.
+  if (host.indexedDB === factory) {
+    const top = topLeaseLayer();
+    if (top !== undefined && top.factory === factory) {
+      // A second reference to the installation this module already made: count it so
+      // the first release does not remove a factory the second holder still needs.
+      top.refCount += 1;
+      return createLeaseRelease(top);
+    }
+    // The page's own factory: nothing was installed, nothing to restore.
+    return noopRelease;
+  }
+
+  const previousDescriptor = Object.getOwnPropertyDescriptor(host, 'indexedDB');
   try {
     Object.defineProperty(host, 'indexedDB', {
       value: factory,
       writable: true,
-      enumerable: previous?.enumerable ?? true,
+      enumerable: previousDescriptor?.enumerable ?? true,
       configurable: true,
     });
   } catch (error) {
     // A non-configurable property can be shadowed neither by assignment nor by
     // `defineProperty`. Report that as an unrecoverable local failure rather than
-    // letting `y-indexeddb` write to the wrong database.
+    // letting `y-indexeddb` write to the wrong database. Nothing was installed, so
+    // there is no layer to roll back.
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
       'the supplied IndexedDB implementation cannot be installed as the global the ' +
@@ -150,14 +288,9 @@ function installGlobalIndexedDb(factory: IndexedDbLike): () => void {
     );
   }
 
-  // Rule 2. Put the original descriptor back, whether it was an accessor or data.
-  return () => {
-    if (previous === undefined) {
-      delete (host as Record<string, unknown>).indexedDB;
-      return;
-    }
-    Object.defineProperty(host, 'indexedDB', previous);
-  };
+  const layer: IndexedDbLeaseLayer = { factory, previousDescriptor, refCount: 1, retired: false };
+  leaseStack.push(layer);
+  return createLeaseRelease(layer);
 }
 
 /** Load the provider class lazily so importing this module never touches IndexedDB. */
@@ -174,6 +307,16 @@ export interface PersistenceAttachOptions {
   key: string;
   /** Explicit IndexedDB implementation; defaults to the ambient global. */
   indexedDB?: IndexedDbLike;
+  /**
+   * Override the `y-indexeddb` module load.
+   *
+   * Test seam, in the same spirit as `DocumentSessionDependencies.attachPersistence`
+   * and the injectable socket factory. It exists so the construction-failure rollback
+   * required by `docs/DECISIONS.md` D-046 is verifiable: a real dynamic import of an
+   * installed package does not fail, so without a seam that branch is unfalsifiable.
+   * Production callers never pass it.
+   */
+  loadProviderConstructor?: () => Promise<IndexedDbProviderConstructor>;
 }
 
 /**
@@ -198,9 +341,12 @@ export async function attachDocumentPersistence(
     );
   }
 
-  const restoreGlobal = installGlobalIndexedDb(factory);
+  // Acquire before constructing: `lib0` resolves the global when the provider opens
+  // its database, which happens inside the constructor.
+  const releaseLease = acquireIndexedDbLease(factory);
   try {
-    const Provider = await createProviderConstructor();
+    const loadProvider = options.loadProviderConstructor ?? createProviderConstructor;
+    const Provider = await loadProvider();
     const provider = new Provider(options.key, options.doc);
 
     let destroyPromise: Promise<void> | undefined;
@@ -209,20 +355,25 @@ export async function attachDocumentPersistence(
     return {
       whenSynced,
       destroy(): Promise<void> {
-        // Idempotent: repeated teardown must not double-close the database or
-        // restore the injected global twice.
+        // Idempotent: repeated teardown must not double-close the database. The lease
+        // release carries its own per-acquisition idempotency as well, so even a
+        // destroy path that called it twice could not over-decrement a shared layer.
         destroyPromise ??= (async () => {
           try {
             await provider.destroy();
           } finally {
-            restoreGlobal();
+            releaseLease();
           }
         })();
         return destroyPromise;
       },
     };
   } catch (error) {
-    restoreGlobal();
+    // Construction failed, so this acquisition never produced a provider and has no
+    // `destroy()` to release it. Release here or the layer outlives the failure: the
+    // next session in this realm would resolve a factory nobody owns instead of the
+    // ambient one (`docs/DECISIONS.md` D-046 row "construction failure rollback").
+    releaseLease();
     throw error;
   }
 }

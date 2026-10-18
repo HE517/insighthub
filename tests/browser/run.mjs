@@ -1,24 +1,30 @@
 /**
- * Entry point for the M1-A6 real-browser suite.
+ * Entry point for the A6 real-browser suite (M1 regression + M2 durable persistence).
  *
  * Runs a **real** Chromium/Edge (driven over the DevTools Protocol), a **real**
- * backend, a **real** Vite dev server and a **real** IndexedDB, and asserts the M1
- * collaboration contract against them.
+ * backend process, a **real** Vite dev server, a **real** IndexedDB and — since
+ * M2 — a **real** SQLite store on disk that survives a real process crash.
  *
  * Usage (from the repository root):
  *
  * ```bash
  * pnpm build                       # packages/shared must be compiled for the oracle
  * node tests/browser/run.mjs
- * node tests/browser/run.mjs --filter indexeddb
- * node tests/browser/run.mjs --headed
+ * node tests/browser/run.mjs --filter m2/ --headed
  * node tests/browser/run.mjs --list
  * ```
  *
  * Exit code is 0 only when every scenario passed. Nothing is retried, and no
  * scenario substitutes a simulation for the browser.
+ *
+ * ## Harness preconditions and cleanup
+ *
+ * The suite refuses to start when its ports are occupied, and after a run it
+ * verifies that the ports are released and that no child process survived. Both are
+ * reported, because a suite that leaks a server or a browser is not evidence of
+ * anything except its own hygiene.
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -33,7 +39,7 @@ import { newPage } from './lib/cdp.mjs';
 import { Browser } from './lib/chrome.mjs';
 import { artifactsDir, repoRoot } from './lib/deps.mjs';
 import { renderMarkdown, Runner } from './lib/harness.mjs';
-import { DevStack } from './lib/stack.mjs';
+import { DevStack, isPortClosed } from './lib/stack.mjs';
 
 /** Parse `--flag`, `--key value` and `--key=value`. */
 function parseArgs(argv) {
@@ -58,13 +64,35 @@ function parseArgs(argv) {
  * mistaken for an environment failure).
  */
 async function suiteModules() {
-  const { readdir } = await import('node:fs/promises');
   const directory = path.join(repoRoot, 'tests', 'browser', 'suite');
   const entries = await readdir(directory);
   return entries
     .filter((name) => name.endsWith('.mjs'))
     .sort()
     .map((name) => path.join(directory, name));
+}
+
+/** Refuse to start when another process owns a port this suite needs. */
+async function assertPortsFree(ports) {
+  const busy = [];
+  for (const port of ports) {
+    if (!(await isPortClosed(port))) busy.push(port);
+  }
+  if (busy.length > 0) {
+    throw new Error(
+      `port(s) ${busy.join(', ')} already accept connections; the suite must run serially ` +
+        'against its own stack. Stop whatever owns them and re-run.',
+    );
+  }
+}
+
+/** Verify the ports were released after the run. */
+async function assertPortsReleased(ports) {
+  const stillOpen = [];
+  for (const port of ports) {
+    if (!(await isPortClosed(port))) stillOpen.push(port);
+  }
+  return stillOpen;
 }
 
 async function main() {
@@ -76,16 +104,21 @@ async function main() {
 
   const stack = new DevStack({ repoRoot });
   let browser;
+  /** Pages this run opened, closed between scenarios. */
   const openPages = [];
+  /** Extra browsers launched for "a brand-new device" checks. */
+  const extraBrowsers = new Set();
 
   /**
    * Open the application in a fresh browser tab.
    *
    * `documentId` switches the workspace the same way a user does (focus the field,
-   * replace it, press Enter).
+   * replace it, press Enter). `target` selects a specific browser instance, which is
+   * how a durability scenario proves the content came from the server: a browser with
+   * an empty profile has no client-side replica to read from.
    */
-  async function newAppPage({ documentId } = {}) {
-    const page = await openInstrumentedPage();
+  async function newAppPage({ documentId, target } = {}) {
+    const page = await openInstrumentedPage({ target });
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
@@ -97,12 +130,48 @@ async function main() {
   }
 
   /** Instrumented page on the app URL, without waiting for a usable session. */
-  async function openInstrumentedPage() {
-    const page = await newPage(browser.connection);
+  async function openInstrumentedPage({ target } = {}) {
+    const connection = (target ?? browser).connection;
+    const page = await newPage(connection);
     openPages.push(page);
     await page.addInitScript(instrumentSource);
     await page.goto(stack.appUrl);
     return page;
+  }
+
+  /**
+   * Launch an extra browser with an empty profile, tracked for cleanup.
+   *
+   * A durability scenario needs several *devices* at once (concurrent cold joins), so
+   * this is exposed separately from `withFreshBrowser`.
+   */
+  async function launchBrowser() {
+    const fresh = await Browser.launch({ headed: options.headed });
+    extraBrowsers.add(fresh);
+    return fresh;
+  }
+
+  async function closeBrowser(fresh) {
+    if (fresh === undefined || fresh === null) return;
+    extraBrowsers.delete(fresh);
+    await fresh.close().catch(() => {});
+  }
+
+  /**
+   * Run `fn` against a **brand-new browser with an empty profile**, then close it.
+   *
+   * This is the harness's definition of "a new device": no IndexedDB replica, no
+   * session storage from the writer. Without it, a reload would be answered by the
+   * client's own local replica and the test would silently be measuring IndexedDB
+   * instead of server durability.
+   */
+  async function withFreshBrowser(fn) {
+    const fresh = await launchBrowser();
+    try {
+      return await fn(fresh);
+    } finally {
+      await closeBrowser(fresh);
+    }
   }
 
   const context = {
@@ -113,6 +182,9 @@ async function main() {
     artifactsDir,
     newAppPage,
     openInstrumentedPage,
+    withFreshBrowser,
+    launchBrowser,
+    closeBrowser,
     runner,
   };
 
@@ -128,6 +200,7 @@ async function main() {
     return 0;
   }
 
+  const requiredPorts = [stack.webPort, stack.serverPort];
   const environment = {
     browser: undefined,
     headed: options.headed,
@@ -135,16 +208,26 @@ async function main() {
     node: process.version,
     appUrl: stack.appUrl,
     backendUrl: `http://127.0.0.1:${stack.serverPort}`,
+    durableStore:
+      'per-run temporary directory passed as INSIGHTHUB_DATA_PATH; a scenario that needs a ' +
+      'clean store restarts the server on a new directory, and a restart scenario reuses the ' +
+      'same directory. Removed on exit; the development default is never touched.',
   };
 
   let exitCode = 0;
+  let cleanup = null;
   try {
     console.log('');
+    console.log('preflight: ports must be free (the suite runs serially)');
+    await assertPortsFree(requiredPorts);
+    console.log(`  ${requiredPorts.join(', ')} free`);
 
     console.log('starting the dev stack…');
     await stack.start();
     console.log(`  web ${stack.appUrl}`);
     console.log(`  backend http://127.0.0.1:${stack.serverPort}`);
+    console.log(`  durable store ${stack.dataPath}`);
+    environment.dataPath = stack.dataPath;
 
     console.log('launching the browser…');
     browser = await Browser.launch({ headed: options.headed });
@@ -171,8 +254,8 @@ async function main() {
         for (const page of openPages.splice(0, openPages.length)) {
           await page.close().catch(() => {});
         }
-        // A scenario is allowed to stop the backend to create a real outage; it must
-        // never leave it stopped for the next scenario.
+        // A scenario is allowed to crash the backend to prove restart recovery; it must
+        // never leave it down for the next scenario.
         await stack.startServer().catch(() => {});
       },
     });
@@ -204,8 +287,35 @@ async function main() {
     exitCode = 2;
   } finally {
     if (!options.keepOpen) {
-      await stack.dispose().catch(() => {});
+      for (const extra of [...extraBrowsers]) {
+        await extra.close().catch(() => {});
+      }
+      extraBrowsers.clear();
+      const removed = await stack.dispose().catch(() => []);
       await browser?.close().catch(() => {});
+      // Postflight: the run must not leave the environment behind.
+      const stillOpen = await assertPortsReleased(requiredPorts);
+      cleanup = { portsStillOpen: stillOpen, removedDataPaths: removed ?? [] };
+      console.log('');
+      console.log('postflight:');
+      console.log(
+        `  ports ${requiredPorts.join(', ')}: ${stillOpen.length === 0 ? 'released' : `STILL OPEN ${stillOpen.join(', ')}`}`,
+      );
+      console.log(`  temporary data directories removed: ${(removed ?? []).length}`);
+      if (stillOpen.length > 0 && exitCode === 0) exitCode = 2;
+    }
+  }
+
+  if (cleanup !== null) {
+    // Fold the cleanup record into the machine-readable report when one exists.
+    try {
+      const reportPath = path.join(artifactsDir, 'results.json');
+      const { readFile } = await import('node:fs/promises');
+      const report = JSON.parse(await readFile(reportPath, 'utf8'));
+      report.cleanup = cleanup;
+      await writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+    } catch {
+      /* the report may not exist when the run failed before writing it */
     }
   }
 

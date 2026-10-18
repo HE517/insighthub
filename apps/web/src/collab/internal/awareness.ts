@@ -10,6 +10,7 @@ import {
   collectValidAwarenessStates,
   type AwarenessState,
   type CollaboratorInfo,
+  type PresencePatch,
 } from '@insighthub/shared';
 
 import { REMOTE_ORIGIN } from './origins.js';
@@ -48,6 +49,14 @@ export interface CollaborationAwareness {
   getCollaborators(): readonly CollaboratorInfo[];
   /** The local entry exactly as this client published it (or `null`). */
   getLocalState(): AwarenessState | null;
+  /**
+   * Publish presence fields in **one** local-state write (M2-P0-2).
+   *
+   * `updatedAt` is stamped here — the collaboration layer owns it. The patch must
+   * already be validated; `DocumentSession.publishPresence` runs
+   * `parsePresencePatch` before calling this.
+   */
+  publishPresence(patch: PresencePatch): void;
   /** Update one field of the local entry (cursor/selection/identity). */
   setLocalStateField(field: 'cursor' | 'selection' | 'user', value: unknown): void;
   /** Apply an inbound awareness payload from the wire. */
@@ -157,6 +166,46 @@ export class AwarenessManager implements CollaborationAwareness {
     const current = this.raw.getLocalState();
     if (current === null) return;
     this.raw.setLocalState({ ...current, [field]: value });
+  }
+
+  /**
+   * Publish presence in one write.
+   *
+   * Why this is not just three `setLocalStateField` calls (what the editor used to do):
+   *
+   * 1. **One awareness update, not three.** `setLocalState` bumps the awareness clock
+   *    and emits `update` every time, and the sync provider turns each emit into a
+   *    frame. Publishing cursor, selection and `updatedAt` separately cost three
+   *    frames per caret move.
+   * 2. **`updatedAt` is owned here.** The caller cannot forget it, cannot supply it,
+   *    and cannot leave it stale.
+   * 3. **The merged state is validated before the write.** The patch is already
+   *    validated by `parsePresencePatch`, but the merge base comes from the live
+   *    awareness entry, which the raw instance can still reach. Refusing to publish a
+   *    state the read side would reject keeps "what this client publishes" inside the
+   *    contract even in a migration window where a caller still writes the raw object.
+   */
+  publishPresence(patch: PresencePatch): void {
+    if (this.disposed) return;
+    const current = this.raw.getLocalState();
+    if (current === null) return;
+
+    const next: Record<string, unknown> = { ...current };
+    // `undefined` means "leave unchanged"; `null` means "clear". Spread only the keys
+    // the caller actually named, so a cursor-only patch cannot clear the selection.
+    if (patch.cursor !== undefined) next.cursor = patch.cursor;
+    if (patch.selection !== undefined) next.selection = patch.selection;
+    // The collaboration layer owns this field, unconditionally.
+    next.updatedAt = Date.now();
+
+    const parsed = awarenessStateSchema.safeParse(next);
+    if (!parsed.success) {
+      const detail = parsed.error.issues
+        .map((issue) => `${issue.path.join('.') || '<state>'}: ${issue.message}`)
+        .join('; ');
+      throw new Error(`refusing to publish an invalid local presence state: ${detail}`);
+    }
+    this.raw.setLocalState(parsed.data);
   }
 
   applyRemoteUpdate(bytes: Uint8Array): void {

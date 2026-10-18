@@ -176,6 +176,16 @@
       documentId: null,
       openedAt: Date.now(),
       closedAt: null,
+      /**
+       * The WebSocket close code the server chose.
+       *
+       * Recorded because the persistence-failure contract is specified in terms of it:
+       * an internal storage failure must close with **1011** ("internal error"), not
+       * 1008 ("policy violation") — `docs/DECISIONS.md` D-054 item 4. Without this the
+       * only observable would be "the socket closed", which cannot distinguish the two.
+       */
+      closeCode: null,
+      closeReason: null,
       framesIn: 0,
       framesOut: 0,
       handlers: { open: null, message: null, error: null, close: null },
@@ -239,6 +249,8 @@
       });
       this.addEventListener('close', (event) => {
         record.closedAt = Date.now();
+        record.closeCode = typeof event?.code === 'number' ? event.code : null;
+        record.closeReason = typeof event?.reason === 'string' ? event.reason : null;
         if (record.handlers.close !== null) record.handlers.close.call(this, event);
       });
     }
@@ -469,9 +481,28 @@
         url: socket.url,
         openedAt: socket.openedAt,
         closedAt: socket.closedAt,
+        closeCode: socket.closeCode,
+        closeReason: socket.closeReason,
         framesIn: socket.framesIn,
         framesOut: socket.framesOut,
         handlerAttached: socket.handlers.message !== null,
+      }));
+  };
+
+  /**
+   * Every close code this page has observed, oldest first.
+   *
+   * Used by the persistence-failure scenario to assert 1011 rather than merely
+   * "something closed".
+   */
+  qa.closeCodes = function closeCodes() {
+    return qa.sockets
+      .filter((socket) => socket.closedAt !== null)
+      .map((socket) => ({
+        index: socket.index,
+        documentId: socket.documentId,
+        code: socket.closeCode,
+        reason: socket.closeReason,
       }));
   };
 
@@ -505,6 +536,10 @@
       ).length,
       droppedAfterDetach: qa.droppedAfterDetach ?? 0,
       errors: qa.errors.length,
+      /** Close codes seen so far, so a report can name 1011 without a second call. */
+      closeCodes: qa
+        .sockets.filter((socket) => socket.closedAt !== null)
+        .map((socket) => socket.closeCode),
       offline,
     };
   };

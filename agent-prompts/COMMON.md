@@ -72,7 +72,7 @@ wire format、不得发明错误码、不得私建第二套 framing。
 ## 6. 任务结束必须交付工作报告
 
 任务完成（或被阻塞）后，**必须**按 [`../AGENTS.md`](../AGENTS.md) 的
-**Task Completion Report** 输出完整**中文**工作报告，包含其要求的全部 13 项。
+**Task Completion Report** 输出完整**中文**工作报告，包含其要求的全部 14 项（含末项 `Next Handoff`）。
 
 - 缺任一必填项 = 任务不被接受，不得标记 DONE。
 - `FAIL` 与"未验证"都是合法结论，只要如实报告；把红的说成绿的才是严重问题。
@@ -85,3 +85,27 @@ wire format、不得发明错误码、不得私建第二套 framing。
 - 你依赖别人的接口时，不要读别人的私有实现来"迁就"它；依赖应当只走公共面。
   发现必须触碰私有面才能对接，立即 `CONTRACT BLOCKER`。
 - 集成永远由 A0 收口；你完成的是分支上的聚焦提交，不是合并。
+
+---
+
+## 8. 交接声明（Next Handoff）
+
+A1–A7 的工作报告**必须**在最后追加一段结构化交接声明：
+
+```text
+## Next Handoff
+
+Handoff Status:          AUTO_CONTINUE / OWNER_DECISION_REQUIRED / STOP
+Recommended Next Agent:  <agent id 或 none>
+Base:                    <branch> @ <sha>
+Why:                     <一两句：现在解锁了什么>
+Dependencies satisfied:  <下一棒可以依赖什么：已冻结契约 / 已合并 seam / 门禁全绿 …>
+Copy-paste Prompt:       <可直接交给下一棒的完整任务文本>
+```
+
+- **正式跨 Agent 调度权属于 A0。** 你写的 `Recommended Next Agent` 是给 A0 的输入，不是"我已经
+  派了活"；不要假设下一棒已经开始。
+- 只有在 `agent-prompts/A0-supervisor.md` §8.1 的**七条**同时成立时才可写 `AUTO_CONTINUE`。
+  不确定就写 `OWNER_DECISION_REQUIRED`，并**指名**需要决策的那一点。
+- 你不能自行跨越的 Gate（即使门禁全绿）：merge 到 `main`、milestone CLOSED、删除 milestone tag、
+  push 或创建 remote、改 milestone scope、推翻冻结架构。

@@ -104,7 +104,7 @@ Short form (the table in `agent-prompts/` is authoritative):
 **A task is not DONE until its Task Completion Report is delivered.** A report with
 a missing required item is not accepted, even if the code is perfect.
 
-Every formal task ends with a **Chinese** report containing all 13 sections below.
+Every formal task ends with a **Chinese** report containing all 14 sections below.
 Report conclusions first, then evidence, then risk.
 
 ### 4.1 Required sections
@@ -175,6 +175,40 @@ and what it actually means for InsightHub.
 
 **13. Git 状态**
 `git status` summary, branch, commit, and whether the tree is clean or dirty.
+**14. Next Handoff**
+
+Every A1–A7 report ends with a machine-readable handoff block:
+
+```text
+## Next Handoff
+
+Handoff Status:
+AUTO_CONTINUE / OWNER_DECISION_REQUIRED / STOP
+
+Recommended Next Agent:
+<agent id, or "none">
+
+Base:
+<branch> @ <sha>      ← the commit the next agent must branch from
+
+Why:
+<one or two sentences: what is now unblocked>
+
+Dependencies satisfied:
+<what the next agent may rely on: frozen contract, merged seam, green gate, …>
+
+Copy-paste Prompt:
+<the full task prompt that can be handed to the next agent verbatim>
+```
+
+- A specialist may **recommend** the next agent; **cross-agent dispatch authority belongs to A0**.
+  A recommendation is input to A0, not an instruction that starts work.
+- `AUTO_CONTINUE` may only be claimed when all seven conditions in
+  `agent-prompts/A0-supervisor.md` §8.1 hold. If unsure, write `OWNER_DECISION_REQUIRED` and
+  **name the specific decision point** — never a vague "needs review".
+- No specialist may cross these gates on its own, even with everything green: merge to `main`,
+  milestone CLOSED, deleting a milestone tag, push / creating a remote, changing milestone
+  scope, overturning frozen architecture.
 
 ### 4.2 Report integrity
 

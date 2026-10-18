@@ -38,8 +38,9 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import type { ServerConfig } from './config.js';
 import { Heartbeat } from './rooms/heartbeat.js';
-import { RoomRegistry, type RoomRegistryOptions } from './rooms/registry.js';
+import { RoomRegistry, type HydrationOutcome, type RoomRegistryOptions } from './rooms/registry.js';
 import type { SocketContext } from './rooms/context.js';
+import type { DocumentRoom } from './rooms/room.js';
 
 export interface WebSocketHandle {
   readonly wss: WebSocketServer;
@@ -115,6 +116,17 @@ export function attachWebSocketServer(
   config: ServerConfig,
   options: WebSocketServerOptions = {},
 ): WebSocketHandle {
+  // Fail closed on an ambiguous wiring: a config that names a data directory but arrives
+  // without a store means somebody forgot the `openDocumentStore()` step. Continuing here
+  // would silently run without durable storage — the M1 data-loss mode that `M2-P0-1`
+  // removes (`docs/DECISIONS.md` D-051).
+  if (options.store === undefined && config.dataPath !== undefined) {
+    throw new Error(
+      'durable storage is configured (config.dataPath) but no DocumentStore was supplied: ' +
+        'await openDocumentStore(config.dataPath) and pass it as options.store',
+    );
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   const registry = new RoomRegistry(options);
   const heartbeat = new Heartbeat({
@@ -169,6 +181,64 @@ export function attachWebSocketServer(
   };
 
   /**
+   * Acknowledge a join, after the room's hydration barrier has released.
+   *
+   * ## The two-phase join (`docs/DECISIONS.md` D-043)
+   *
+   * Membership is already applied synchronously by `registry.joinRoom`. What this function
+   * does is wait for **content readiness** and only then send `room-joined`, which the
+   * contract already defines as the "before the data plane" gate (`docs/CONTRACTS.md` §4).
+   * Deferring the acknowledgement needs no protocol change; making `joinRoom` itself async
+   * would have reopened the intermediate-state bug M1 closed.
+   *
+   * ## Why the result is re-validated after the await
+   *
+   * A socket can close, or be atomically replaced into another room, while the load is in
+   * flight. Sending `room-joined` then would acknowledge a room the client is no longer in —
+   * or write to a dead socket (`docs/DECISIONS.md` D-049 obligation 1). So the barrier
+   * result is **discarded** in that case: no delayed acknowledgement, no re-join, no flush.
+   */
+  const acknowledgeJoin = async (
+    context: SocketContext,
+    documentId: string,
+    peers: string[],
+    room: DocumentRoom,
+    barrier: Promise<HydrationOutcome>,
+    requestId: string | undefined,
+  ): Promise<void> => {
+    const outcome = await barrier;
+
+    if (!outcome.ok) {
+      // `UNHEALTHY`: the registry already sent INTERNAL_ERROR to every participant and
+      // closed them. `evicted`: the room went away while loading; there is nobody to
+      // acknowledge and nothing to report.
+      return;
+    }
+
+    // Re-validate (see the doc comment): the socket may have left, been replaced into
+    // another room, or closed while the load was running.
+    if (!context.peer.isOpen()) return;
+    if (context.activeRoom !== room) return;
+
+    sendControl(
+      context,
+      createRoomJoinedMessage(
+        { documentId, connectionId: context.connectionId, peers },
+        requestId === undefined ? {} : { requestId },
+      ),
+    );
+
+    // Only now may the data plane carry anything for this room (§4). A joiner is told about
+    // collaborators who announced before it arrived, otherwise presence stays invisible
+    // until they happen to publish again (up to the 30 s awareness renewal).
+    room.sendExistingAwarenessTo(context);
+
+    // Frames a non-conforming client sent while the room was still hydrating are replayed
+    // only after its acknowledgement, so the contract's ordering holds for their author.
+    await registry.releaseHydrationBacklog(room);
+  };
+
+  /**
    * Route one TEXT control frame.
    *
    * Parsing uses the shared parser, which never throws and rejects unknown `type`
@@ -201,21 +271,23 @@ export function attachWebSocketServer(
         fail(context, result.code, result.message);
         return;
       }
-      sendControl(
+      // Deliberately not awaited here: membership is synchronous (that is the invariant),
+      // and the acknowledgement is what waits (D-043). A rejection is impossible — the
+      // barrier promises are built to settle, never to throw — but the transport still
+      // must not leak an unhandled rejection if that ever changes.
+      void acknowledgeJoin(
         context,
-        createRoomJoinedMessage(
-          {
-            documentId: result.documentId,
-            connectionId: context.connectionId,
-            peers: result.peers,
-          },
-          requestId === undefined ? {} : { requestId },
-        ),
-      );
-      // Only now may the data plane carry anything for this room (§4). A joiner is told
-      // about collaborators who announced before it arrived, otherwise presence stays
-      // invisible until they happen to publish again (up to the 30 s awareness renewal).
-      result.room.sendExistingAwarenessTo(context);
+        result.documentId,
+        result.peers,
+        result.room,
+        result.barrier,
+        requestId,
+      ).catch((error: unknown) => {
+        console.error(
+          `[ws] connection ${context.connectionId} join acknowledgement failed:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
       return;
     }
 
@@ -250,10 +322,28 @@ export function attachWebSocketServer(
       if (liveContext === undefined) return;
 
       if (isBinary) {
-        // Framing, bounds and error classification are entirely the shared codec's
-        // and the registry's job; the transport only delivers the outcome.
-        const outcome = registry.handleBinaryFrame(liveContext, toUint8Array(raw));
-        if (!outcome.ok) fail(liveContext, outcome.code, outcome.message);
+        // Framing, bounds, lifecycle gating and error classification are entirely the shared
+        // codec's and the registry's job; the transport only delivers the outcome.
+        //
+        // `handleBinaryFrame` is async because persistence is awaited before broadcast
+        // (`apply → persist → broadcast`, D-044). Per-document ordering does not depend on
+        // this handler awaiting anything: the room's FIFO queue owns that, so two messages
+        // arriving back to back still persist in arrival order.
+        void registry
+          .handleBinaryFrame(liveContext, toUint8Array(raw))
+          .then((outcome) => {
+            if (!outcome.ok) fail(liveContext, outcome.code, outcome.message);
+          })
+          .catch((error: unknown) => {
+            // The registry converts its own failures into frozen codes; reaching here means
+            // a genuine programming error. Log it and close, rather than leaving a socket in
+            // an unknown state.
+            console.error(
+              `[ws] connection ${connectionId} binary frame failed:`,
+              error instanceof Error ? error.message : String(error),
+            );
+            liveContext.peer.close(1011, 'INTERNAL_ERROR');
+          });
         return;
       }
 

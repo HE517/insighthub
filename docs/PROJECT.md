@@ -36,7 +36,7 @@ MVP is delivered in milestones. Only the marked milestone is in scope at a time.
 | --- | --- | --- |
 | **M0 Bootstrap** | Monorepo, shared contracts, `/health`, WebSocket `connected` handshake, React shell with CodeMirror, typecheck/test/build green | **done** |
 | **M1 Collaboration core** | `Y.Doc`/`Y.Text` 绑定 CodeMirror、WebSocket 文档房间 + 同步、IndexedDB 持久化、离线编辑、重连合并 | **CLOSED（已收口）** —— 已以 `--no-ff` merge commit `1fa2abe` 合入 `main`。实现、A6 浏览器/Chaos 门禁（真实 Chromium 27/27）、P0 稳定化与 A7 终审（**APPROVE**，C1/C2 均 CLOSED）全部完成；合并后在 `main` 上重跑 typecheck / test / build / browser 全绿。**已知限制：没有服务端持久化（`M2-P0-1`）**，它不是 M1 未完成项，而是 M2 backlog 的首项；另两项 M2 backlog：presence 写侧 seam（`M2-P0-2`）、注入式 IndexedDB 工厂引用计数（`M2-P0-3`）——见 `docs/DECISIONS.md` D-039 |
-| **M2 Permissions & state** | 认证、文档级 RBAC（服务端权威）、请求取消、过期响应与切文档竞态防护 | **未开始** —— 承接 M1 带出的三项 P0，其中服务端持久化优先（`docs/TASKS.md` M2-P0） |
+| **M2 Durable persistence & the two M1 gaps** | 服务端 durable persistence、presence 写侧 seam、注入式 IndexedDB 工厂生命周期；随后 Phase 2：permission & authentication consistency | **KICKOFF 完成：架构 FROZEN，实现 NOT STARTED** —— 两段式：`M2-P0 Exit Gate`（A–K + P0-2 + P0-3 + A6 + A7 P0 review）→ `M2 Phase 2 / 权限认证` → `M2 final gate` → M3 AI。**M2-P0 Gate ≠ M2 CLOSED**；权限未处理前 M2 不得标完成。设计见 `docs/ARCHITECTURE.md` §7、`docs/CONTRACTS.md` §14–§16、`docs/DECISIONS.md` D-040…D-052。**没有任何 M2 生产代码。** |
 | **M3 AI suggestions** | AI request pipeline, suggestion + diff, Diff Preview, Accept/Reject/Undo applied via Yjs transaction | not started |
 | **M4 Hardening** | Markdown preview and editor performance, virtualized document/tree lists, chaos hardening beyond the M1-A6 gate (which already covers reconnect, duplicate and out-of-order frames) | not started |
 

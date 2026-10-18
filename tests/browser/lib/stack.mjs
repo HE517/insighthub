@@ -1,5 +1,5 @@
 /**
- * Start, stop and restart the **real** dev stack for the A6 browser suite.
+ * Start, stop, **crash** and restart the real dev stack for the A6 suite.
  *
  * Two real processes are spawned, exactly as `pnpm dev` would:
  *
@@ -7,11 +7,27 @@
  * - `apps/web` — the real Vite dev server, which proxies `/ws` to the backend.
  *
  * They are spawned through `node <entry>` rather than through `pnpm` so that the
- * child we hold a handle to *is* the server. That matters for the offline tests:
- * `stopServer()` must be an unambiguous, verifiable process death, and
- * `startServer()` must bring the identical configuration back.
+ * child we hold a handle to *is* the server. That matters for the durability
+ * scenarios: killing the server must be an unambiguous, verifiable process death,
+ * and starting it again must bring the identical configuration back.
+ *
+ * ## Durable-storage isolation (M2)
+ *
+ * Server persistence survives the process, so a test that reused a data directory
+ * would be measuring the previous scenario. Every run therefore gets its own
+ * temporary directory, passed to the server as `INSIGHTHUB_DATA_PATH`:
+ *
+ * - `createDataPath()` — a **new** empty directory, for a scenario that needs a
+ *   clean store;
+ * - an explicit restart **reuses** the current directory, which is what makes
+ *   "restart and the content is still there" a meaningful assertion;
+ * - `dispose()` removes every directory this stack created.
+ *
+ * The development default (`.insighthub-data`) is never used.
  */
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { sleep } from './cdp.mjs';
@@ -28,24 +44,28 @@ function run(command, args, { cwd, env } = {}) {
   const log = { stdout: '', stderr: '' };
   child.stdout.on('data', (chunk) => {
     log.stdout += chunk.toString();
-    if (log.stdout.length > 200_000) log.stdout = log.stdout.slice(-100_000);
+    if (log.stdout.length > 400_000) log.stdout = log.stdout.slice(-200_000);
   });
   child.stderr.on('data', (chunk) => {
     log.stderr += chunk.toString();
-    if (log.stderr.length > 200_000) log.stderr = log.stderr.slice(-100_000);
+    if (log.stderr.length > 400_000) log.stderr = log.stderr.slice(-200_000);
   });
   return { child, log };
 }
 
-/** Terminate a process and, on Windows, its whole tree. */
-async function terminate(child) {
+/** Terminate a process and, on Windows, its whole tree. Graceful where possible. */
+async function terminate(child, { graceful = false } = {}) {
   if (child === undefined || child.exitCode !== null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
   try {
     if (process.platform === 'win32') {
+      // Windows has no SIGTERM for a detached process tree; `taskkill /F` is the only
+      // reliable death. The durability scenarios treat that as the crash case on
+      // purpose — SQLite's WAL recovers it — and a *graceful* shutdown is exercised
+      // through the same path only on POSIX.
       spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
     } else {
-      child.kill('SIGTERM');
+      child.kill(graceful ? 'SIGTERM' : 'SIGKILL');
     }
   } catch {
     child.kill();
@@ -86,6 +106,26 @@ export async function isPortClosed(port, host = '127.0.0.1') {
   }
 }
 
+/** Wait until a port accepts a connection, or throw. */
+export async function waitForPortOpen(port, { host = '127.0.0.1', timeoutMs = 20_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await isPortClosed(port, host))) return;
+    await sleep(100);
+  }
+  throw new Error(`port ${port} never started accepting connections`);
+}
+
+/** Wait until nothing accepts a connection on the port, or throw. */
+export async function waitForPortClosed(port, { host = '127.0.0.1', timeoutMs = 15_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isPortClosed(port, host)) return;
+    await sleep(100);
+  }
+  throw new Error(`port ${port} is still accepting connections`);
+}
+
 export class DevStack {
   #repoRoot;
   #serverPort;
@@ -94,8 +134,12 @@ export class DevStack {
   #web = null;
   #serverEnv;
   #webEnv;
+  #dataPath = null;
+  /** Every temporary directory this stack created, so `dispose` can remove all of them. */
+  #createdDataPaths = new Set();
+  #restartCount = 0;
 
-  constructor({ repoRoot, serverPort = 3101, webPort = 5173 }) {
+  constructor({ repoRoot, serverPort = 3101, webPort = 5173, dataPath = null }) {
     this.#repoRoot = repoRoot;
     this.#serverPort = serverPort;
     this.#webPort = webPort;
@@ -103,6 +147,7 @@ export class DevStack {
     // same variable for its listen port — one value keeps them in agreement.
     this.#serverEnv = { PORT: String(serverPort), HOST: '127.0.0.1' };
     this.#webEnv = { PORT: String(serverPort), INSIGHTHUB_SERVER_HOST: '127.0.0.1' };
+    this.#dataPath = dataPath;
   }
 
   get serverPort() {
@@ -121,20 +166,64 @@ export class DevStack {
     return `ws://127.0.0.1:${this.#webPort}/ws`;
   }
 
+  /** The directory the running server persists into. */
+  get dataPath() {
+    return this.#dataPath;
+  }
+
+  /** The server child's pid, for "is it really a different process" assertions. */
+  get serverPid() {
+    return this.#server?.child.pid ?? null;
+  }
+
+  get serverRunning() {
+    return this.#server !== null && this.#server.child.exitCode === null;
+  }
+
+  /** How many times the server process has been started (1 = never restarted). */
+  get serverStarts() {
+    return this.#restartCount;
+  }
+
+  /**
+   * Create a **new**, empty, uniquely named data directory.
+   *
+   * Deliberately not applied: a scenario decides when to restart onto it, so
+   * "clean state" is an explicit transition rather than an invisible one.
+   */
+  async createDataPath(label = 'm2') {
+    const directory = await mkdtemp(path.join(tmpdir(), `insighthub-a6-${label}-`));
+    this.#createdDataPaths.add(directory);
+    return directory;
+  }
+
   async start() {
+    if (this.#dataPath === null) this.#dataPath = await this.createDataPath('run');
     await this.startServer();
     await this.startWeb();
   }
 
   async startServer() {
     if (this.#server !== null) return;
-    const entry = path.join(this.#repoRoot, 'apps', 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    if (this.#dataPath === null) this.#dataPath = await this.createDataPath('run');
+    const entry = path.join(
+      this.#repoRoot,
+      'apps',
+      'server',
+      'node_modules',
+      'tsx',
+      'dist',
+      'cli.mjs',
+    );
     const { child, log } = run(process.execPath, [entry, 'src/index.ts'], {
       cwd: path.join(this.#repoRoot, 'apps', 'server'),
-      env: this.#serverEnv,
+      env: { ...this.#serverEnv, INSIGHTHUB_DATA_PATH: this.#dataPath },
     });
     this.#server = { child, log };
+    this.#restartCount += 1;
     try {
+      // `/health` is served only after the durable store opened, so a successful
+      // probe is also evidence that the capability check passed (`D-051`).
       await waitForHttp(`http://127.0.0.1:${this.#serverPort}/health`, {
         label: 'the backend',
       });
@@ -146,7 +235,15 @@ export class DevStack {
 
   async startWeb() {
     if (this.#web !== null) return;
-    const entry = path.join(this.#repoRoot, 'apps', 'web', 'node_modules', 'vite', 'bin', 'vite.js');
+    const entry = path.join(
+      this.#repoRoot,
+      'apps',
+      'web',
+      'node_modules',
+      'vite',
+      'bin',
+      'vite.js',
+    );
     const { child, log } = run(process.execPath, [entry], {
       cwd: path.join(this.#repoRoot, 'apps', 'web'),
       env: this.#webEnv,
@@ -160,23 +257,54 @@ export class DevStack {
     }
   }
 
-  /** Kill the backend. Used to make a genuine offline condition for the clients. */
+  /** Kill the backend gracefully where the platform allows it. */
   async stopServer() {
     if (this.#server === null) return;
-    await terminate(this.#server.child);
+    await terminate(this.#server.child, { graceful: true });
     this.#server = null;
-    // Confirm the socket is really gone rather than assuming it.
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      if (await isPortClosed(this.#serverPort)) return;
-      await sleep(150);
-    }
-    throw new Error(`the backend port ${this.#serverPort} is still accepting connections`);
+    await waitForPortClosed(this.#serverPort);
+  }
+
+  /**
+   * Kill the backend **without** a graceful shutdown.
+   *
+   * This is the process-death case the durability scenarios need: no `SIGTERM`
+   * handler runs, `store.close()` never happens, and the WAL is left exactly as the
+   * last committed transaction wrote it. A restart must still recover.
+   */
+  async crashServer() {
+    if (this.#server === null) return;
+    await terminate(this.#server.child, { graceful: false });
+    this.#server = null;
+    await waitForPortClosed(this.#serverPort);
+  }
+
+  /**
+   * Crash the server and start a **new process** on the same data directory.
+   *
+   * Returns the pid before and after, which is what lets a scenario prove this was a
+   * real process restart rather than a reconnect.
+   */
+  async restartServer({ dataPath } = {}) {
+    const before = this.serverPid;
+    await this.crashServer();
+    if (dataPath !== undefined && dataPath !== null) this.#dataPath = dataPath;
+    await this.startServer();
+    return { before, after: this.serverPid };
+  }
+
+  /** Crash and start again on a brand-new, empty data directory. */
+  async restartServerOnFreshDataPath(label = 'scenario') {
+    const before = this.serverPid;
+    await this.crashServer();
+    this.#dataPath = await this.createDataPath(label);
+    await this.startServer();
+    return { before, after: this.serverPid, dataPath: this.#dataPath };
   }
 
   async stopWeb() {
     if (this.#web === null) return;
-    await terminate(this.#web.child);
+    await terminate(this.#web.child, { graceful: true });
     this.#web = null;
   }
 
@@ -188,8 +316,20 @@ export class DevStack {
     return this.#web === null ? '' : `${this.#web.log.stdout}\n${this.#web.log.stderr}`;
   }
 
+  /** Crash, stop Vite, and remove every temporary data directory this stack made. */
   async dispose() {
     await this.stopWeb();
-    await this.stopServer();
+    await this.crashServer();
+    const removed = [];
+    for (const directory of this.#createdDataPaths) {
+      try {
+        await rm(directory, { recursive: true, force: true });
+        removed.push(directory);
+      } catch {
+        /* best effort: a leaked temp dir must not fail the run */
+      }
+    }
+    this.#createdDataPaths.clear();
+    return removed;
   }
 }

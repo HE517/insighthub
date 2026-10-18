@@ -327,3 +327,279 @@ Consequences worth stating explicitly:
 | AI suggestions | Server-issued, client-held | applied via Yjs transaction on accept |
 | Auth session | Server-issued token | never persisted in a shared doc |
 | Undo history | `Y.UndoManager`, local/AI origins | never a text snapshot |
+
+## 7. Durable persistence (M2 — IMPLEMENTED, M2-P0-1)
+
+> **Status: IMPLEMENTED (M2-P0-1) / reviewed by A7.** This section fixed the shape `M2-P0-1` had
+> to implement, and §7.13 records the scope decisions taken during integration. M1 shipped none
+> of it: a room was a purely in-memory `Y.Doc` that died with its last participant — that is what
+> M2 removed. Nothing here changes the wire protocol (§5) or the client seam
+> (§8 of `docs/CONTRACTS.md`).
+
+### 7.1 Lifecycle: M1 vs M2
+
+M1 (implemented today):
+
+```text
+client join → joinRoom (synchronous) → in-memory Y.Doc → sync
+            → last peer leaves → room destroyed → content gone
+```
+
+M2 (frozen target):
+
+```text
+client join → joinRoom (still synchronous: membership only)
+            → room exists, hydration pending
+            → lazy hydrate: load snapshot → replay update log → Y.Doc ready
+            → room-joined is sent only now          ← the barrier
+            → realtime update: apply → persist → broadcast
+            → last peer leaves → memory room evicted; durable document retained
+            → future join / server restart → hydrate the same state
+```
+
+**The two-phase join is the load-bearing decision.** Membership stays synchronous, which is
+the invariant §5.1 and M1's atomic-replace tests depend on; only the *acknowledgement* is
+deferred behind an asynchronous content-readiness barrier. A naive "make `joinRoom` async"
+would reopen exactly the intermediate-state class of bug M1 closed (`docs/DECISIONS.md`
+D-043).
+
+### 7.2 Ownership
+
+| Layer | Owns | Never owns |
+| --- | --- | --- |
+| `RoomRegistry` | membership, room identity, eviction policy, the hydration barrier | file paths, SQL, byte formats |
+| `DocumentRoom` | the in-memory `Y.Doc`, awareness, relay decisions | durable bytes |
+| `DocumentStore` (new) | durable representation, append ordering, compaction, transactions, open/close | sockets, `Y.Doc` instances, membership |
+| `DocumentHydrator` (new) | turning stored bytes into a ready `Y.Doc` | membership, policy |
+
+The rule that keeps this testable: **`DocumentStore` never sees a socket and
+`DocumentRoom` never sees a file.** `RoomRegistry` is the only place that knows both exist.
+
+### 7.3 Storage adapter seam
+
+Persistence is reached through one interface, so no business layer depends on a specific
+SQLite/file API and the backend stays replaceable:
+
+```ts
+export interface DocumentStore {
+  /** Load the durable state, or `null` when this document has never been stored. */
+  load(documentId: string): Promise<StoredDocument | null>;
+  /** Append one already-applied update. Resolves only once it is durable. */
+  /** Append one already-applied update; resolves with its committed sequence. */
+  append(documentId: string, update: Uint8Array): Promise<number>;
+  /** Replace snapshot + truncate the consumed log, atomically. */
+  compact(documentId: string, snapshot: Uint8Array, throughSequence: number): Promise<void>;
+  /** Durably remove a document. Semantics frozen even though M2 exposes no UI for it. */
+  delete(documentId: string): Promise<void>;
+  /** Flush and release the backend. Idempotent; called on graceful shutdown. */
+  close(): Promise<void>;
+}
+
+interface StoredDocument {
+  readonly snapshot: Uint8Array;
+  readonly snapshotSequence: number;
+  readonly updates: readonly { sequence: number; update: Uint8Array }[];
+}
+```
+
+`load` returning `null` means "never stored", not "empty": a join for an unknown document
+creates a fresh empty document and persists it on the first join or write. (A join alone can
+append a 2-byte empty update, because a client's `SyncStep2` goes through the same
+`apply → persist → broadcast` path; recorded as an accepted deviation in D-055 §3 rather than
+special-cased on the persist hot path.) `delete` is frozen now so
+no caller has to guess later whether it is a soft flag or a real removal — it is a real
+removal, and callers must treat the document as gone.
+
+### 7.4 Durable representation
+
+**Snapshot + append-only update log, with the Yjs binary state as the authority.**
+
+```text
+document        (document_id PK, snapshot BLOB, snapshot_seq INT, updated_at INT)
+document_update (document_id, seq, update_bytes BLOB, created_at, PK(document_id, seq))
+```
+
+Why not store the rendered Markdown and treat it as the server's source of truth: a
+Markdown string loses everything the CRDT needs to merge correctly — client ids, clocks,
+deleted-item tombstones, formatting marks. Reconstructing a `Y.Doc` from text on every
+join would make two clients that were never offline look like concurrent writers and would
+resurrect deleted content. The Markdown rendering is a **projection**, derived when needed,
+never stored as the authority (the same one-source-of-truth rule as §0).
+
+### 7.5 Room lifecycle state machine
+
+```text
+CREATED ──► HYDRATING ──► READY
+   │            │            │
+   │            └────────────┴──► UNHEALTHY ──► DESTROYED
+   └──────────────────────────────► DESTROYED
+```
+
+| State | Behaviour |
+| --- | --- |
+| `CREATED` | room identity and membership exist; the `Y.Doc` is empty; nothing is sent to the joiner beyond what membership already decided |
+| `HYDRATING` | single-flight load + replay in progress. Membership changes are still handled. **No `room-joined`**, no Yjs data-plane processing: inbound BINARY frames go only into the bounded backlog queue (§7.6) |
+| `READY` | hydration succeeded. Only now is `room-joined` sent, the queued frames are flushed in order, and normal sync / awareness / mutation-pipeline behaviour begins |
+| `UNHEALTHY` | hydration failed, or a persist failed (§7.8). Accepts no document updates, broadcasts nothing, and the transport sends `INTERNAL_ERROR` then closes the participants. The pipeline is stopped permanently for this room |
+| `DESTROYED` | terminal; the instance is unusable. **Durable state is not deleted.** The next join creates a *new* room and hydrates again |
+
+Two obligations that are easy to get wrong:
+
+1. **A socket that disconnected while `HYDRATING` must never be re-admitted.** When the
+   barrier completes, the transport re-checks `context.activeRoom` and the socket's open
+   state; if either changed, the result is discarded — no delayed `room-joined`, no
+   re-join, and no queue flush to a dead socket.
+2. **`UNHEALTHY` never returns to `READY`.** Recovery is "destroy and hydrate a fresh room",
+   so memory can never be half-healed from state the store does not have.
+
+### 7.6 Hydration barrier
+
+```text
+room missing from memory
+  → create the room (empty Y.Doc) synchronously   ← membership atomicity preserved
+  → single-flight hydrate:
+        snapshot ← store.load()
+        Y.applyUpdate(doc, snapshot, remote)
+        for each log row in sequence order: Y.applyUpdate(doc, update, remote)
+  → barrier released → room-joined is sent → normal SyncStep handshake
+```
+
+- **Single-flight per document**: concurrent joins for the same document await one load, not
+  one per socket. Otherwise N joiners produce N snapshots of the same reads.
+- **No sync before the barrier**: `room-joined` is the gate the contract already defines
+  (§4), so a conforming client never asks for sync early. A non-conforming client that sends
+  a BINARY frame while hydration is pending has its frames **held in a small bounded queue**
+  (not applied, not answered) and flushed after the barrier. A **cumulative backlog overflow** is a server-side
+  condition, not an oversized frame, so it must never be reported as
+  `FRAME_TOO_LARGE`: the room goes `UNHEALTHY` and the participants receive
+  `INTERNAL_ERROR` before the server closes them (§7.8). The internal log may tag the
+  event `HYDRATION_BACKLOG_OVERFLOW`, which is a log tag and **not** a wire error code
+  (§7.12). Nothing is silently dropped.
+- **A socket that disconnects mid-hydration** is detached normally; the barrier result is
+  discarded, never sent to a dead socket.
+- **Restart recovery needs no old client.** The snapshot plus the log are the whole
+  document; recovery is a fresh-server read, not a client replay (D-043).
+
+### 7.7 Per-document mutation serialization (adapter-independent invariant)
+
+Every durable mutation of one document goes through **one FIFO pipeline**. There is no
+concurrency inside a document; there is concurrency between documents.
+
+```text
+U1: apply ─► persist ─► broadcast ─► complete
+                                        │
+U2: apply ─► persist ─► broadcast ─► complete   ← only now
+```
+
+- `U2`'s `apply` may not begin before `U1` reaches `complete`, and the same holds for
+  `persist` and `broadcast`: their lifecycles may never interleave within a document.
+- Different documents run independent pipelines and may proceed in parallel.
+- This is an invariant of **the seam, not of the backend**. It must hold even though
+  `node:sqlite`'s `DatabaseSync` is synchronous today: swapping in an async adapter must not
+  change the observable ordering.
+
+**On the first persist failure the pipeline stops permanently:**
+
+1. room → `UNHEALTHY` (§7.5);
+2. no further mutation is accepted or processed;
+3. the failing update is **not** broadcast;
+4. **already-queued** updates are **not** broadcast either — they are never attempted;
+5. participants receive `INTERNAL_ERROR`; the server closes them;
+6. the in-memory room is destroyed;
+7. everything already committed stays valid — the store is never rolled back;
+8. the author's client still holds its own Yjs replica and re-sends it after reconnect.
+
+Point 4 is the one usually missed: a queue that keeps draining after a failure publishes
+state the server cannot recover.
+
+### 7.8 Write ordering and crash semantics
+
+For every inbound update the room performs, in this order:
+
+```text
+1. apply    Y.applyUpdate(doc, update, remote)     — in-memory state advances
+2. persist  store.append(documentId, update)       — await durable acknowledgement
+3. broadcast encodeSyncUpdate(update) to other peers
+```
+
+**Persist before broadcast.** If step 2 fails, no peer was ever told the update landed, so
+the server never claims a state it cannot recover.
+
+Failure policy (frozen):
+
+1. The room is marked **unhealthy** and refuses further updates.
+2. Every participant receives a typed error and the socket is closed server-side. The code
+   is `INTERNAL_ERROR`: it is the existing, non-fatal code for "server-side failure, details
+   in the log", and non-fatal is the correct client semantic — a transient storage outage
+   must **not** stop the client's reconnect loop the way a fatal code does (§7).
+3. The in-memory room is **destroyed**, so memory cannot drift from durable state.
+4. The author's client still holds the update locally (its IndexedDB), so on reconnect the
+   normal state-vector handshake re-sends it and the append is retried. Recovery is the
+   existing reconnect path, not a special case.
+5. If no client holds the update (author vanished simultaneously), it is lost — the same
+   exposure M1 had, and the reason this is a P0 rather than a nice-to-have.
+
+Nothing here catches an error and continues as if the write succeeded (D-044).
+
+### 7.9 Eviction is not deletion
+
+| Event | Memory | Durable |
+| --- | --- | --- |
+| Last peer leaves | room destroyed (evicted) | **unchanged — retained** |
+| Server shutdown | all rooms destroyed | **unchanged — retained** |
+| `store.delete(id)` | room destroyed if present | **removed** |
+
+`RoomRegistry` owns eviction; `DocumentStore` owns deletion. M2 exposes no deletion UI, but
+the store semantics are frozen so eviction can never be mistaken for deletion.
+
+### 7.10 Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `INSIGHTHUB_DATA_PATH` | `./.insighthub-data` (dev) | directory holding the durable store |
+
+Tests must pass a per-test temporary directory and must never touch a development database;
+the test harness creates and removes its own path per suite (D-041). The store refuses to
+start when the directory cannot be opened, rather than degrading to memory-only, because a
+silent memory-only fallback is exactly the data-loss mode M1 had.
+
+### 7.11 Node runtime prerequisite (server)
+
+The server requires a Node runtime whose `node:sqlite` provides the API surface this design
+was verified against: `DatabaseSync`, `exec`, `prepare`, `StatementSync#run/#get/#all`, BLOB
+parameters and results, `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`, and `PRAGMA journal_mode`.
+
+- **Startup capability check**: before listening, the server opens a throwaway database in
+  the configured data directory, executes
+  a statement, and round-trips one BLOB. A failure is a **startup failure** with a clear
+  diagnostic naming the runtime requirement.
+- **No fallback**: the server must not start in a memory-only mode. Refusing to start is the
+  correct behaviour — a silent memory-only server is exactly the M1 data-loss mode.
+- **No third-party SQLite dependency**: if the runtime lacks the API, the answer is a Node
+  upgrade, not a new package. Minimum runtime is recorded in `docs/TASKS.md`.
+
+Why a real statement and not just `new DatabaseSync(...)`: opening a corrupt or unreadable
+file does not necessarily throw at construction — the failure surfaces on the first statement
+(measured; `docs/DECISIONS.md` D-041). A capability check that only constructs proves nothing.
+
+### 7.12 What does not change
+
+- **Wire protocol**: no new frame type, no new message type, no base64 anywhere (§5).
+- **Error vocabulary**: unchanged. Persistence failure reuses `INTERNAL_ERROR` (§7 of
+  `docs/CONTRACTS.md`), and `ROOM_NOT_FOUND` keeps its reserved meaning.
+- **Client seam**: `CollaborativeSession` is untouched by `M2-P0-1`.
+- **Awareness**: still never persisted (§9 of `docs/CONTRACTS.md`).
+
+### 7.13 Integration notes (M2-P0 scope decisions)
+
+These were settled during the P0-1 / P0-3 integration gate (`docs/DECISIONS.md` D-054). They do
+not change the contract; they pin what the first implementation is allowed to be.
+
+| Item | Decision |
+| --- | --- |
+| `append` return | `Promise<number>` — the committed sequence, not `void` (§7.3); this is what `CONTRACTS.md` §14.7 requires |
+| Runtime capability check | validates the **real** data path (§7.11). "Not writable → fall back to `:memory:`" is forbidden: it re-creates the M1 data-loss mode inside the fix |
+| Compaction timing | **eviction-time only** in M2-P0. Idle/background compaction is a performance backlog item, deliberately outside this P0 |
+| WebSocket close code | persistence-internal failure closes with **1011** (internal error), not 1008 (policy violation). 1008 stays for protocol/policy errors |
+| No-store server path | accepted as an internal/test compatibility seam, bounded by three obligations: production `index.ts` always opens the durable store; a durable-init failure refuses to start; isolated tests may run the no-store path but production cannot reach it |
+| Fail-closed wiring | `attachWebSocketServer` throws when `config.dataPath` is set but no store was supplied, so "forgot to open the store" is a startup failure rather than a silent memory-only server |

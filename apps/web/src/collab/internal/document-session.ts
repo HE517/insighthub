@@ -4,10 +4,13 @@ import * as Y from 'yjs';
 import {
   DOCUMENT_TEXT_KEY,
   UNDO_TRACKED_ORIGINS,
+  parsePresencePatch,
+  type AwarenessBinding,
   type AwarenessState,
   type CollaborativeSession,
   type CollaboratorInfo,
   type ConnectionStatus,
+  type PresencePatch,
   type SessionState,
   type TransactionOrigin,
   type UndoState,
@@ -90,7 +93,16 @@ export class DocumentSession implements CollaborativeSession {
 
   readonly text: Y.Text;
 
-  readonly awareness: Awareness;
+  /**
+   * Narrowed to the binding surface (M2-P0-2 step 3).
+   *
+   * The class holds the wide `Awareness` in `awarenessManager.raw`, because the
+   * collaboration layer is the thing that is *allowed* to write presence. Everything
+   * outside this file — including A1's own tests — sees only `AwarenessBinding`, so
+   * `session.awareness.setLocalState(...)` does not compile anywhere. That is the
+   * point of the narrowing: the rule lives in the type, not in a comment.
+   */
+  readonly awareness: AwarenessBinding;
 
   private readonly awarenessManager: AwarenessManager;
 
@@ -163,14 +175,38 @@ export class DocumentSession implements CollaborativeSession {
     return this.syncProvider?.statistics;
   }
 
-  /** Publish the local cursor position. Ephemeral: awareness only, never persisted. */
+  /**
+   * Publish this client's presence — the seam implementation (M2-P0-2).
+   *
+   * Validation runs **before** anything is written: `parsePresencePatch` is the same
+   * rule the read side applies (it reuses `awarenessCursorSchema` /
+   * `awarenessSelectionSchema`), and it throws `PresencePatchError` for a bad patch.
+   * A rejected patch therefore leaves the local awareness entry untouched and produces
+   * no awareness update, so nothing invalid can reach the wire.
+   *
+   * Validation is deliberately first, ahead of the disposed/missing-state checks: an
+   * invalid patch is a caller bug whether or not the session still exists, and
+   * silently swallowing it would hide the bug until the session is alive again.
+   */
+  publishPresence(patch: PresencePatch): void {
+    const validated = parsePresencePatch(patch);
+    this.awarenessManager.publishPresence(validated);
+  }
+
+  /**
+   * Publish the local cursor position.
+   *
+   * Internal convenience over `publishPresence`, kept so the M1 tests and any in-repo
+   * caller have one obvious way to move the caret. It routes through the validated
+   * seam rather than writing the raw instance, so there is exactly one write path.
+   */
   setCursor(cursor: { anchor: number; head: number } | null): void {
-    this.awarenessManager.setLocalStateField('cursor', cursor);
+    this.publishPresence({ cursor });
   }
 
   /** Publish the local selection range (or `null` when nothing is selected). */
   setSelection(selection: { from: number; to: number } | null): void {
-    this.awarenessManager.setLocalStateField('selection', selection);
+    this.publishPresence({ selection });
   }
 
   getCollaborators(): readonly CollaboratorInfo[] {

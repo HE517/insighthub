@@ -14,6 +14,26 @@
  *   no outer envelope (`AGENTS.md` R12).
  * - **Awareness is never persisted.** It lives in the room's in-memory `Awareness`
  *   instance and dies with the room (`docs/CONTRACTS.md` §9).
+ * - **The room never sees a file.** Durable bytes belong to `DocumentStore`, which
+ *   the registry drives; the room exposes `apply` and `broadcast` as separate steps so
+ *   the registry can order `apply → persist → broadcast` (`docs/ARCHITECTURE.md` §7.2,
+ *   §7.7).
+ *
+ * ## M2: the room has an explicit lifecycle (`docs/DECISIONS.md` D-049)
+ *
+ * ```text
+ * CREATED ──► HYDRATING ──► READY
+ *    │            │            │
+ *    │            └────────────┴──► UNHEALTHY ──► DESTROYED
+ *    └──────────────────────────────► DESTROYED
+ * ```
+ *
+ * The state is not documentation: every guard below reads it, so "what is allowed right
+ * now" has one answer. Two transitions are deliberately impossible:
+ *
+ * - `UNHEALTHY → READY` — recovery is "destroy and hydrate a fresh room", never a
+ *   half-healing of memory the store cannot back (`D-049`).
+ * - `HYDRATING → READY` without `completeHydration()` — the barrier is the only exit.
  */
 import {
   MAX_AWARENESS_CLIENTS_PER_UPDATE,
@@ -28,12 +48,46 @@ import {
   readSyncStep2Payload,
   readSyncUpdatePayload,
   type DecodedAwarenessFrame,
+  type DecodedBinaryFrame,
   type DecodedSyncFrame,
 } from '@insighthub/shared';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
 import type { Peer } from './peer.js';
+
+/**
+ * The frozen lifecycle states (`docs/DECISIONS.md` D-049, `docs/ARCHITECTURE.md` §7.5).
+ *
+ * Exported as a value tuple so a test can assert the exact set and so nothing can invent a
+ * sixth state by typo.
+ */
+export const ROOM_STATES = ['created', 'hydrating', 'ready', 'unhealthy', 'destroyed'] as const;
+
+export type RoomState = (typeof ROOM_STATES)[number];
+
+/**
+ * Bound on the frames a room will hold while hydrating (`docs/ARCHITECTURE.md` §7.6).
+ *
+ * A conforming client never sends before `room-joined`, so this queue exists only for a
+ * client that races its own handshake. It is bounded because "hold everything until ready"
+ * is unbounded memory controlled by a peer.
+ */
+export const HYDRATION_BACKLOG_MAX_FRAMES = 256;
+
+/** Byte bound on the hydration backlog, for frames far larger than the frame ceiling. */
+export const HYDRATION_BACKLOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Log tag for a backlog overflow.
+ *
+ * **Not a wire error code** (`docs/DECISIONS.md` D-050, `docs/CONTRACTS.md` §14.9). The
+ * wire answer is `INTERNAL_ERROR`, because a cumulative backlog overflow is a server-side
+ * lifecycle condition, not an oversized frame. Reporting `FRAME_TOO_LARGE` would tell a
+ * client "your frame was too big" and send it off shrinking frames while the real problem
+ * is that the server has not finished hydrating.
+ */
+export const HYDRATION_BACKLOG_OVERFLOW_TAG = 'HYDRATION_BACKLOG_OVERFLOW';
 
 /**
  * What `DocumentRoom` needs from its owner.
@@ -47,10 +101,20 @@ export interface RoomParticipant {
   readonly awarenessClients: Set<number>;
 }
 
+/** One frame held while the room is hydrating, with the participant it came from. */
+export interface BacklogEntry {
+  readonly participant: RoomParticipant;
+  readonly frame: DecodedBinaryFrame;
+}
+
 /** Read-only introspection, used by tests and operational logging. */
 export interface RoomSnapshot {
   documentId: string;
+  /** Current lifecycle state (`docs/DECISIONS.md` D-049). */
+  state: RoomState;
   peerCount: number;
+  /** Frames currently held by the hydration backlog. */
+  hydrationBacklogFrames: number;
   /** Awareness entries the server currently holds for this room. */
   awarenessClientIds: number[];
   awarenessEntryCount: number;
@@ -65,6 +129,9 @@ export interface RoomSnapshot {
  * peers, and one abusive client must not be able to take a room down.
  */
 export type AwarenessRejection = 'too-many-clients' | null;
+
+/** Outcome of offering a frame to the hydration backlog. */
+export type BacklogOffer = 'queued' | 'overflow';
 
 /**
  * Turn a room's `Awareness` into a relay-only store: no identity, no local entry.
@@ -126,6 +193,10 @@ export class DocumentRoom {
   readonly awareness: awarenessProtocol.Awareness;
 
   readonly #participants = new Set<RoomParticipant>();
+  readonly #backlog: BacklogEntry[] = [];
+  #backlogBytes = 0;
+  #state: RoomState = 'created';
+  #unhealthyReason: string | null = null;
   #destroyed = false;
   #awarenessRejections = 0;
 
@@ -148,6 +219,36 @@ export class DocumentRoom {
     return this.#destroyed;
   }
 
+  /** Current lifecycle state (`docs/DECISIONS.md` D-049). */
+  get state(): RoomState {
+    return this.#state;
+  }
+
+  /** Why the room became unhealthy, for the server log only (never sent to a client). */
+  get unhealthyReason(): string | null {
+    return this.#unhealthyReason;
+  }
+
+  /**
+   * True only in `READY`.
+   *
+   * The single predicate the registry consults before accepting a durable mutation, so
+   * "may this room take an update" is answered in one place.
+   */
+  get acceptsMutations(): boolean {
+    return this.#state === 'ready' && !this.#destroyed;
+  }
+
+  /** Frames currently held by the hydration backlog. */
+  get backlogFrames(): number {
+    return this.#backlog.length;
+  }
+
+  /** Bytes currently held by the hydration backlog. */
+  get backlogBytes(): number {
+    return this.#backlogBytes;
+  }
+
   /** How many awareness frames this room has dropped for exceeding the limit. */
   get awarenessRejections(): number {
     return this.#awarenessRejections;
@@ -161,7 +262,9 @@ export class DocumentRoom {
     const text = this.doc.getText('content');
     return {
       documentId: this.documentId,
+      state: this.#state,
       peerCount: this.#participants.size,
+      hydrationBacklogFrames: this.#backlog.length,
       awarenessClientIds: [...this.awareness.getStates().keys()].sort((a, b) => a - b),
       awarenessEntryCount: this.awareness.getStates().size,
       textLength: text.length,
@@ -181,93 +284,172 @@ export class DocumentRoom {
   }
 
   /* ---------------------------------------------------------------- *
+   * Lifecycle (`docs/DECISIONS.md` D-049)
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Enter `HYDRATING`.
+   *
+   * Only `CREATED → HYDRATING` is legal; anything else is a programming error in the
+   * registry, so it throws rather than silently corrupting the state machine.
+   */
+  beginHydration(): void {
+    if (this.#state !== 'created') {
+      throw new Error(`cannot begin hydration from state ${this.#state}`);
+    }
+    this.#state = 'hydrating';
+  }
+
+  /**
+   * Enter `READY`, which is the **only** moment `room-joined` may be sent and the backlog
+   * may be flushed (`docs/ARCHITECTURE.md` §7.5).
+   */
+  completeHydration(): void {
+    if (this.#state !== 'hydrating') {
+      throw new Error(`cannot complete hydration from state ${this.#state}`);
+    }
+    this.#state = 'ready';
+  }
+
+  /**
+   * Enter `UNHEALTHY` and stay there (`docs/DECISIONS.md` D-049).
+   *
+   * Deliberately one-way: there is no method that moves a room back to `READY`. Recovery is
+   * destroying the room and hydrating a fresh one, so memory can never be half-healed into
+   * a state the durable store does not have.
+   *
+   * Idempotent: a second failure (for example a heartbeat reap racing a persist failure)
+   * must not overwrite the first reason or throw.
+   */
+  markUnhealthy(reason: string): void {
+    if (this.#state === 'unhealthy' || this.#destroyed) return;
+    this.#state = 'unhealthy';
+    this.#unhealthyReason = reason;
+    // The backlog is dropped rather than replayed: replaying it would publish updates this
+    // room can no longer make durable, which is the failure mode D-048 point 4 forbids.
+    this.#backlog.length = 0;
+    this.#backlogBytes = 0;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Hydration backlog (`docs/ARCHITECTURE.md` §7.6)
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Hold a frame until the hydration barrier releases.
+   *
+   * Returns `'overflow'` when either bound would be exceeded. The caller turns that into
+   * `UNHEALTHY` + `INTERNAL_ERROR` (`docs/DECISIONS.md` D-050); nothing is silently dropped.
+   */
+  enqueueBacklog(participant: RoomParticipant, frame: DecodedBinaryFrame): BacklogOffer {
+    const frameBytes = frame.bytes.byteLength;
+
+    if (
+      this.#backlog.length + 1 > HYDRATION_BACKLOG_MAX_FRAMES ||
+      this.#backlogBytes + frameBytes > HYDRATION_BACKLOG_MAX_BYTES
+    ) {
+      return 'overflow';
+    }
+
+    this.#backlog.push({ participant, frame });
+    this.#backlogBytes += frameBytes;
+    return 'queued';
+  }
+
+  /**
+   * Take the backlog and clear it, in arrival order.
+   *
+   * The caller re-validates each entry's participant before replaying it: a socket can
+   * disconnect during hydration, and replaying a frame for a departed peer would both
+   * persist something no one asked for and relay it to a dead socket.
+   */
+  drainBacklog(): BacklogEntry[] {
+    const drained = [...this.#backlog];
+    this.#backlog.length = 0;
+    this.#backlogBytes = 0;
+    return drained;
+  }
+
+  /* ---------------------------------------------------------------- *
    * Sync (frozen client-initiated handshake — docs/CONTRACTS.md §10.2)
    * ---------------------------------------------------------------- */
 
   /**
-   * Handle a decoded SYNC frame from `from`.
+   * Answer a `SyncStep1` with `SyncStep2` + the server's own `SyncStep1`.
    *
-   * The handshake is client-initiated, so the only message the server *answers* is
-   * `SyncStep1` — with `SyncStep2` followed by its own `SyncStep1`, which is what
-   * the contract's `SyncStep1 → SyncStep2 + SyncStep1 → SyncStep2` sequence
-   * describes. `Update` is applied and relayed by `handleUpdate`. `SyncStep2` is
-   * applied and answers nothing, because the server never initiates an exchange.
+   * Read-only, so it needs no persistence and no pipeline slot: it appends nothing to the
+   * document. Returns `false` when the frame is not a `SyncStep1`, so the registry can fall
+   * through to the mutation path.
+   *
+   * Only legal in `READY`: answering from a half-hydrated document would hand a client a
+   * delta computed against state the server is about to replace.
    */
-  handleSync(decoded: DecodedSyncFrame, from: RoomParticipant): void {
-    if (this.#destroyed) return;
+  replyToSyncStep1(decoded: DecodedSyncFrame, from: RoomParticipant): boolean {
+    if (!this.acceptsMutations) return false;
+    if (readSyncMessageType(decoded) !== SYNC_MESSAGE_TYPES.step1) return false;
 
-    const messageType = readSyncMessageType(decoded);
+    const peerStateVector = readSyncStep1StateVector(decoded);
+    if (peerStateVector === null) return true;
 
-    if (messageType === SYNC_MESSAGE_TYPES.step1) {
-      const peerStateVector = readSyncStep1StateVector(decoded);
-      if (peerStateVector === null) return;
-
-      // SyncStep2 is the delta between what we hold and what the peer advertised. A
-      // state vector is a few dozen bytes, so this reply is proportional to the
-      // *missing* content, never to the size of the document — the property M1-A3
-      // criterion 4 asks us to prove by measurement rather than by assertion.
-      from.peer.sendBinary(encodeSyncStep2(this.doc, peerStateVector));
-      // ...then our own state vector, so the client answers with the SyncStep2 that
-      // carries what we are missing.
-      from.peer.sendBinary(encodeSyncStep1(this.doc));
-      return;
-    }
-
-    if (messageType === SYNC_MESSAGE_TYPES.update) {
-      this.handleUpdate(decoded, from);
-      return;
-    }
-
-    // SyncStep2 answers a SyncStep1 this server sent. It carries the peer's knowledge as
-    // `varint(messageYjsSyncStep2)` + `varint8Array(update)`, so the **payload must be
-    // unwrapped before applying it**: passing `decoded.bytes` to `Y.applyUpdate` feeds the
-    // length prefix where an update header belongs, and yjs then reads a struct reference
-    // in the wrong format and throws `Unexpected end of array`.
-    //
-    // Found by the M1-A0.2 cross-agent integration test — neither A1's nor A3's own suite
-    // could see it, because each tested its half against its own dual (D-029).
-    const update = readSyncStep2Payload(decoded);
-    if (update === null) return;
-    Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
-
-    // ...and relay it to the room, because a SyncStep2 can carry edits the other peers
-    // have never seen. The reconnect case is the one that matters (`docs/CONTRACTS.md`
-    // §10.3): a client that edited while disconnected delivers those edits in its
-    // SyncStep2, and a client that was never disconnected never sends an `Update` for
-    // them — so without this relay it stays permanently behind while the server and the
-    // reconnecting peer are converged. Also found by the M1-A0.2 cross-agent test.
-    //
-    // Re-framed as a `messageYjsUpdate` (the shared codec's helper) rather than forwarding
-    // the SyncStep2 envelope: a receiver applies an `Update` through its ordinary update
-    // path, which is exactly the semantics a relay of already-applied content needs.
-    this.broadcastBinary(encodeSyncUpdate(update), from);
+    // SyncStep2 is the delta between what we hold and what the peer advertised. A state
+    // vector is a few dozen bytes, so this reply is proportional to the *missing* content,
+    // never to the size of the document — the property M1-A3 criterion 4 proves by
+    // measurement, and which M2 must not regress: hydration must not turn a reconnect into
+    // a full-document transfer.
+    from.peer.sendBinary(encodeSyncStep2(this.doc, peerStateVector));
+    // ...then our own state vector, so the client answers with the SyncStep2 that carries
+    // what we are missing.
+    from.peer.sendBinary(encodeSyncStep1(this.doc));
+    return true;
   }
 
   /**
-   * Apply a peer's incremental update and relay the identical bytes.
+   * Extract and **apply** the document update carried by a `SyncStep2` or `Update` frame.
    *
-   * The frame body is `varint(messageYjsUpdate)` + `varint8Array(update)`, so the update
-   * is extracted with the shared accessor before use — the body is not itself an update
-   * (`@insighthub/shared` `readSyncUpdatePayload` documents the failure mode). Relaying
-   * those exact bytes (rather than the room's own state) matters: peers must merge what
-   * the author wrote, not a re-encoding of it.
+   * This is phase 1 of `apply → persist → broadcast` and nothing else: it does not broadcast
+   * and it does not persist. The registry owns the other two phases, because it is the only
+   * layer that knows both the room and the store (`docs/ARCHITECTURE.md` §7.2).
+   *
+   * Returns the raw update (what `Y.applyUpdate` consumed, and what must be persisted and
+   * relayed), or `null` when the frame carries no usable update or the room is not `READY`.
+   *
+   * The unwrapping is not optional: `writeSyncStep2`/`writeUpdate` encode
+   * `varUint(type)` + `varint8Array(update)`, so the body is *not* the update. Passing the
+   * body to `Y.applyUpdate` feeds a length prefix where an update header belongs and yjs
+   * throws `Unexpected end of array` (found by the M1-A0.2 cross-agent test).
    */
-  handleUpdate(decoded: DecodedSyncFrame, from: RoomParticipant): void {
-    if (this.#destroyed) return;
+  applySyncPayload(decoded: DecodedSyncFrame): Uint8Array | null {
+    if (!this.acceptsMutations) return null;
 
-    const update = readSyncUpdatePayload(decoded);
-    if (update === null) return;
+    const update = readSyncStep2Payload(decoded) ?? readSyncUpdatePayload(decoded);
+    if (update === null || update.byteLength === 0) return null;
 
     Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
-    this.broadcastBinary(encodeSyncUpdate(update), from);
+    return update;
+  }
+
+  /**
+   * Phase 3: relay an already-applied, already-persisted update to the room.
+   *
+   * Relays the author's **original bytes** rather than a re-encoding: peers must merge what
+   * the author wrote. `except` is the author, who already has it.
+   */
+  broadcastUpdate(update: Uint8Array, except: RoomParticipant | null): void {
+    if (!this.acceptsMutations) return;
+    this.broadcastBinary(encodeSyncUpdate(update), except);
   }
 
   /**
    * Apply an update the server produced itself (not received from a peer).
    *
-   * Used by tests and by any future server-side writer. Stamped with the remote
-   * origin so a client's local undo tracking is never confused by server-authored
-   * content.
+   * **Not durable.** Tests use this to model causally-ordered updates arriving out of order
+   * without paying for a socket round trip; it exists so a test can drive the room's CRDT
+   * directly. Production writes go through the registry's pipeline so they are persisted
+   * before they are broadcast — this method would bypass that, which is why nothing in
+   * production calls it.
+   *
+   * Stamped with the remote origin so a client's local undo tracking is never confused by
+   * server-authored content.
    */
   applyServerUpdate(update: Uint8Array): void {
     Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
@@ -286,9 +468,13 @@ export class DocumentRoom {
    * and then failing to relay it would leave the server holding presence state no
    * peer can see, which is exactly the two-views-of-presence problem awareness is
    * meant to avoid (`docs/DECISIONS.md` D-021).
+   *
+   * Awareness is **not** persisted and therefore does not enter the mutation pipeline
+   * (`docs/ARCHITECTURE.md` §7.12): it is ephemeral presence, and a durable presence
+   * channel is precisely what D-021 deleted.
    */
   handleAwareness(decoded: DecodedAwarenessFrame, from: RoomParticipant): AwarenessRejection {
-    if (this.#destroyed) return null;
+    if (this.#destroyed || this.#state === 'unhealthy') return null;
 
     const clients = decoded.clients;
     if (clients.length > MAX_AWARENESS_CLIENTS_PER_UPDATE) {
@@ -368,9 +554,14 @@ export class DocumentRoom {
    * Fan-out and teardown
    * ---------------------------------------------------------------- */
 
-  /** Send a binary frame to everyone except `except` (`null` = everyone). */
+  /**
+   * Send a binary frame to everyone except `except` (`null` = everyone).
+   *
+   * Refused in `UNHEALTHY`: a room that cannot make its state durable must not publish it
+   * (`docs/DECISIONS.md` D-044, D-048 point 4).
+   */
   broadcastBinary(frame: Uint8Array, except: RoomParticipant | null): void {
-    if (this.#destroyed) return;
+    if (this.#destroyed || this.#state === 'unhealthy') return;
     // Iterate a copy: a refused write can synchronously trigger the peer's close
     // handler, which calls back into `remove` and would otherwise mutate the set
     // mid-iteration.
@@ -392,10 +583,16 @@ export class DocumentRoom {
    * `Awareness.destroy()` clears the 3 s liveness timer its constructor installs: a
    * server that forgets this never exits, and a room that forgets it leaks a timer
    * per document ever opened.
+   *
+   * Destroying is **not** deleting: the durable state is untouched and the next join
+   * hydrates a fresh room (`docs/ARCHITECTURE.md` §7.9).
    */
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#state = 'destroyed';
+    this.#backlog.length = 0;
+    this.#backlogBytes = 0;
     this.#participants.clear();
     this.awareness.destroy();
     this.doc.destroy();

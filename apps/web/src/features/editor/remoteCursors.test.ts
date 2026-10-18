@@ -47,6 +47,15 @@ function awarenessWith(entries: [number, unknown][], clientID = SELF): Awareness
   };
 }
 
+/**
+ * A simulated **peer** awareness payload.
+ *
+ * `updatedAt` appears here because `awarenessStateSchema` requires it on every awareness
+ * entry, remote included - a fixture without it would be schema-invalid and would exercise
+ * the rejection path instead of the happy path. It is not A2 local bookkeeping: the
+ * collaboration layer owns the local value (M2-P0-2, `docs/CONTRACTS.md` §15), and the
+ * editor publishes through `editorPresence.ts`.
+ */
 function validState(head: number, name = 'Ada') {
   return {
     user: { id: 'u-1', name, color: '#ff0000' },
