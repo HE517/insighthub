@@ -456,8 +456,19 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | --- | --- |
 | 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060） |
-| Owner | **A5**（身份/成员关系/授权判定核心）+ **A3**（WS 权威判定点接线）；A6 出证据 |
-| 状态 | **冻结中：授权边界与验收判据已冻结；身份机制待项目负责人选择（唯一阻塞项）** |
+| Owner | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据 |
+| 状态 | **FROZEN，可派发** —— 架构与契约已冻结（`docs/DECISIONS.md` D-061、`docs/CONTRACTS.md` §17、`docs/ARCHITECTURE.md` §8）；**实现 NOT STARTED** |
+
+#### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
+
+| 决定 | 内容 |
+| --- | --- |
+| 身份机制 | **server-issued opaque session token + `httpOnly` cookie + server-side session → `userId`**；本阶段用 **Demo Identity Bootstrap**，不实现密码凭据认证 |
+| 安全承诺（原文） | 服务端签发的 session 可以防止客户端在后续 API/WS 请求中直接伪造身份；**demo bootstrap 本身不提供 credential-level identity proof**。**禁止**写成"防止跨用户冒用" |
+| 术语三分 | `Demo Identity Bootstrap` / `Session Authentication` / `Authorization` —— 不得合并、不得互相替代 |
+| 非目标 | password hash/storage、signup、password reset、OAuth/SSO、MFA |
+| space | **space-A**：不引入 space entity / membership / role；授权链止于 Document Membership |
+| 版本 | `SHARED_CONTRACT_VERSION` 4 → **5**（新增 `FORBIDDEN`）；`PROTOCOL_VERSION` 保持 **2** |
 
 #### Phase 2 — 现状重建（A0 只读核验，2026-10-18）
 
@@ -475,10 +486,10 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 
 | 层 | 权威判定点 | 允许 | 禁止 |
 | --- | --- | --- | --- |
-| **API** | `apps/server` 的授权中间件：解析身份 → 解析成员角色 → 按 capability 判定 | 无身份 = 401；已认证无成员关系 = 403，且**不泄露文档是否存在**（403/404 不得区分存在性） | 把授权决定下放给 web；用 UI 门控代替服务端判定 |
-| **WS** | `join-room` 与每个 BINARY SYNC 帧的入口（`RoomRegistry` / `DocumentRoom`） | 无 `canRead` → 拒绝 join（复用 frozen error code，不新增）；无 `canEdit` → **不 apply、不 persist、不 broadcast** | 采信客户端声明的 `mode`；在帧路径上 `await` 之前做权限判定以外的事 |
+| **API** | `apps/server/src/authz/**` 中间件 + 路由处理：session → `userId` → 成员角色 → capability | 无 session = `401`；未知文档 / 无成员关系 / 无 `canRead` **统一** `404 not_found`；`canRead` 但 capability 不足 = `403`（`CONTRACTS` §17.4） | 把授权决定下放给 web；用 UI 门控代替服务端判定；让 403/404 区分出文档是否存在 |
+| **WS** | `join-room` 与每个 BINARY 帧的入口（`RoomRegistry` / `DocumentRoom`），使用 A5 提供的 resolver | 升级即要求有效 session（否则 HTTP `401`，不建立 WS）；无 `canRead` → `ROOM_NOT_FOUND`（与未知文档同码，非泄露）；无 `canEdit` → `FORBIDDEN` 且**不 apply、不 persist、不 broadcast**，socket 保持打开 | 采信客户端声明的 `mode`；让失败的 join 驱逐已有房间；对 AWARENESS 帧施加写权限（viewer 也要能发光标） |
 | **document** | `documentCapabilities`（`canRead` / `canComment` / `canEdit` / `canManageMembers`）+ 持久化成员关系 | 这四问是唯一判据 | 在 UI 或服务端各写一套"更细"的规则 |
-| **space** | **本 Phase 不引入**（见下方待决问题 2） | — | 以 space 名义新增持久化实体或端点 |
+| **space** | **本 Phase 不引入**（D-061 决定 4：不制造当前不存在的领域实体） | — | 以 space 名义新增持久化实体、角色或端点 |
 
 #### Phase 2 — 依赖顺序（硬约束）
 
@@ -493,38 +504,44 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）
 理由与 D-057 同构：A5 与 A3 都改 `apps/server`。**先冻结 seam，再由 A3 接线**，否则两人同时改
 `registry.ts` / `ws.ts`，且 A3 会在没有判据的情况下自己发明授权规则。
 
-#### Phase 2 — Acceptance Criteria（冻结；不随身份机制的选择而变）
+#### Phase 2 — Acceptance Criteria（冻结）
 
 | # | 场景 | 判据 | 证据层 |
 | --- | --- | --- | --- |
-| P2-1 | viewer 不能改文档 | viewer 发送 SYNC update：服务端**不 apply / 不 persist / 不 broadcast**；发送方收到 frozen error code；第二个 peer 看不到该文本 | browser |
-| P2-2 | 判定在服务端 | 客户端把 `mode` 改成 `readwrite` **无效**；答案只由服务端按角色给出 | Node + browser |
-| P2-3 | 未认证 / 无成员关系 | 无身份请求 401；已认证但无成员关系 403；**403 与 404 不泄露文档是否存在** | Node |
-| P2-4 | 四层一致 | 同一角色在 API / WS / document capability / UI 门控四处得到同一答案；不一致即 FAIL（表驱动） | Node |
-| P2-5 | 权限不因断线/重启降级 | 角色变更后重连按**新角色**判定；进程重启后成员关系仍在 | browser + Node |
-| P2-6 | 越权管理成员 | `canManageMembers` 仅 owner；editor 调成员端点 403 | Node |
+| P2-1 | viewer 不能改文档 | viewer 发送 SYNC update：服务端**不 apply / 不 persist / 不 broadcast**；发送方收到 `FORBIDDEN`；第二个 peer 看不到该文本；socket 仍可接收他人更新 | browser |
+| P2-2 | 身份不可自称 | 客户端在 join payload / API body / header / query 里塞 `userId` **全部无效**；把 `mode` 改成 `readwrite` **无效**；答案只由 session + 成员关系给出 | Node + browser |
+| P2-3 | 非泄露 | 无 session = `401`；未知文档、无成员关系、无 `canRead` **三者响应完全相同**（`404 not_found`，状态码/body/headers 一致）；capability 不足才 `403` | Node |
+| P2-4 | 多层一致 | 同一角色在 API / WS join / WS frame / `documentCapabilities` 四处得到同一答案（表驱动，角色 × capability × 入口） | Node |
+| P2-5 | 权限不因重启/吊销失真 | 角色变更后重新判定为新角色；进程重启后成员关系仍在；`DELETE /api/session` 后同一 token 处处 `401` | browser + Node |
+| P2-6 | 越权管理 | `canManageMembers` 仅 owner；editor 调成员相关能力 = `403` | Node |
 | P2-7 | 既有门禁不回归 | typecheck / test / build / browser 全绿；M1 + M2-P0 的既有场景**一个都不能减少** | 全部 |
+| P2-8 | 术语与安全承诺 | 仓库文档 / UI 文案 / 报告里**不出现**被禁措辞（"无密码用户名登录可防跨用户冒用"等）；bootstrap 不得被描述为 password authentication（`CONTRACTS` §17.0）。检索时排除 D-061 的「作废表述」对照表与本条目自身——它们引用被禁措辞是为了**禁止**它 | `grep` + A6 复核 |
+| P2-9 | token 不暴露给 JS | `document.cookie` 读不到 `insighthub_session`；token 不出现在任何 JSON body、日志、Redux、localStorage、awareness；`POST /api/session/bootstrap` 的响应 body 不含 token | browser + Node |
 
-#### Phase 2 — 待项目负责人决策（唯一阻塞项）
+#### Phase 2 — Ownership
 
-**1. 身份 / 认证机制**（决定 `apps/server` 的身份来源与安全承诺措辞）：
-
-| 选项 | 内容 | 安全承诺 | 成本 |
+| Agent | 范围 | Owned Files | Do Not Touch |
 | --- | --- | --- | --- |
-| **A** | 客户端声明身份（沿用 `demoUser`），服务端只做成员关系与授权 | "授权判定在服务端，但**身份是自称的**" | 最低 |
-| **B**（推荐） | 服务端签发不透明 session token（用户名登录，无密码），httpOnly cookie | "身份由服务端签发，可防跨用户冒用；**无密码 = 无凭证保护**" | 中（+登录端点 + 登录 UI） |
-| **C** | 密码凭据认证（hash + 存储） | 完整认证 | 高，且引入新的持久化与依赖面；SSO 已在非目标内 |
+| **A5** | session/store/角色解析/授权判定核心、HTTP 中间件与 §17.4 端点、`FORBIDDEN` 码、版本 4→5、web 侧权限门控 | `apps/server/src/authz/**`（新建）<br>`apps/server/src/app.ts`<br>`apps/server/src/index.ts`（构造 authz 并注入 HTTP 层）<br>`packages/shared/src/errors.ts`、`packages/shared/src/index.ts`（版本常量）、`packages/shared/src/permission*.ts`（如需新判据）、对应 `*.test.ts`<br>`apps/web/src/features/**`（仅权限门控 UI） | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`、wire framing、`PROTOCOL_VERSION` |
+| **A3** | WS 侧执行点：升级认证、join 拒绝、BINARY 闸门、`documents` 元数据源 | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`（仅新增 documents / membership 只读数据源） | `packages/shared/**`、`apps/web/**`、`apps/server/src/authz/**`、错误码词表 |
+| **A6** | security / negative-path 证据（P2-1…P2-9） | `tests/browser/**` | 生产代码 |
+| **A0** | 契约定稿、集成、`index.ts` 的一行接线（若 A5/A3 都不该写）、Phase 2 final gate 调度 | `docs/**`、`AGENTS.md` | — |
+| **A1/A2/A4** | idle | — | — |
 
-**为什么不选 A 的默认理由**：Phase 2 的名称是 "permission **and authentication** consistency"；
-若身份由客户端自称，"认证一致性"没有可验证的对象，等于把 Phase 2 缩成纯授权——那是**milestone
-scope 改变**，需要项目负责人另行确认，不能由 A0 顺手决定。
+> **已知的跨域点（按 D-055 §1 / D-059 P2 的具名例外处理）**：`attachWebSocketServer` 需要收到
+> authz resolver。A5 不写 `ws.ts`，A3 不改 `authz/**`，因此**这一行接线由 A0 在集成时写入**
+> 并在 commit message 点名。
 
-**2. space 层**：
+#### Phase 2 — Branch / worktree plan
 
-| 选项 | 内容 | 影响 |
-| --- | --- | --- |
-| **A**（推荐） | 本 Phase **不引入 space 实体**；"space 层授权"留到出现真实 space 需求时再设计 | 保持 P2-1…P2-7 可验证，不新增持久化实体 |
-| B | 引入 space 实体 + space 级角色 + 端点 | scope 扩大；需要新的 store schema 与契约，Phase 2 时长翻倍 |
+```text
+main @ <freeze commit>
+  ├ agent/a5-m2-phase2-authz      → Insighthub-wt-a5-m2-authz
+  │     └ (合入后) agent/a3-m2-phase2-ws-authz → Insighthub-wt-a3-m2-ws-authz
+  └ (A6 在 A3 合入后才启动) agent/a6-m2-phase2-security → Insighthub-wt-a6-m2-security
+```
+
+规则与 M2-P0 相同：worktree 一律从**派发时的** `main` HEAD 分叉；A0 独占集成；A5 → A3 顺序不可颠倒（D-061 §6）。
 
 **Backlog（不属于任何 Gate）**：**无编辑 join 仍 append 2 字节空 update**（D-055 §3，无内容影响）、
 **idle/background compaction**（M2-P0 只做 eviction-time，D-054）、

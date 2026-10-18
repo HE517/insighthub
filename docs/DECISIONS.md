@@ -1957,3 +1957,92 @@ Gate 判据本身**不变**（`docs/TASKS.md`「M2-P0 Exit Gate vs M2 Milestone�
 
 **后果。** M2-P0 成为 `main` 上一个可引用、可复现的基线点（`m2-p0-gate`）；M1 的"重启即丢"从系统行为
 降级为"M2 之前的历史限制"；同时 M2 保持 open，Phase 2 的权限/认证不会被误当作已完成。
+
+---
+
+## D-061 · 2026-10-18 · accepted · M2 Phase 2 冻结：server-issued session + demo bootstrap；space 不引入 (M2 Phase 2)
+
+**背景。** A0 在 D-060 之后完成 Phase 2 现状重建并提出两个产品级选择（身份机制、space 层）。
+项目负责人作出决定，并**同时纠正了 A0 草案里的安全承诺措辞**。本条记录决定本身、被纠正的措辞，
+以及由此冻结的契约（`docs/CONTRACTS.md` §17、`docs/ARCHITECTURE.md` §8）。
+
+### 1. 身份/认证 = 服务端签发 session（A0 草案的 Option B），但安全承诺收窄
+
+采用：**server-issued opaque session token + `httpOnly` cookie + server-side session → userId
+resolution**，配合 **Demo Identity Bootstrap**（本阶段不实现密码凭据认证）。
+
+**它保证什么：**
+
+1. 客户端**不能**在后续 WS / API 请求里自行声明 `userId` 来绕过授权；
+2. session token 对应的 `userId` 由服务端解析；
+3. authorization 只信任 server-side session identity；
+4. token 走 `httpOnly` cookie，不暴露给前端 JS。
+
+**它不保证什么：**
+
+1. 登录者真实拥有该用户名；
+2. demo bootstrap 是 credential authentication；
+3. 现实身份得到验证。
+
+**术语三分（必须区分，不得合并）：** `Demo Identity Bootstrap` / `Session Authentication` /
+`Authorization`。
+
+### 2. 被纠正的措辞（A0 草案错误，已作废）
+
+A0 在 Phase 2 草案里把 Option B 写成"身份由服务端签发，**可防跨用户冒用**"。
+项目负责人指出这是**把 session 的能力说成了 credential authentication 的能力**，要求作废。
+
+| 作废表述 | 现行表述 |
+| --- | --- |
+| 无密码用户名登录可防跨用户冒用 | 服务端签发的 session 可以防止客户端在后续 API/WS 请求中直接伪造身份；demo bootstrap 本身不提供 credential-level identity proof |
+| 已实现认证（无限定） | 已实现 **Session Authentication**；Demo Identity Bootstrap 不验证身份归属 |
+
+写进契约的是后者，并且列为 **forbidden phrasing**（`docs/CONTRACTS.md` §17.0）：
+任何"只有密码认证才成立"的句子都不得用于本系统。这不是文案偏好，是**安全承诺**边界（D-053 §3）。
+
+### 3. M2 Phase 2 不实现（非目标，冻结）
+
+password hash / storage、signup、password reset、OAuth / SSO、MFA。
+登录 UI 在需要时只允许是**明确标注 demo** 的 identity selector / bootstrap，由服务端创建
+opaque session。
+
+### 4. Space = space-A
+
+本 Phase **不引入** space entity / space membership / space role。闭环固定为：
+
+```text
+User → Session → Document Membership → DocumentRole
+     → documentCapabilities → HTTP + WebSocket enforcement
+```
+
+space authorization 延后到真实 space domain 出现时设计。**不得为了让四层表格看起来完整而制造一个
+当前不存在的领域实体**——表格里"space：本 Phase 不引入"是正确答案，不是缺口。
+
+### 5. 契约后果
+
+| 项 | 决定 |
+| --- | --- |
+| 新端点 | `POST /api/session/bootstrap`、`GET /api/session`、`DELETE /api/session`、`GET /api/documents`、`GET /api/documents/:id`（`CONTRACTS` §12 + §17.4） |
+| 非泄露规则 | 未知文档 / 无成员关系 / 无 `canRead` **统一** `404 not_found`；不足 capability 才 `403`（§17.4） |
+| 新错误码 | `WS_ERROR_CODES.FORBIDDEN`（非致命）；`ROOM_NOT_FOUND` 复用于"未知或无权"，因为**同一个回答正是非泄露规则需要的** |
+| `SHARED_CONTRACT_VERSION` | 4 → **5**（封闭词表增长），由 A5 与 `errors.ts` 一起实现 |
+| `PROTOCOL_VERSION` | **不变（2）**：framing、消息类型、payload 形状均未变 |
+| session 持久性 | **process-scoped**（内存）。重启即失效、需重新 bootstrap —— 记为 limitation，**不得**写成安全属性 |
+| membership 持久性 | 持久化（A5 自有表），重启后仍在 |
+
+### 6. 实施顺序（冻结，A0 调度）
+
+```text
+A5 authz/session/permission seam（含 shared 判据、session store、HTTP 中间件与端点）
+  → A0 integrate
+  → A3 HTTP/WS enforcement（join 拒绝、BINARY 闸门、documents 元数据源接线）
+  → A6 security / negative-path evidence
+  → A7 M2 Phase 2 final review
+```
+
+先 A5 后 A3 的理由与 D-057 同构：两者都改 `apps/server`。**先冻结判定核心，再由 A3 接线**，
+否则 A3 会在没有判据的情况下自己发明授权规则，且两人同时改 `ws.ts` / `registry.ts`。
+
+**后果。** Phase 2 从"待决"变成"已冻结、可派发"：安全承诺被限定在 session authentication 能兑现的
+范围内，demo bootstrap 的真实弱点写在契约里而不是藏在措辞里；space 明确不做，避免用假实体换表格完整性。
+代价是 `SHARED_CONTRACT_VERSION` 再到 5，以及 session 非持久这一条 limitation 需要一路带到 M2 关闭。

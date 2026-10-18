@@ -603,3 +603,50 @@ not change the contract; they pin what the first implementation is allowed to be
 | WebSocket close code | persistence-internal failure closes with **1011** (internal error), not 1008 (policy violation). 1008 stays for protocol/policy errors |
 | No-store server path | accepted as an internal/test compatibility seam, bounded by three obligations: production `index.ts` always opens the durable store; a durable-init failure refuses to start; isolated tests may run the no-store path but production cannot reach it |
 | Fail-closed wiring | `attachWebSocketServer` throws when `config.dataPath` is set but no store was supplied, so "forgot to open the store" is a startup failure rather than a silent memory-only server |
+
+## 8. Identity, session and authorization (M2 Phase 2 — FROZEN, NOT implemented)
+
+Frozen by `docs/DECISIONS.md` **D-061**. The normative interface (endpoints, cookie rules,
+status codes, WS behaviour, version impact) lives in `docs/CONTRACTS.md` **§17**; this section
+records only where the decisions are allowed to live.
+
+### 8.1 The permission chain
+
+```text
+User (server-side roster, demo bootstrap)
+  → Session (opaque token in an httpOnly cookie; server resolves token → userId)
+    → Document Membership (durable per-document row: documentId, userId, role)
+      → DocumentRole (viewer < commenter < editor < owner — already frozen in shared)
+        → documentCapabilities (canRead / canComment / canEdit / canManageMembers)
+          → enforcement: HTTP middleware + WebSocket join/frame gate
+```
+
+The chain has exactly one decision point per layer and the **server** owns every one of them.
+The client consumes `documentCapabilities` only to decide which controls to enable; it is
+never the authority.
+
+### 8.2 Where authorization decisions may live
+
+| Layer | Authority lives in | Must not appear in |
+| --- | --- | --- |
+| HTTP | `apps/server/src/authz/**` middleware + route handlers | the web app |
+| WebSocket join | the room registry's join path, using a resolver supplied by the authz module | frame parsing, the client |
+| WebSocket frame | the room's mutation gate (BINARY `SYNC` requires `canEdit`) | awareness relay path (presence only needs `canRead`) |
+| Document | `documentCapabilities` + the durable membership row | UI-only checks, duplicated rule tables |
+| Space | **does not exist in Phase 2** | a new entity invented to complete a table |
+
+### 8.3 Why the client's `mode` is not an input to authorization
+
+`join-room.mode` exists in the schema from M1 and is retained for compatibility. If the server
+believed it, every client could declare itself `readwrite`; authorization would then be
+advisory, which is the exact defect Phase 2 removes. It is therefore **advisory, never
+authoritative** (`docs/CONTRACTS.md` §17.5).
+
+### 8.4 Deliberate limitations, stated as limitations
+
+| Limitation | Why it is acceptable now | What it must never be called |
+| --- | --- | --- |
+| Sessions are process-scoped (in memory) | a restart re-bootstraps a demo identity cheaply | "durable sessions" |
+| Demo bootstrap proves no ownership of an identity | password/OAuth are explicit non-goals for MVP | "authentication that prevents impersonation" |
+| Membership is a seeded fixture | it exists to exercise roles, not to model an admin product | "membership management" |
+| No `space` layer | no space domain exists in code or contract | "space-level permissions implemented" |

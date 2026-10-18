@@ -544,10 +544,14 @@ a proposal object and must never be treated as document state
 | --- | --- | --- | --- |
 | `GET` | `/health` | `200 { "status": "ok" }` | M0 |
 | `GET` | `/api/meta` | `200 { name, wsPath, protocolVersion: 2 }` | M0 |
-| `GET` | `/api/documents` | not designed yet | M2 |
-| `GET` | `/api/documents/:id` | not designed yet | M2 |
+| `POST` | `/api/session/bootstrap` | `200 { userId, displayName, expiresAt }` + `Set-Cookie` — §17.4 | M2 Phase 2 |
+| `GET` | `/api/session` | `200 { userId, displayName, expiresAt }` / `401` — §17.4 | M2 Phase 2 |
+| `DELETE` | `/api/session` | `204` + cleared cookie / `401` — §17.4 | M2 Phase 2 |
+| `GET` | `/api/documents` | `200 { documents: DocumentMeta[] }` / `401` — §17.4 | M2 Phase 2 |
+| `GET` | `/api/documents/:id` | `200 DocumentMeta` / `401` / `403` / `404` — §17.4 | M2 Phase 2 |
 
-Unknown paths return `404 { "error": "not_found" }`.
+Unknown paths return `404 { "error": "not_found" }`. The non-disclosure rule for
+`/api/documents/:id` (§17.4) governs which of `403` and `404` a caller may see.
 
 WebSocket endpoint: `ws://<host>:<port>/ws` (configurable via `WS_PATH`).
 An upgrade request on any other path is rejected.
@@ -760,3 +764,128 @@ invite callers to change identity mid-session, which nothing in M2 needs.
 concern. It changes no seam, no message and no schema, so it is specified in
 `docs/DECISIONS.md` D-046 and `docs/ARCHITECTURE.md` §7.2 rather than here. Recording that
 explicitly keeps this document about the cross-boundary contract only.
+
+## 17. Identity, session authentication and authorization (M2 Phase 2 — FROZEN, NOT implemented)
+
+Frozen by `docs/DECISIONS.md` **D-061** (Project Owner decision). Nothing in this section is
+implemented yet; it is the contract A5/A3 implement and A6/A7 verify.
+
+### 17.0 Three terms that must not be collapsed
+
+| Term | What it is | What it guarantees | What it does **not** guarantee |
+| --- | --- | --- | --- |
+| **Demo Identity Bootstrap** | `POST /api/session/bootstrap` with a `demoUserId` picked from a **server-side** roster; **no credential is presented** | which demo identity the caller claims | that the caller owns that identity |
+| **Session Authentication** | an opaque token in an `httpOnly` cookie; the server maps token → `userId` | later API/WS requests **cannot** self-declare identity; authorization has one trusted source | credential-level identity proof; real-world identity |
+| **Authorization** | `userId` → document membership → `DocumentRole` → `documentCapabilities` → HTTP/WS enforcement | who may read / comment / edit / manage | anything about who the user really is |
+
+**Normative wording for release notes, UI labels and reports:**
+
+> 服务端签发的 session 可以防止客户端在后续 API/WS 请求中直接伪造身份；
+> demo bootstrap 本身不提供 credential-level identity proof。
+
+**Forbidden phrasings** (must not appear in docs, UI copy or release notes):
+
+- "无密码用户名登录可以防止跨用户冒用" / "passwordless login prevents impersonation";
+- unqualified "已实现认证" / "authenticated users" without naming it *session* authentication;
+- any sentence implying a demo identity proves a real identity.
+
+If a sentence about authentication is true only of password authentication, it may not be
+written about this system. This is a **security-claim** constraint, not a style preference.
+
+### 17.1 Why a server-issued session rather than a client-declared `userId`
+
+Today the client generates its own identity (`apps/web/src/user.ts`) and the server never
+sees it. Any design that keeps taking `userId` from a payload, header or query parameter
+leaves authorization advisory: the caller chooses whose permissions to borrow. Putting the
+mapping in a server-side session is the smallest change that removes exactly that hole — and
+no more than that. It is deliberately **not** claimed to fix the bootstrap step, where
+identity is still merely claimed.
+
+### 17.2 Session (normative)
+
+| Aspect | Rule |
+| --- | --- |
+| Cookie | `insighthub_session`; `HttpOnly`; `SameSite=Lax`; `Path=/`; `Secure` added when the request is served over TLS |
+| Token | ≥ 128 bits from a CSPRNG, base64url-encoded; opaque (no signed claims, no user data) |
+| Token exposure | **never** in a JSON body, **never** in logs, **never** in Yjs/awareness/Redux/localStorage |
+| Server state | `token → { userId, createdAt, expiresAt }`, lifetime 12 h |
+| Durability | **process-scoped** (in memory). A restart invalidates every session and clients must re-bootstrap. This is a stated Phase 2 limitation, **not** a security property |
+| Rotation | each successful bootstrap issues a new token and invalidates the previous one for that client |
+| Carrier | the cookie is the only carrier. Phase 2 has **no** `Authorization` header path — one mechanism, not two |
+| Revocation | `DELETE /api/session` destroys the session server-side and clears the cookie; a destroyed or expired token yields `401` everywhere |
+
+### 17.3 Demo roster and seeded membership (server-side constants)
+
+- The roster is a **server-side constant list** of demo identities (fixed `userId` +
+  `displayName`), not user input. An unknown `demoUserId` is `400`, never a new user.
+- Demo document memberships (`documentId`, `userId`, `role`) are a **seeded fixture** owned by
+  A5 and clearly labelled as demo data. Seeding exists so the roles can be exercised; it is
+  not a membership-management feature.
+- Explicit non-goals: user creation / signup, profile editing, invitation flows, and any
+  membership-mutation endpoint beyond what §17.4 lists.
+
+### 17.4 HTTP surface (additions to §12)
+
+Every endpoint below requires a session **except** `POST /api/session/bootstrap`.
+
+| Method | Path | Success | Failures |
+| --- | --- | --- | --- |
+| `POST` | `/api/session/bootstrap` | `200 { userId, displayName, expiresAt }` + `Set-Cookie` | `400 { error: "invalid_demo_identity" }` |
+| `GET` | `/api/session` | `200 { userId, displayName, expiresAt }` | `401 { error: "unauthenticated" }` |
+| `DELETE` | `/api/session` | `204`, cookie cleared | `401 { error: "unauthenticated" }` |
+| `GET` | `/api/documents` | `200 { documents: DocumentMeta[] }` — only documents where the caller has ≥ `viewer` | `401` |
+| `GET` | `/api/documents/:id` | `200 DocumentMeta` | `401` / `403` / `404` — see the rule below |
+
+**Non-disclosure rule (normative).** For `GET /api/documents/:id`:
+
+| Caller state | Response |
+| --- | --- |
+| no session | `401 { error: "unauthenticated" }` |
+| session, document unknown **or** caller has no membership **or** no `canRead` | `404 { error: "not_found" }` — **one response for all three**, byte-identical |
+| session, `canRead` holds, but the action needs more than `canRead` | `403 { error: "forbidden" }` |
+
+Consequence: a caller can never learn whether a document exists outside their membership.
+`404` must not carry a different message for "unknown" versus "not yours", and must not differ
+in status, body shape or headers.
+
+Cross-origin note (normative for the dev stack): the API is served on a different port than
+the Vite dev server, so `cors` must be configured with `credentials: true` and an explicit
+origin (never `*`), and the web client must send `credentials: 'include'`.
+
+### 17.5 WebSocket (normative)
+
+| Point | Rule |
+| --- | --- |
+| Upgrade | a valid session cookie is required. Missing or expired session → the upgrade is refused with **HTTP `401`**; no WebSocket is established |
+| Identity | the server resolves `userId` from the session. Any identity supplied by the client (payload field, header, query) is **ignored** |
+| `mode` | `join-room.mode` stays in the schema for compatibility but is **advisory only**. A client claiming `readwrite` never gains write permission; the server derives the effective capability from membership |
+| Join denial | unknown document and read-denied document both answer **`ROOM_NOT_FOUND`** (non-disclosure, same rule as §17.4). A denied join **must not** evict or replace a room the socket already holds (atomic replace applies only to a successful join) |
+| BINARY `SYNC` | requires `canEdit`. Otherwise: reply `FORBIDDEN`, **do not apply, do not persist, do not broadcast**, and keep the socket open (a reader stays a reader) |
+| BINARY `AWARENESS` | requires `canRead` only; a viewer may publish its cursor |
+| Framing | unchanged. No new frame type, no identity field added to any payload; `PROTOCOL_VERSION` stays **2** |
+
+### 17.6 Error vocabulary addition
+
+| Item | Change |
+| --- | --- |
+| `WS_ERROR_CODES.FORBIDDEN` | **new** code, non-fatal, for "you are in this room but may not perform this mutation". `FATAL_CODES` unchanged |
+| `PROTOCOL_VERSION` | **unchanged (2)** — additive within the existing `error` message; the workspace ships a single client build, so there is no older client to confuse |
+| `SHARED_CONTRACT_VERSION` | 4 → **5** (A5 implements the bump together with `errors.ts`; recorded here because a closed vocabulary grew) |
+
+`ROOM_NOT_FOUND` is reused rather than adding a second "denied" code, because one code for
+both cases is exactly what the non-disclosure rule needs.
+
+### 17.7 What this section does not authorise
+
+Password hashing/storage, signup, password reset, OAuth/SSO, MFA, durable sessions, session
+analytics, rate limiting, multi-tenant isolation, **and any `space` entity, space membership
+or space role**. Space authorization is deferred until a real space domain exists
+(`docs/DECISIONS.md` D-061 决定 2); the four-layer table in `docs/TASKS.md` records space as
+*not introduced* rather than inventing an entity so a table looks complete.
+
+### 17.8 Version impact
+
+| Constant | Change | Why |
+| --- | --- | --- |
+| `SHARED_CONTRACT_VERSION` | 4 → **5** | `WS_ERROR_CODES` gained `FORBIDDEN` (a closed vocabulary grew) |
+| `PROTOCOL_VERSION` | **unchanged (2)** | framing, message types and payload shapes are untouched |
