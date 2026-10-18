@@ -120,28 +120,60 @@ export function collectRemoteCursors(
 /**
  * Cursor offsets for one validated awareness state.
  *
- * `cursor` is preferred, `selection` is the fallback, and the two are normalised
- * into one anchor/head pair because they describe the same thing (a CodeMirror
- * selection is an anchor plus a head, which may be in either order).
+ * The contract carries **two independent fields** (`docs/CONTRACTS.md` §9):
+ * `cursor` is the caret (`anchor` + `head`, which also gives the direction) and
+ * `selection` is the normalised range the user has highlighted. A client normally
+ * publishes both, derived from one `EditorSelection`, but nothing forces the two
+ * to arrive in the same update, so neither field may be used to reconstruct the
+ * other:
+ *
+ * - the caret comes from `cursor.head`;
+ * - the highlighted range comes from `selection`;
+ * - a peer that publishes no `selection` but a non-collapsed `cursor` still gets a
+ *   range, derived from the cursor itself (that is what a cursor-only client
+ *   sends);
+ * - a `selection` that arrives while the `cursor` is collapsed is still rendered.
+ *   Deriving the range from the cursor alone - the previous behaviour - silently
+ *   dropped it, so a remote selection never appeared.
  */
 function cursorFromState(
   state: AwarenessState,
   documentLength: number,
 ): { head: number; anchor: number; selection: { from: number; to: number } | null } | null {
-  const raw = state.cursor ?? selectionAsCursor(state);
-  if (raw === null) return null;
+  const cursor =
+    state.cursor === null
+      ? null
+      : {
+          anchor: clampOffset(state.cursor.anchor, documentLength),
+          head: clampOffset(state.cursor.head, documentLength),
+        };
 
-  const anchor = clampOffset(raw.anchor, documentLength);
-  const head = clampOffset(raw.head, documentLength);
-  const from = Math.min(anchor, head);
-  const to = Math.max(anchor, head);
+  const published =
+    state.selection === null
+      ? null
+      : {
+          from: clampOffset(state.selection.from, documentLength),
+          to: clampOffset(state.selection.to, documentLength),
+        };
 
-  return { anchor, head, selection: from === to ? null : { from, to } };
-}
+  // Clamping is monotonic, so a valid `selection` keeps `from <= to`.
+  const range =
+    published ??
+    (cursor === null
+      ? null
+      : { from: Math.min(cursor.anchor, cursor.head), to: Math.max(cursor.anchor, cursor.head) });
 
-function selectionAsCursor(state: AwarenessState): { anchor: number; head: number } | null {
-  if (state.selection === null) return null;
-  return { anchor: state.selection.from, head: state.selection.to };
+  if (cursor !== null) {
+    return {
+      anchor: cursor.anchor,
+      head: cursor.head,
+      selection: range !== null && range.to > range.from ? range : null,
+    };
+  }
+
+  // No usable caret: the selection endpoints are the only position information.
+  if (range === null) return null;
+  return { anchor: range.from, head: range.to, selection: range.to > range.from ? range : null };
 }
 
 function clampOffset(offset: number, documentLength: number): number {
