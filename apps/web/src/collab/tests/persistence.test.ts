@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as Y from 'yjs';
 
 import {
   createTestContext,
@@ -8,7 +9,12 @@ import {
 } from './support/scenarios.js';
 import { FakeIndexedDb } from './support/fake-indexeddb.js';
 import { createDocumentSession, type DocumentSession } from '../internal/document-session.js';
-import { PERSISTENCE_PREFIX, resolvePersistenceKey } from '../internal/persistence.js';
+import {
+  attachDocumentPersistence,
+  PERSISTENCE_PREFIX,
+  resolvePersistenceKey,
+  type DocumentPersistence,
+} from '../internal/persistence.js';
 
 /**
  * Requirement 2: IndexedDB persistence.
@@ -297,6 +303,320 @@ describe('global IndexedDB installation (DEFECT P0-1)', () => {
       expect((globalThis as { indexedDB?: unknown }).indexedDB).toBe(pageFactory);
     } finally {
       session?.destroy();
+      restoreGlobals();
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------- *
+ * M2-P0-3 — injected-factory leases (D-046)
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Regression tests for the defect `docs/DECISIONS.md` D-039 §4 recorded and D-046
+ * froze the fix for.
+ *
+ * ## The pre-fix failure chain these tests reproduce
+ *
+ * The old `installGlobalIndexedDb` was a **single snapshot**: it captured
+ * `Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')` and restored that one
+ * descriptor on teardown, with idempotency only per handle (`destroyPromise`). There
+ * was no stack and no cross-handle reference count. With two overlapping sessions:
+ *
+ * ```text
+ * A installs FA  → snapshots the ambient descriptor
+ * B installs FB  → snapshots A's descriptor
+ * A.destroy()    → restores the ambient descriptor  (B is still live → wrong factory)
+ * B.destroy()    → restores A's descriptor          (a fake factory, permanently global)
+ * ```
+ *
+ * ## Which assertion is the discriminator, per test
+ *
+ * Each test below pins one row of D-046's table. The assertion marked `← RED pre-fix`
+ * is the one the old module failed; the others are invariants that must hold in both
+ * worlds and stop the test from passing for the wrong reason.
+ *
+ * | # | D-046 row | Fails pre-fix because |
+ * | --- | --- | --- |
+ * | 1 | nested factories | `A.destroy()` pops the ambient layer out from under live B |
+ * | 2 | non-LIFO destroy | restoring per release, not per stack: the end state is a fake factory |
+ * | 3 | same factory, two references | the second install short-circuits to a no-op, so one release restores everything |
+ * | 4 | construction-failure rollback | the failed install restores *its* snapshot, leaving the layer below as a fake factory |
+ * | 5 | ambient browser factory | (green pre-fix) guards that the fix does not start writing the global on the production path |
+ *
+ * Test 5 is deliberately a **no-regression guard**, not a defect reproduction: the
+ * production path already short-circuited before the fix, and D-046 requires that it
+ * keeps doing so with zero writes. Saying it "was red" would be false.
+ *
+ * ## What this is not
+ *
+ * Node evidence about a module-level property on `globalThis`. It pins descriptor
+ * identity and lease ordering; it says nothing about real browser storage behaviour
+ * (that is the A6 `tests/browser/**` gate). The ambient global here is a getter-only
+ * accessor, i.e. the shape a Chromium `window.indexedDB` actually has.
+ */
+describe('injected IndexedDB factory lifecycle (M2-P0-3 / D-046)', () => {
+  /** The descriptor of the global property under test, read fresh every time. */
+  function descriptor(): PropertyDescriptor | undefined {
+    return Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+  }
+
+  /** The value `lib0` would read from the bare `indexedDB` identifier. */
+  function currentFactory(): unknown {
+    return (globalThis as { indexedDB?: unknown }).indexedDB;
+  }
+
+  /**
+   * Attach persistence for throwaway documents, tracking every handle so a failing
+   * assertion cannot leave a lease installed and poison the next test.
+   */
+  function createLedger() {
+    const handles: DocumentPersistence[] = [];
+    const docs: Y.Doc[] = [];
+
+    const start = (
+      factory: FakeIndexedDb,
+      key: string,
+      loadProviderConstructor?: () => Promise<never>,
+    ): Promise<DocumentPersistence> => {
+      const doc = new Y.Doc();
+      docs.push(doc);
+      return attachDocumentPersistence({
+        doc,
+        key,
+        indexedDB: factory,
+        ...(loadProviderConstructor === undefined ? {} : { loadProviderConstructor }),
+      }).then(
+        (persistence) => {
+          handles.push(persistence);
+          return persistence;
+        },
+        (error: unknown) => {
+          // A rejected attach has already rolled its own lease back; only the doc
+          // needs cleaning up, and it is in `docs`.
+          throw error;
+        },
+      );
+    };
+
+    return {
+      /** Start an attach and wait for the local replica, as a caller would. */
+      async attach(factory: FakeIndexedDb, key: string): Promise<DocumentPersistence> {
+        const persistence = await start(factory, key);
+        await persistence.whenSynced;
+        return persistence;
+      },
+      /** The same attach, but the caller owns the promise (used for interleaving). */
+      start,
+      async releaseAll(): Promise<void> {
+        for (const handle of handles.splice(0).reverse()) {
+          try {
+            await handle.destroy();
+          } catch {
+            /* teardown of an already-failed provider is not the assertion here */
+          }
+        }
+      },
+      disposeDocs(): void {
+        for (const doc of docs.splice(0)) doc.destroy();
+      },
+    };
+  }
+
+  it('keeps every overlapping session reading its own injected factory', async () => {
+    const ambient = new FakeIndexedDb();
+    const factoryA = new FakeIndexedDb();
+    const factoryB = new FakeIndexedDb();
+    const restoreGlobals = installBrowserShapedIndexedDb(ambient);
+    const initial = descriptor();
+    const ledger = createLedger();
+
+    try {
+      const persistenceA = await ledger.attach(factoryA, 'overlap-a');
+      expect(currentFactory()).toBe(factoryA);
+
+      const persistenceB = await ledger.attach(factoryB, 'overlap-b');
+      expect(currentFactory()).toBe(factoryB);
+
+      // Non-LIFO in the sense that matters for the defect: the *earlier* session ends
+      // first. Its teardown must not pop the global out from under the live one.
+      await persistenceA.destroy();
+      // ← RED pre-fix: the single-snapshot restore put the ambient factory back, so a
+      // still-live B silently resolved a *different* database than the one it injected.
+      expect(currentFactory()).toBe(factoryB);
+
+      // The observable consequence of that window: B's writes must stay in B's store.
+      expect(ambient.createdNames).toEqual([]);
+      expect(factoryA.createdNames).toEqual(['overlap-a']);
+      expect(factoryB.createdNames).toEqual(['overlap-b']);
+
+      await persistenceB.destroy();
+      expect(descriptor()).toEqual(initial);
+    } finally {
+      await ledger.releaseAll();
+      ledger.disposeDocs();
+      restoreGlobals();
+    }
+  });
+
+  it('unwinds the stack when sessions are destroyed out of order', async () => {
+    const ambient = new FakeIndexedDb();
+    const factoryA = new FakeIndexedDb();
+    const factoryB = new FakeIndexedDb();
+    const factoryC = new FakeIndexedDb();
+    const restoreGlobals = installBrowserShapedIndexedDb(ambient);
+    const initial = descriptor();
+    const ledger = createLedger();
+
+    try {
+      const persistenceA = await ledger.attach(factoryA, 'stack-a');
+      const persistenceB = await ledger.attach(factoryB, 'stack-b');
+      const persistenceC = await ledger.attach(factoryC, 'stack-c');
+      expect(currentFactory()).toBe(factoryC);
+
+      // Release the bottom layer first: it retires but must not restore, because two
+      // live layers sit above it.
+      await persistenceA.destroy();
+      // ← RED pre-fix: the ambient descriptor came back with B and C still live.
+      expect(currentFactory()).toBe(factoryC);
+
+      // Release the top layer: the middle layer is next and still live, so the stack
+      // stops there rather than unwinding through it.
+      await persistenceC.destroy();
+      expect(currentFactory()).toBe(factoryB);
+
+      // Release the middle layer: now the already-retired bottom layer is on top, so
+      // it unwinds too and the original descriptor comes back exactly.
+      await persistenceB.destroy();
+      expect(descriptor()).toEqual(initial);
+      // ← RED pre-fix: the final state was A's installed data property (a fake
+      // factory left permanently on the global), never the ambient accessor.
+      expect(currentFactory()).toBe(ambient);
+      expect(typeof descriptor()?.get).toBe('function');
+    } finally {
+      await ledger.releaseAll();
+      ledger.disposeDocs();
+      restoreGlobals();
+    }
+  });
+
+  it('counts references when the same factory is installed twice', async () => {
+    const ambient = new FakeIndexedDb();
+    const shared = new FakeIndexedDb();
+    const restoreGlobals = installBrowserShapedIndexedDb(ambient);
+    const initial = descriptor();
+    const ledger = createLedger();
+
+    try {
+      const first = await ledger.attach(shared, 'refcount-a');
+      const second = await ledger.attach(shared, 'refcount-b');
+      expect(currentFactory()).toBe(shared);
+
+      // The second acquisition is a second reference to the same installation, not a
+      // new layer: releasing one must leave the factory installed for the other.
+      await first.destroy();
+      // ← RED pre-fix: the second install short-circuited to a no-op, so this single
+      // release restored the ambient descriptor while `second` was still live.
+      expect(currentFactory()).toBe(shared);
+
+      await second.destroy();
+      expect(descriptor()).toEqual(initial);
+    } finally {
+      await ledger.releaseAll();
+      ledger.disposeDocs();
+      restoreGlobals();
+    }
+  });
+
+  it('rolls the global back when provider construction fails', async () => {
+    const ambient = new FakeIndexedDb();
+    const factoryA = new FakeIndexedDb();
+    const factoryB = new FakeIndexedDb();
+    const restoreGlobals = installBrowserShapedIndexedDb(ambient);
+    const initial = descriptor();
+    const ledger = createLedger();
+    let failConstruction: ((error: Error) => void) | undefined;
+
+    try {
+      const persistenceA = await ledger.attach(factoryA, 'rollback-a');
+
+      // Hold B's construction open so the release of A can be ordered before it — the
+      // composition that makes the pre-fix rollback wrong.
+      const pendingB = ledger.start(
+        factoryB,
+        'rollback-b',
+        () =>
+          new Promise<never>((_resolve, reject) => {
+            failConstruction = reject;
+          }),
+      );
+      // The lease is installed synchronously, before the provider is constructed.
+      expect(currentFactory()).toBe(factoryB);
+
+      await persistenceA.destroy();
+      expect(currentFactory()).toBe(factoryB);
+
+      failConstruction?.(new Error('provider construction failed'));
+      await expect(pendingB).rejects.toThrow(/provider construction failed/);
+
+      // Construction failure must release its own layer; unwinding the retired layer
+      // below it must reach the original descriptor, not A's injected factory.
+      // ← RED pre-fix: the failed install restored *its* snapshot (A's data property),
+      // so a fake factory stayed on the global with nobody owning it.
+      expect(descriptor()).toEqual(initial);
+      expect(currentFactory()).toBe(ambient);
+    } finally {
+      await ledger.releaseAll();
+      ledger.disposeDocs();
+      restoreGlobals();
+    }
+  });
+
+  it('never writes the global on the production path (no injected factory)', async () => {
+    const pageFactory = new FakeIndexedDb();
+    const restoreGlobals = installBrowserShapedIndexedDb(pageFactory);
+    const initial = descriptor();
+    const definePropertySpy = vi.spyOn(Object, 'defineProperty');
+    const doc = new Y.Doc();
+    let persistence: DocumentPersistence | undefined;
+
+    try {
+      // No `indexedDB` option: the module resolves the ambient global, which is the
+      // production browser path. Installing it would be a no-op *and* a mutation of
+      // the host page, so it must not happen at all.
+      persistence = await attachDocumentPersistence({ doc, key: 'production-path' });
+      await persistence.whenSynced;
+
+      const writesToTheGlobal = definePropertySpy.mock.calls.filter(
+        ([target, property]) => target === globalThis && property === 'indexedDB',
+      );
+      expect(writesToTheGlobal).toEqual([]);
+      // The page's own getter must survive untouched for the whole lifetime.
+      expect(descriptor()?.get).toBe(initial?.get);
+      expect(descriptor()?.set).toBeUndefined();
+      expect(currentFactory()).toBe(pageFactory);
+
+      doc.getText('content').insert(0, 'production path');
+      await waitFor(
+        () => pageFactory.records('production-path').length > 0,
+        'the ambient factory to receive the local update',
+      );
+
+      await persistence.destroy();
+      persistence = undefined;
+      expect(
+        definePropertySpy.mock.calls.filter(
+          ([target, property]) => target === globalThis && property === 'indexedDB',
+        ),
+      ).toEqual([]);
+      // Teardown must leave the descriptor byte-for-byte what it was: the same
+      // accessor object, not a re-created one and not a data property.
+      expect(descriptor()).toEqual(initial);
+      expect(descriptor()?.get).toBe(initial?.get);
+    } finally {
+      await persistence?.destroy();
+      definePropertySpy.mockRestore();
+      doc.destroy();
       restoreGlobals();
     }
   });
