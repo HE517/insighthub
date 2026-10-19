@@ -191,7 +191,7 @@ describe('room-joined contract', () => {
   it('builds a room-joined acknowledgement carrying the initial peer roster', () => {
     const parsed = parseServerMessage(
       createRoomJoinedMessage(
-        { documentId: 'doc-1', connectionId: 'conn-1', peers: ['conn-0'] },
+        { documentId: 'doc-1', connectionId: 'conn-1', peers: ['conn-0'], role: 'viewer' },
         { ts: TS },
       ),
     );
@@ -199,13 +199,36 @@ describe('room-joined contract', () => {
     if (parsed.data?.type === 'room-joined') {
       expect(parsed.data.payload.connectionId).toBe('conn-1');
       expect(parsed.data.payload.peers).toEqual(['conn-0']);
+      expect(parsed.data.payload.role).toBe('viewer');
     }
+  });
+
+  it('requires the role, so a producer cannot forget to say who the caller is', () => {
+    // `role` is the only channel that tells a client its own role (§5.2 / §17.5), and a
+    // successful join always has one. Making it optional would let a producer ship a
+    // `room-joined` the client cannot gate on — the failure would be a silently read-only
+    // editor, not a compile error.
+    const parsed = parseServerMessage({
+      type: 'room-joined',
+      payload: { documentId: 'doc-1', connectionId: 'conn-1', peers: [] },
+      ts: TS,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a role outside the frozen DocumentRole vocabulary', () => {
+    const parsed = parseServerMessage({
+      type: 'room-joined',
+      payload: { documentId: 'doc-1', connectionId: 'conn-1', peers: [], role: 'admin' },
+      ts: TS,
+    });
+    expect(parsed.success).toBe(false);
   });
 
   it('rejects a room-joined without connectionId', () => {
     const parsed = parseServerMessage({
       type: 'room-joined',
-      payload: { documentId: 'doc-1', peers: [] },
+      payload: { documentId: 'doc-1', peers: [], role: 'viewer' },
       ts: TS,
     });
     expect(parsed.success).toBe(false);
@@ -216,10 +239,14 @@ describe('room-joined contract', () => {
     // with no M1 consumer, and the name collided with the durable
     // `DocumentMeta.revision` (the AI staleness anchor). An unknown key is stripped
     // by default, so assert on the schema shape instead.
+    //
+    // `role` was added in M2 Phase 2 (§5.2) — it is a `DocumentRole`, not a counter, so the
+    // reason `revision` was removed does not apply to it.
     expect(Object.keys(roomJoinedPayloadSchema.shape).sort()).toEqual([
       'connectionId',
       'documentId',
       'peers',
+      'role',
     ]);
   });
 });

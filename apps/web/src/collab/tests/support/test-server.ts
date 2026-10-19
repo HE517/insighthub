@@ -371,6 +371,12 @@ export class ContractTestServer {
       peers: [...this.connections.values()]
         .filter((other) => other.id !== record.id && other.joined)
         .map((other) => other.id),
+      // `role` became a required `room-joined` member in M2 Phase 2 (`docs/CONTRACTS.md`
+      // §5.2) so a client can gate its UI. This double is a transport stand-in, not the
+      // authorization layer: it has no memberships and decides nothing, so it reports the
+      // most permissive role rather than pretending to know the real one. The real value is
+      // resolved server-side from the session + membership (`apps/server/src/authz/**`).
+      role: 'owner',
     };
   }
 
@@ -561,6 +567,9 @@ export class ContractTestServer {
       documentId,
       connectionId: 'shape-check',
       peers: [],
+      // Required member since M2 Phase 2 (§5.2); this helper probes the envelope shape, so
+      // any valid `DocumentRole` serves.
+      role: 'viewer',
     });
     return message.payload as unknown as Record<string, unknown>;
   }

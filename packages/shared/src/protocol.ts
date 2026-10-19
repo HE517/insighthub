@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { wsErrorCodeSchema, type WsErrorCode } from './errors.js';
+import { documentRoleSchema } from './permission.js';
 
 /**
  * WebSocket CONTROL-PLANE protocol for the InsightHub collaboration channel.
@@ -125,6 +126,20 @@ export const roomJoinedPayloadSchema = z.object({
    * single source of truth for ephemeral presence (`docs/CONTRACTS.md` §9).
    */
   peers: z.array(z.string()),
+  /**
+   * The caller's own role in this document (`docs/CONTRACTS.md` §5.2, §17.5).
+   *
+   * Required rather than optional: the server has already resolved a membership before it
+   * admits the caller, so a successful `join-room` cannot leave the role unknown.
+   *
+   * **It carries no authority.** The client uses it to decide which controls to enable —
+   * UI gating only. Every enforcement point asks the server again: the join gate, the
+   * BINARY `SYNC` mutation gate and the HTTP document routes all resolve the role from the
+   * server-side membership. A client that rewrites this field in memory changes only what it
+   * shows itself; it gains nothing, because the role is never sent back up and the server
+   * never reads a role from the wire (`docs/ARCHITECTURE.md` §8.3).
+   */
+  role: documentRoleSchema,
 });
 
 export type RoomJoinedPayload = z.infer<typeof roomJoinedPayloadSchema>;

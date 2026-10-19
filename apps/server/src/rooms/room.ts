@@ -375,7 +375,7 @@ export class DocumentRoom {
    * ---------------------------------------------------------------- */
 
   /**
-   * Answer a `SyncStep1` with `SyncStep2` + the server's own `SyncStep1`.
+   * Answer a `SyncStep1` with `SyncStep2` + (optionally) the server's own `SyncStep1`.
    *
    * Read-only, so it needs no persistence and no pipeline slot: it appends nothing to the
    * document. Returns `false` when the frame is not a `SyncStep1`, so the registry can fall
@@ -383,8 +383,24 @@ export class DocumentRoom {
    *
    * Only legal in `READY`: answering from a half-hydrated document would hand a client a
    * delta computed against state the server is about to replace.
+   *
+   * ## `requestPeerStateVector`
+   *
+   * The server's own `SyncStep1` exists to *pull* the peer's missing structs — the client
+   * answers it with a `SyncStep2` carrying its offline edits. For a peer that may not write
+   * (`viewer`, `docs/CONTRACTS.md` §17.5) there is nothing to pull, and asking would only
+   * provoke a `SyncStep2` that the mutation gate must then refuse: a spurious non-fatal
+   * `FORBIDDEN` on every viewer join, for a payload the server could not have accepted. So
+   * the ask is restricted to peers with `canEdit`.
+   *
+   * The read direction is unaffected — the viewer still receives `SyncStep2`, which is how it
+   * obtains the document at all.
    */
-  replyToSyncStep1(decoded: DecodedSyncFrame, from: RoomParticipant): boolean {
+  replyToSyncStep1(
+    decoded: DecodedSyncFrame,
+    from: RoomParticipant,
+    requestPeerStateVector = true,
+  ): boolean {
     if (!this.acceptsMutations) return false;
     if (readSyncMessageType(decoded) !== SYNC_MESSAGE_TYPES.step1) return false;
 
@@ -397,9 +413,12 @@ export class DocumentRoom {
     // measurement, and which M2 must not regress: hydration must not turn a reconnect into
     // a full-document transfer.
     from.peer.sendBinary(encodeSyncStep2(this.doc, peerStateVector));
-    // ...then our own state vector, so the client answers with the SyncStep2 that carries
-    // what we are missing.
-    from.peer.sendBinary(encodeSyncStep1(this.doc));
+
+    if (requestPeerStateVector) {
+      // ...then our own state vector, so the client answers with the SyncStep2 that carries
+      // what we are missing.
+      from.peer.sendBinary(encodeSyncStep1(this.doc));
+    }
     return true;
   }
 
