@@ -61,14 +61,26 @@ export async function bootstrapSessionCookie(
 ): Promise<string> {
   const response = await fetch(`${httpBaseUrl}/api/session/bootstrap`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      // No keep-alive. Node's `fetch` pools sockets process-wide, and a pooled socket is a live
+      // handle that keeps the *test process* alive after the last assertion — the gate would then
+      // print every result and never exit (TOOLING-P2). One request per connection keeps the
+      // handle's lifetime inside the test that made it.
+      connection: 'close',
+    },
     body: JSON.stringify({ demoUserId }),
+    // Bounded: an unbounded `fetch` inherits undici's 300 s timers, so a stuck request would look
+    // like a hung gate instead of a failed assertion (TOOLING-P2).
+    signal: AbortSignal.timeout(5_000),
   });
   if (response.status !== 200) {
     throw new Error(`session bootstrap failed: ${response.status} ${await response.text()}`);
   }
   const setCookie = response.headers.get('set-cookie');
   if (setCookie === null) throw new Error('session bootstrap did not set a cookie');
+  // Drain the body so the socket is finished with before we return.
+  await response.text();
   const match = /(insighthub_session=[^;,\s]+)/.exec(setCookie);
   if (match === null) throw new Error(`no session cookie in: ${setCookie}`);
   return match[1];
@@ -213,12 +225,29 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       // the removal fail, and a leaked temp directory per test run is its own bug.
       authz.close();
       await store.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+
+      // `server.close()` only calls back once every HTTP connection has drained, and the
+      // document-API tests use `fetch`, whose keep-alive pool holds sockets open. Unbounded, that
+      // is the same "the gate never returns" failure as TOOLING-P2 — so: release idle sockets
+      // immediately, and hard-drop whatever is left if the drain does not finish in time.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          server.closeAllConnections?.();
+          resolve();
+        }, 2_000);
+        timer.unref();
+        server.close(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+        server.closeIdleConnections?.();
+      });
+
       if (ownsStore && dataPath !== undefined) {
-        rmSync(dataPath, { recursive: true, force: true });
+        rmSync(dataPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       }
       if (ownsAuthz) {
-        rmSync(authzDirectory, { recursive: true, force: true });
+        rmSync(authzDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       }
     },
   };
@@ -318,11 +347,22 @@ export class TestClient {
     });
   }
 
-  #waitForOpen(): Promise<void> {
+  #waitForOpen(timeoutMs = 10_000): Promise<void> {
     if (this.socket.readyState === WebSocket.OPEN) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
-      this.socket.once('open', () => resolve());
-      this.socket.once('error', (error: Error) => reject(error));
+      // Bounded on purpose: if neither `open` nor `error` ever fires, an unbounded wait is a
+      // hung gate rather than a failing test (TOOLING-P2).
+      const timer = setTimeout(() => {
+        reject(new Error(`the socket neither opened nor errored within ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.socket.once('open', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      this.socket.once('error', (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
     });
   }
 

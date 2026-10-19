@@ -456,7 +456,39 @@ export function attachWebSocketServer(
         }
         contextBySocket.clear();
         registry.destroy();
-        wss.close(() => resolve());
+
+        // `wss.close()` calls back once libuv reports every client socket closed. We have just
+        // force-terminated all of them, so any further waiting is a stalled FIN rather than work
+        // in progress — and an unbounded wait here is what turns "shutdown hangs" into "the whole
+        // test gate never returns" (`docs/TASKS.md` TOOLING-P2).
+        //
+        // The bound is safe because this server is `noServer: true`: there is no listening handle
+        // of its own to leak, and every socket is already terminated. Hitting the bound is
+        // reported, never swallowed — silence would hide a real leak.
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(watchdog);
+          resolve();
+        };
+        const watchdog = setTimeout(() => {
+          console.warn(
+            `[ws] shutdown waited 2000ms for ${wss.clients.size} socket(s) to close; resolving anyway`,
+          );
+          settle();
+        }, 2_000);
+        // Reference-neutral: the stalled socket is what keeps the loop alive, so the watchdog
+        // still fires when it matters, but a clean shutdown is not delayed by it.
+        watchdog.unref?.();
+
+        try {
+          wss.close(() => settle());
+        } catch (error: unknown) {
+          // `wss.close()` throws if the server was never started; nothing to wait for.
+          console.warn(`[ws] shutdown: ${error instanceof Error ? error.message : 'close failed'}`);
+          settle();
+        }
       }),
   };
 }
