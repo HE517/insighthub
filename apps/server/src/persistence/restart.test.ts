@@ -10,7 +10,7 @@
  *
  * 1. spawns `apps/server/src/index.ts` as a **separate OS process**;
  * 2. writes through a real WebSocket;
- * 3. kills it abruptly (`child.kill()`, i.e. `TerminateProcess` 闁?no SIGTERM handler, no
+ * 3. kills it abruptly (`child.kill()`, i.e. `TerminateProcess` 闂?no SIGTERM handler, no
  *    graceful `store.close()`, which is the harsher and more interesting failure);
  * 4. reads the database **from this process**, with nothing else holding it open;
  * 5. spawns a second server process on the same data directory and port;
@@ -43,7 +43,8 @@ import {
 import { readSyncMessage } from 'y-protocols/sync';
 import * as Y from 'yjs';
 
-import { TestClient, TestDecoder } from '../rooms/test-harness.js';
+import { DEFAULT_DEMO_USER_ID } from '../authz/public.js';
+import { bootstrapSessionCookie, TestClient, TestDecoder } from '../rooms/test-harness.js';
 import { applyStoredDocument } from './hydrator.js';
 import { openDocumentStore } from './open-store.js';
 
@@ -52,18 +53,26 @@ import { openDocumentStore } from './open-store.js';
  *
  * `node --import tsx src/index.ts` rather than the `tsx` CLI on purpose: the CLI runs the
  * script in a **grandchild** process, so `child.kill()` would terminate only the wrapper and
- * leave the actual server 鈥?port bound, database open 鈥?alive. That would make the "process
+ * leave the actual server 閳?port bound, database open 閳?alive. That would make the "process
  * died" half of these scenarios a lie, and would leave stray servers behind.
  */
 const SERVER_ARGS = ['--import', 'tsx', 'src/index.ts'];
 /**
  * The server package root, used as the child's working directory.
  *
- * Derived from this file's own URL (`apps/server/src/persistence/` 鈫?`apps/server`) rather than
+ * Derived from this file's own URL (`apps/server/src/persistence/` 閳?`apps/server`) rather than
  * from where pnpm placed `tsx`: that is a content-addressed store path, and walking up from it
  * lands in `.pnpm`, not in the package.
  */
 const SERVER_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * The one demo document the seeded membership fixture grants every role on
+ * (pps/server/src/authz/demo-fixture.ts, §17.3). The restart scenarios need a document the
+ * authenticated socket is actually allowed to join, and its id is a fixture constant rather than
+ * something exported from uthz/public.ts.
+ */
+const DEMO_DOCUMENT_ID = 'demo-document';
 
 /** How long a terminated child may take to be reaped before that is a test failure. */
 const TERMINATION_TIMEOUT_MS = 10_000;
@@ -74,7 +83,7 @@ const tempRoots: string[] = [];
 /**
  * Cleanup that is allowed to **fail**, but never allowed to hang.
  *
- * `pnpm --filter @insighthub/server test` is a Definition-of-Done gate (`AGENTS.md` §5), and a
+ * `pnpm --filter @insighthub/server test` is a Definition-of-Done gate (`AGENTS.md` 搂5), and a
  * gate that never returns cannot distinguish "passed" from "stuck" (`docs/TASKS.md`
  * TOOLING-P2). So every step here is bounded, every failure is collected, and the hook ends by
  * failing loudly with the diagnostics instead of awaiting a process that may never die.
@@ -92,7 +101,7 @@ after(async () => {
 
   for (const root of tempRoots) {
     // A surviving child still holds its database open, and Windows refuses to remove a locked
-    // file — so a failed cleanup here is evidence of a leaked process, not just of a dirty
+    // file 鈥?so a failed cleanup here is evidence of a leaked process, not just of a dirty
     // temp directory.
     try {
       rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -138,6 +147,8 @@ async function freePort(): Promise<number> {
 class ChildServer {
   readonly port: number;
   readonly url: string;
+  /** Base HTTP URL, for the session bootstrap this process's sockets need. */
+  readonly httpUrl: string;
   readonly #child: ChildProcessByStdio<null, Readable, Readable>;
   readonly #exitPromise: Promise<void>;
   #exited = false;
@@ -151,6 +162,7 @@ class ChildServer {
     this.#child = child;
     this.port = port;
     this.url = `ws://127.0.0.1:${port}/ws`;
+    this.httpUrl = `http://127.0.0.1:${port}`;
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => {
@@ -170,7 +182,7 @@ class ChildServer {
     });
     // A child handle counts as a live handle for this process. Without `unref`, a child that
     // somehow survives teardown keeps the test *process* alive, and `node:test` waits for the
-    // event loop to drain before exiting — which is exactly the "gate never returns" shape this
+    // event loop to drain before exiting 鈥?which is exactly the "gate never returns" shape this
     // file must not have. Output streaming is unaffected: `unref` only changes the ref count.
     child.unref();
   }
@@ -267,7 +279,7 @@ class ChildServer {
         // `taskkill` missing is not fatal: the direct kill below is the fallback.
         killer.once('error', () => resolve());
         // Deliberately **not** unref'd: this await is the only thing keeping the loop alive while
-        // `taskkill` runs, and an unref'd handle would let the loop drain mid-await — which
+        // `taskkill` runs, and an unref'd handle would let the loop drain mid-await 鈥?which
         // `node:test` reports as "promise resolution is still pending but the event loop has
         // already resolved".
       });
@@ -286,7 +298,7 @@ class ChildServer {
     return await new Promise<boolean>((resolve) => {
       // This timer is ref'd on purpose. The child handle is unref'd (see the constructor), so
       // without a ref'd timer a bounded wait would be cancelled the moment the loop had nothing
-      // else to do — turning "wait up to 10 s for the exit" into "give up immediately".
+      // else to do 鈥?turning "wait up to 10 s for the exit" into "give up immediately".
       const timer = setTimeout(() => resolve(false), timeoutMs);
       void this.#exitPromise.then(() => {
         clearTimeout(timer);
@@ -300,7 +312,7 @@ class ChildServer {
    *
    * Destroying the pipes matters on the failure path: they are handles this process owns, and
    * leaving them open would keep the event loop non-empty even after the test has already
-   * failed — trading a loud failure for a silent hang.
+   * failed 鈥?trading a loud failure for a silent hang.
    */
   #release(): void {
     if (this.#released) return;
@@ -311,7 +323,7 @@ class ChildServer {
     children.delete(this);
   }
 
-  /** Kill the process without any chance to shut down gracefully — a real crash. */
+  /** Kill the process without any chance to shut down gracefully 鈥?a real crash. */
   async kill(): Promise<void> {
     if (this.#exited) {
       this.#release();
@@ -337,7 +349,7 @@ class ChildServer {
     const exited = await this.#awaitExit(timeoutMs);
     if (!exited) {
       // The caller asserts an *exit*, so failing to get one must be that assertion failing with
-      // the child's own output attached — not a hang, and not a silent `null`.
+      // the child's own output attached 鈥?not a hang, and not a silent `null`.
       await this.#terminateTree();
       await this.#awaitExit(TERMINATION_TIMEOUT_MS);
       this.#release();
@@ -449,20 +461,21 @@ async function readDurableDocument(dataPath: string, documentId: string): Promis
 }
 
 /* ------------------------------------------------------------------ *
- * Scenario B 闁?process restart recovery
+ * Scenario B 闂?process restart recovery
  * ------------------------------------------------------------------ */
 
-describe('Scenario B 闁?the document survives the server process being killed', () => {
+describe('Scenario B 闂?the document survives the server process being killed', () => {
   it('a new process and a brand-new client see the full content', async () => {
     const dataPath = tempRoot();
     const port = await freePort();
-    const documentId = 'doc-process-restart';
+    const documentId = DEMO_DOCUMENT_ID;
     const expected = 'written by the first process';
 
     // ---- 1. First process: write. ----
     const first = await ChildServer.start(port, dataPath);
-    const writer = await TestClient.connect(first.url);
-    const observer = await TestClient.connect(first.url);
+    const cookie = await bootstrapSessionCookie(first.httpUrl, DEFAULT_DEMO_USER_ID);
+    const writer = await TestClient.connect(first.url, { cookie });
+    const observer = await TestClient.connect(first.url, { cookie });
     const writerDoc = new Y.Doc();
     const observerDoc = new Y.Doc();
 
@@ -500,7 +513,9 @@ describe('Scenario B 闁?the document survives the server process being killed',
 
     // ---- 4. A second process on the same data directory. ----
     const second = await ChildServer.start(port, dataPath);
-    const reader = await TestClient.connect(second.url);
+    const reader = await TestClient.connect(second.url, {
+      cookie: await bootstrapSessionCookie(second.httpUrl, DEFAULT_DEMO_USER_ID),
+    });
     const readerDoc = new Y.Doc();
     try {
       await joinAndSync(reader, readerDoc, documentId);
@@ -517,17 +532,18 @@ describe('Scenario B 闁?the document survives the server process being killed',
 });
 
 /* ------------------------------------------------------------------ *
- * Scenario C 闁?offline edits across a restart
+ * Scenario C 闂?offline edits across a restart
  * ------------------------------------------------------------------ */
 
-describe('Scenario C 闁?an offline client reconciles with a restarted server', () => {
+describe('Scenario C 闂?an offline client reconciles with a restarted server', () => {
   it('merges the offline edit by state vector and a fresh client sees the whole document', async () => {
     const dataPath = tempRoot();
     const port = await freePort();
-    const documentId = 'doc-offline-restart';
+    const documentId = DEMO_DOCUMENT_ID;
 
     const first = await ChildServer.start(port, dataPath);
-    const client = await TestClient.connect(first.url);
+    const cookie = await bootstrapSessionCookie(first.httpUrl, DEFAULT_DEMO_USER_ID);
+    const client = await TestClient.connect(first.url, { cookie });
     // One local replica for the whole scenario: same client id, so the offline edits are
     // *its* structs and reconciliation is a genuine state-vector merge, not a text merge.
     const doc = new Y.Doc();
@@ -538,7 +554,7 @@ describe('Scenario C 闁?an offline client reconciles with a restarted server', 
 
       // Wait until the base edit is durable. A second client observing the broadcast is the
       // evidence that the append committed first (D-044).
-      const witness = await TestClient.connect(first.url);
+      const witness = await TestClient.connect(first.url, { cookie });
       const witnessDoc = new Y.Doc();
       try {
         await joinAndSync(witness, witnessDoc, documentId);
@@ -573,7 +589,11 @@ describe('Scenario C 闁?an offline client reconciles with a restarted server', 
 
     // ---- A new process, same port, so the same replica can reconnect to the same URL. ----
     const second = await ChildServer.start(port, dataPath);
-    const resumed = await TestClient.connect(second.url);
+    const resumed = await TestClient.connect(second.url, {
+      // Sessions are process-scoped (docs/CONTRACTS.md §17.2), so the restarted process
+      // knows nothing about the cookie the dead one issued: re-bootstrap, as a real client must.
+      cookie: await bootstrapSessionCookie(second.httpUrl, DEFAULT_DEMO_USER_ID),
+    });
     try {
       // Reconnect and run the ordinary state-vector handshake. The client holds an edit the
       // server has never seen; the server's `SyncStep1` is what asks for it, and the client's
@@ -590,7 +610,9 @@ describe('Scenario C 闁?an offline client reconciles with a restarted server', 
       }, 'the offline edit to reach durable storage after reconnecting');
 
       // ---- A client that was never involved sees the complete document. ----
-      const fresh = await TestClient.connect(second.url);
+      const fresh = await TestClient.connect(second.url, {
+        cookie: await bootstrapSessionCookie(second.httpUrl, DEFAULT_DEMO_USER_ID),
+      });
       const freshDoc = new Y.Doc();
       try {
         await joinAndSync(fresh, freshDoc, documentId);

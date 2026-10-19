@@ -87,7 +87,9 @@ async function main(): Promise<void> {
 
   const app = createApp(config, authz);
   const server = createServer(app);
-  const socket = attachWebSocketServer(server, config, { store });
+  // Both seams are supplied, so neither of `attachWebSocketServer`'s fail-closed checks can
+  // fire: a data directory without a store or without authz is a wiring mistake, not a mode.
+  const socket = attachWebSocketServer(server, config, { store, authz });
 
   await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
 

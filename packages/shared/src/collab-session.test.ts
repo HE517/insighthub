@@ -142,7 +142,9 @@ describe('presence seam shape', () => {
     // (`docs/CONTRACTS.md` §17.6). The seam asserted here is unchanged by that bump —
     // its own version pin now lives in `index.test.ts`; this one keeps proving that the
     // **wire** did not move with it.
-    expect(SHARED_CONTRACT_VERSION).toBe(5);
+    // v6 (M2 Phase 2): `RoomJoinedPayload` gained a required `role` (§5.2/§17.8). Still not a
+    // wire-format change — one existing payload grew one field — so `PROTOCOL_VERSION` holds.
+    expect(SHARED_CONTRACT_VERSION).toBe(6);
     // The wire is untouched: awareness already carried cursor and selection.
     expect(PROTOCOL_VERSION).toBe(2);
   });
@@ -185,7 +187,12 @@ describe('awareness is a binding input only (M2-P0-2 step 3)', () => {
     const session = typeOnlySession();
     void (() => {
       // @ts-expect-error `setLocalState` is not on the binding surface.
-      session.awareness.setLocalState({ user: { id: 'u', name: 'U' }, cursor: null, selection: null, updatedAt: 1 });
+      session.awareness.setLocalState({
+        user: { id: 'u', name: 'U' },
+        cursor: null,
+        selection: null,
+        updatedAt: 1,
+      });
       // @ts-expect-error `setLocalStateField` is not on the binding surface.
       session.awareness.setLocalStateField('cursor', { anchor: 0, head: 0 });
       // @ts-expect-error the internal `states` map is not exposed.

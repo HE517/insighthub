@@ -42,7 +42,15 @@ export * from './collab-session.js';
  * stays **2** — the code travels inside the existing `error` message, and the workspace
  * ships a single client build, so there is no older client to confuse (§17.6).
  *
- * See `docs/CONTRACTS.md` §15, §17 and `docs/DECISIONS.md` D-045 (design), D-057 (3 steps)
- * and D-061 (M2 Phase 2 freeze).
+ * v6 (M2 Phase 2, A3): `RoomJoinedPayload` gained a **required** `role`
+ * (`docs/CONTRACTS.md` §5.2, §17.8) — the only channel that tells a client its own role in
+ * the document it just joined, and it exists for UI gating alone. This is an additive change
+ * to the payload (no field removed or retyped), but a **breaking** one to the interface: a
+ * producer that omits `role` no longer typechecks and a consumer must handle it. Hence the
+ * bump. `PROTOCOL_VERSION` stays **2**: no frame type, message type, framing rule or error
+ * code changed — one payload grew one field, inside the existing `room-joined` message.
+ *
+ * See `docs/CONTRACTS.md` §15, §17 and `docs/DECISIONS.md` D-045 (design), D-057 (3 steps),
+ * D-061 (M2 Phase 2 freeze) and D-062 (A3 owns `room-joined.role`).
  */
-export const SHARED_CONTRACT_VERSION = 5;
+export const SHARED_CONTRACT_VERSION = 6;

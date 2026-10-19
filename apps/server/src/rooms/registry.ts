@@ -49,15 +49,19 @@
  */
 import {
   PROTOCOL_VERSION,
+  SYNC_MESSAGE_TYPES,
   WS_ERROR_CODES,
   decodeBinaryFrame,
+  readSyncMessageType,
   type DecodedBinaryFrame,
   type DecodedSyncFrame,
+  type DocumentRole,
   type JoinRoomPayload,
   type WsErrorCode,
 } from '@insighthub/shared';
 import * as Y from 'yjs';
 
+import type { AuthzService } from '../authz/public.js';
 import {
   COMPACTION_LOG_BYTES_THRESHOLD,
   COMPACTION_UPDATE_THRESHOLD,
@@ -165,13 +169,29 @@ interface RoomRuntime {
 export interface RoomRegistryOptions {
   logger?: RegistryLogger;
   /**
-   * Gate consulted before a room is created for a `documentId`.
+   * A transport-level gate consulted before a room is created for a `documentId`.
    *
-   * M1 has no document store and no permissions, so the default opens every room
-   * (`docs/CONTRACTS.md` §12). It exists as a seam for M2: returning false is what
-   * `ROOM_NOT_FOUND` means for this server — "the server refused to open the room".
+   * **This is not the authorization mechanism.** It can only deny (returning `false` yields
+   * `ROOM_NOT_FOUND`), it knows nothing about identities or roles, and nothing in production
+   * wires it. Authorization is `options.authz` — the A5 decision core — and this hook exists
+   * because M1 needed a way for a test to close a room without building a whole membership
+   * model (`docs/DECISIONS.md` D-049).
    */
   authorizeJoin?: (documentId: string) => boolean;
+  /**
+   * The authorization core (`apps/server/src/authz/public.ts`, `docs/CONTRACTS.md` §17).
+   *
+   * When present, the registry enforces §17.5 at its two decision points:
+   *
+   * - **join**: `roleFor` + `canRead`, denying with `ROOM_NOT_FOUND`;
+   * - **BINARY `SYNC`**: `canEdit`, denying with `FORBIDDEN`;
+   * - **BINARY `AWARENESS`**: `canRead` only, so a viewer can still publish a cursor.
+   *
+   * When absent the registry behaves as M1: every socket may join and edit. Absent is only
+   * reachable from a hand-built config — `apps/server/src/index.ts` always supplies the real
+   * service and refuses to start without it — and it says so in the log.
+   */
+  authz?: AuthzService;
   /**
    * The durable store (`docs/ARCHITECTURE.md` §7.3).
    *
@@ -193,14 +213,26 @@ export class RoomRegistry {
   readonly #contexts = new Map<Peer, SocketContext>();
   readonly #logger: RegistryLogger;
   readonly #authorizeJoin: (documentId: string) => boolean;
+  readonly #authz: AuthzService | undefined;
   readonly #store: DocumentStore | undefined;
   readonly #hydrator: DocumentHydrator | undefined;
 
   constructor(options: RoomRegistryOptions = {}) {
     this.#logger = options.logger ?? defaultLogger;
     this.#authorizeJoin = options.authorizeJoin ?? (() => true);
+    this.#authz = options.authz;
     this.#store = options.store;
     this.#hydrator = options.store === undefined ? undefined : new DocumentHydrator(options.store);
+
+    if (this.#authz === undefined) {
+      // Loud on purpose: a transport with no authorization turns every role into an editor.
+      // The *server* always wires it (`index.ts`), so this is either a library caller or a
+      // wiring mistake, and neither should have to guess why the role gate is silent.
+      this.#logger.warn(
+        'room registry started WITHOUT authorization; every socket may join and edit',
+        { reason: 'no AuthzService was supplied' },
+      );
+    }
 
     if (this.#store === undefined) {
       // Loud on purpose: a transport running without durable storage is exactly the M1
@@ -216,12 +248,21 @@ export class RoomRegistry {
    * Connection lifecycle
    * ---------------------------------------------------------------- */
 
-  /** Register a freshly accepted socket. The caller sends the handshake. */
-  registerSocket(socket: SocketLike, connectionId: string): SocketContext {
+  /**
+   * Register a freshly accepted socket. The caller sends the handshake.
+   *
+   * `userId` is the identity resolved at the upgrade from the session cookie — never from a
+   * frame (`docs/CONTRACTS.md` §17.5). Once the registry has an `authz` service, a socket
+   * without an identity cannot be registered: that combination would be an authenticated
+   * transport admitting an anonymous socket, and the only safe answer is to refuse it here
+   * rather than to decide later which frames it may send.
+   */
+  registerSocket(socket: SocketLike, connectionId: string, userId?: string): SocketContext {
     const peer: Peer = new PeerImpl(socket, connectionId);
     const context: SocketContext = {
       connectionId,
       peer,
+      userId,
       activeRoom: null,
       awarenessClients: new Set<number>(),
     };
@@ -293,9 +334,14 @@ export class RoomRegistry {
         peers: string[];
         room: DocumentRoom;
         barrier: Promise<HydrationOutcome>;
+        /** The caller's role in this document, for `room-joined.role` (§5.2). */
+        role: DocumentRole;
       }
     | { ok: false; code: WsErrorCode; message: string } {
-    // ---- Validation first: nothing below this point can refuse. ----
+    // ---- Validation first: nothing below this point can refuse, and nothing below it may
+    // mutate membership. That ordering is what makes a *denied* join leave an existing room
+    // exactly as it was (`docs/CONTRACTS.md` §17.5: atomic replace applies only to a
+    // successful join). ----
     if (payload.protocolVersion !== PROTOCOL_VERSION) {
       return {
         ok: false,
@@ -304,6 +350,25 @@ export class RoomRegistry {
       };
     }
     if (!this.#authorizeJoin(payload.documentId)) {
+      return {
+        ok: false,
+        code: WS_ERROR_CODES.ROOM_NOT_FOUND,
+        message: 'no room can be opened for this document',
+      };
+    }
+
+    // ---- Authorization (`docs/CONTRACTS.md` §17.5). ----
+    //
+    // Both questions are answered here, synchronously, before the first mutation and before
+    // any `await` in this path: `roleFor` and `can` take no I/O, so there is no window in
+    // which the answer could change between "may they read" and "add them to the room".
+    //
+    // The denial code is `ROOM_NOT_FOUND` — the same code as "this document does not exist",
+    // because the non-disclosure rule needs one answer for all three caller states
+    // (unknown document / no membership / no `canRead`, §17.4 and §17.5). A distinct
+    // "forbidden to join" code would tell a stranger that the document exists.
+    const role = this.#resolveJoinRole(context, payload.documentId);
+    if (role === null) {
       return {
         ok: false,
         code: WS_ERROR_CODES.ROOM_NOT_FOUND,
@@ -342,7 +407,43 @@ export class RoomRegistry {
     // The barrier is the M2 addition: it resolves when the room is `READY`, and the
     // transport must await it before acknowledging (D-043).
     const runtime = this.#requireRuntime(room);
-    return { ok: true, documentId, peers, room, barrier: runtime.barrier };
+    return { ok: true, documentId, peers, room, barrier: runtime.barrier, role };
+  }
+
+  /**
+   * The caller's role for a join, or `null` when the join must be refused.
+   *
+   * Two questions, in this order, and both from the injected decision core rather than from
+   * a local rule: "is there a membership" (`roleFor`) and "does it carry `canRead`" (`can`).
+   * `can` internally resolves the role again, which is deliberate — it is the one rule table
+   * (`docs/ARCHITECTURE.md` §8.1) and reusing it means the join gate cannot disagree with
+   * the frame gate or with HTTP.
+   *
+   * `join-room.mode` is not read here and not read anywhere (§17.5, §8.3): a client that
+   * claims `readwrite` is asking, not deciding.
+   */
+  #resolveJoinRole(context: SocketContext, documentId: string): DocumentRole | null {
+    const authz = this.#authz;
+    // No authz configured: M1-compatible mode (see `RoomRegistryOptions.authz`). Production
+    // never reaches this branch, and the constructor has already warned about it.
+    if (authz === undefined) return 'owner';
+
+    const userId = context.userId;
+    if (userId === undefined) {
+      // An authenticated transport must not admit an anonymous socket. The upgrade refuses
+      // that before a socket exists, so reaching here means the wiring contradicts itself;
+      // refusing the join is still the fail-closed answer.
+      this.#logger.warn('refused a join on a connection with no resolved identity', {
+        connectionId: context.connectionId,
+        documentId,
+      });
+      return null;
+    }
+
+    const role = authz.roleFor(documentId, userId);
+    if (role === null) return null;
+    if (!authz.can(documentId, userId, 'canRead')) return null;
+    return role;
   }
 
   /**
@@ -392,7 +493,15 @@ export class RoomRegistry {
       if (context === undefined) continue;
       if (context.activeRoom !== room) continue;
       if (!context.peer.isOpen()) continue;
-      outcomes.push(this.#dispatchDecodedFrame(room, context, entry.frame));
+
+      // Authorization is re-evaluated here rather than replayed from enqueue time: a role can
+      // change while a room hydrates, and a queued frame is still a frame the server is about
+      // to act on. A denial now is simply dropped — there is no acknowledgement to send for a
+      // frame that was never answered, and the socket stays open.
+      const authorization = this.#authorizeFrame(context, room, entry.frame);
+      if (!authorization.ok) continue;
+
+      outcomes.push(this.#dispatchDecodedFrame(room, context, entry.frame, authorization.canEdit));
     }
     return Promise.all(outcomes);
   }
@@ -456,6 +565,14 @@ export class RoomRegistry {
       };
     }
 
+    // ---- Authorization gate (`docs/CONTRACTS.md` §17.5, `docs/ARCHITECTURE.md` §8.2). ----
+    //
+    // This runs **before** the lifecycle gate and before any `await`: the decision must not be
+    // interleaved with waiting, or the answer could change between the check and the mutation
+    // it authorizes. `can()` is synchronous precisely so this ordering is possible.
+    const authorization = this.#authorizeFrame(context, room, frame);
+    if (!authorization.ok) return authorization;
+
     // ---- Lifecycle gate (D-049) ----
     if (room.state === 'hydrating' || room.state === 'created') {
       if (room.enqueueBacklog(participant, frame) === 'overflow') {
@@ -483,13 +600,12 @@ export class RoomRegistry {
       };
     }
 
-    return this.#dispatchDecodedFrame(room, participant, frame);
+    return this.#dispatchDecodedFrame(room, participant, frame, authorization.canEdit);
   }
 
   /* ---------------------------------------------------------------- *
    * Introspection (tests + operational logging)
    * ---------------------------------------------------------------- */
-
   roomCount(): number {
     return this.#rooms.size;
   }
@@ -530,11 +646,88 @@ export class RoomRegistry {
    * Internals — dispatch
    * ---------------------------------------------------------------- */
 
-  /** Route one already-validated frame for a `READY` room. */
+  /* ---------------------------------------------------------------- *
+   * Internals — authorization gates
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The BINARY-frame capability gate (`docs/CONTRACTS.md` §17.5, §17.7).
+   *
+   * Three frame shapes, two questions — because the data plane mixes reads and writes:
+   *
+   * | Frame | Capability | Why |
+   * | --- | --- | --- |
+   * | `SYNC` `SyncStep1` | `canRead` | it is a **read request**: the server answers with `SyncStep2` and changes nothing. Gating it on `canEdit` would make the `viewer` role unable to receive the document at all — the role exists to read. |
+   * | `SYNC` `SyncStep2` / `Update` | `canEdit` | both carry document updates. |
+   * | `AWARENESS` | `canRead` | presence only; a viewer must be able to publish a cursor (§17.5). |
+   *
+   * The mutation denial is **`FORBIDDEN`** and **non-fatal**, and it happens before apply,
+   * before persist and before broadcast — so a reader who tries to write changes nothing, no
+   * peer is told anything, and the socket stays open (a reader remains a reader). Closing the
+   * socket would turn "you may not edit" into "you may not stay", which §17.5 does not say.
+   *
+   * The check is per frame and never cached: a role can change while a socket is connected, and
+   * a capability memoised at join would keep serving the old answer (P2-5).
+   *
+   * Returns the caller's `canEdit` on success, or the denial outcome.
+   */
+  #authorizeFrame(
+    context: SocketContext,
+    room: DocumentRoom,
+    frame: DecodedBinaryFrame,
+  ): { ok: true; canEdit: boolean } | { ok: false; code: WsErrorCode; message: string } {
+    const authz = this.#authz;
+    // No authorization wired: M1-compatible mode (see `RoomRegistryOptions.authz`).
+    if (authz === undefined) return { ok: true, canEdit: true };
+
+    const userId = context.userId;
+    if (userId === undefined) {
+      // Unreachable through the transport (the upgrade refuses an anonymous socket); failing
+      // closed here keeps the gate meaningful even if that wiring is ever changed.
+      return {
+        ok: false,
+        code: WS_ERROR_CODES.FORBIDDEN,
+        message: 'this connection has no resolved identity',
+      };
+    }
+
+    const documentId = room.documentId;
+    const canEdit = authz.can(documentId, userId, 'canEdit');
+
+    if (frame.kind === 'awareness') {
+      return authz.can(documentId, userId, 'canRead')
+        ? { ok: true, canEdit }
+        : { ok: false, code: WS_ERROR_CODES.FORBIDDEN, message: 'not permitted on this document' };
+    }
+
+    // `SyncStep1` is a read (`docs/CONTRACTS.md` §17.5 — see the table above).
+    if (readSyncMessageType(frame) === SYNC_MESSAGE_TYPES.step1) {
+      return authz.can(documentId, userId, 'canRead')
+        ? { ok: true, canEdit }
+        : { ok: false, code: WS_ERROR_CODES.FORBIDDEN, message: 'not permitted on this document' };
+    }
+
+    // `SyncStep2` / `Update`: a mutation. Denied here, so nothing downstream can apply it.
+    return canEdit
+      ? { ok: true, canEdit }
+      : {
+          ok: false,
+          code: WS_ERROR_CODES.FORBIDDEN,
+          message: 'your role on this document does not permit edits',
+        };
+  }
+
+  /**
+   * Route one already-authorized frame for a `READY` room.
+   *
+   * `canEdit` is passed rather than re-derived so this function cannot authorize differently
+   * from the gate that admitted the frame (`docs/CONTRACTS.md` §17.5).
+   */
   async #dispatchDecodedFrame(
     room: DocumentRoom,
     participant: RoomParticipant,
     frame: DecodedBinaryFrame,
+    canEdit: boolean,
   ): Promise<RouteOutcome> {
     if (frame.kind === 'awareness') {
       // Presence is ephemeral and never persisted (`docs/CONTRACTS.md` §9), so it bypasses
@@ -556,7 +749,12 @@ export class RoomRegistry {
     }
 
     // Read-only: a SyncStep1 answer appends nothing, so it needs no durable slot.
-    if (room.replyToSyncStep1(frame, participant)) return { ok: true };
+    //
+    // The server asks for the peer's state vector only when the peer may write. Asking a
+    // viewer would invite it to answer with a `SyncStep2` that this gate must then deny —
+    // a spurious non-fatal `FORBIDDEN` on every viewer join, for a payload the server could
+    // not have accepted anyway.
+    if (room.replyToSyncStep1(frame, participant, canEdit)) return { ok: true };
 
     return this.#submitMutation(room, participant, frame);
   }
