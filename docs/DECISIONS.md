@@ -2103,3 +2103,72 @@ A5 authz/session/permission seam（含 shared 判据、session store、HTTP 中�
 
 **后果。** A5 的判定核心成为 `main` 上可依赖的基线，A3 可以只按 `authz/public.ts` 接线而无需读内部实现；
 代价是 `SHARED_CONTRACT_VERSION` 将在 A3 手里再到 6，且 `createApp` 的签名变化扩散到 harness 与一个测试。
+
+---
+
+## D-063 · 2026-10-18 · accepted · A3 WS 执行点：五项决定、一处契约纠错、以及 main 保持绿的前置 (M2 Phase 2)
+
+**背景。** A3 在 `agent/a3-m2-phase2-ws-authz`（`9cd4563` → `a4a20ba` → `6332174` → `0d23af9`）交付 WS
+执行点、`room-joined.role`（版本 5→6）与持久化元数据源，报告状态 `partial`，并列出五项需要 A0 定性的事。
+本条记录复核结论与决定。
+
+### 1. 复核结论：代码可信，五项均有解，无需项目负责人裁决
+
+A0 逐处读了执行点，不是只读报告：
+
+| 声称 | 复核结果 |
+| --- | --- |
+| 无 session ⇒ HTTP 401 且不建 socket | `ws.ts` 在 `server.on('upgrade')` 里先判路径再 `resolveSession`，`null` 时写 401 + `socket.destroy()`，**`handleUpgrade` 从未被调用** |
+| 忘记接线不会静默失效 | `config.dataPath` 存在而 `options.authz` 缺失 ⇒ **启动抛错**（与 store 同款 fail-closed） |
+| 身份只来自 session | 解析结果存 `WeakMap<IncomingMessage,string>`，不进入任何帧读取路径；payload/header/query 不参与 |
+| join 拒绝不驱逐既有房间 | 判定在 membership 变更之前；`ROOM_NOT_FOUND` 与"文档不存在"**同码同文案** |
+| 写被拒发生在副作用之前 | `SYNC SyncStep2/Update` → `canEdit`，拒绝回 `FORBIDDEN` 且不 apply / persist / broadcast |
+
+### 2. 五项决定
+
+| # | A3 提出 | 决定 |
+| --- | --- | --- |
+| a | 浏览器套件需要 session + membership fixture | **只改 A6 的 harness，不开新 seed 端点**。零成本部分（oracle socket 先 `POST /api/session/bootstrap` 拿 cookie）属 A6；per-scenario 文档（`a6-*`）的 membership 由 A6 以**测试夹具**方式写入 `authz.db`——沿用 D-055 §2 已接受的做法（`durable-store.mjs` 直读 SQLite 作常驻工具）。为测试方便在生产契约里挖一个 seed 口子（等于改 §17.3）**否决** |
+| b | 建议 `--test-concurrency=1` | **采纳**，A0 改 `apps/server/package.json`。关键论证：串行**不会掩盖**真正的句柄泄漏——真泄漏在串行下同样会挂住；它去掉的是文件级并发下的 teardown **竞态**。因此这不是把问题藏起来，而是把门禁从"17s 但约 1/4 概率卡死"变成"27s 必定退出"，同时保留"真泄漏必须被抓住"的性质 |
+| c | §17.5 的 SYNC 措辞会让 viewer 读不到内容 | **A3 是对的，契约写错了**。§17.5 已改为 `SyncStep1`→`canRead`、`SyncStep2/Update`→`canEdit`，并加勘误块说明原表述为何会造出"静默空白而非拒绝"。这是本轮**最有价值的发现** |
+| d | `ownerId` 的来源 | **接受"创建者归因"**：`ownerId` 是**显示元数据**，不是权限；授权一律走 membership。已写进 §17.3，禁止任何地方从 `ownerId` 推导 capability |
+| e | 重启后客户端是否重新 bootstrap | **A6 先观测，再决定归属**。这是 A1（provider 的 401 重连路径）与 A2（`App.tsx` 接线）之间的真实缺口，现在既无证据也无归属，不凭猜测派活 |
+
+### 3. `main` 保持绿：A3 不在本轮直接合入
+
+A3 的分支使浏览器门禁从 36/36 变成 **5 通过 / 0 失败 / 31 error**。31 个 error 全部是
+"oracle/seeder did not join room X within 20000ms"，**没有一条断言失败**：原因是 harness 的裸 socket
+没有 session（401）与 `a6-*` 文档没有 membership（`ROOM_NOT_FOUND`）。这是**证据链断裂**，不是行为缺陷。
+
+即便如此，**不把 A3 直接合进 `main`**：AGENTS R6 要求 main 上不得有红的门禁，而 M2-P0 期 `main` 一直
+是绿的。因此改为：
+
+```text
+main (green)
+  └ A6 的 worktree 由 A0 先 merge agent/a3-m2-phase2-ws-authz（--no-ff）
+      → A6 只改 tests/browser/**，把门禁恢复到 36/36 并补 P2 浏览器证据
+      → A0 再把 A6 的分支整体合入 main（A3 + A6 一次性进入，main 不会出现红窗口）
+```
+
+代价是 `main` 上暂时没有 WS 执行点；收益是"`main` 永远可发布"这条性质不被这一轮破坏。
+
+### 4. A3 触碰的越界文件（已批准并点名）
+
+`apps/web/src/collab/tests/support/test-server.ts`（A1 所有）：`room-joined.role` 变成必需字段后，A1 的
+测试替身 `rosterPayload()` / `roomJoinedPayloadShape()` 构造的 payload 编译失败。A3 事先申请、A0 批准，
+只补两处 `role`（`'owner'` / `'viewer'`），并已在 commit message 点名。这是**契约级必需字段的必然扩散**，
+与 D-059 §P2、D-062 §3 记的是同一类教训。
+
+### 5. 带入 A6/A7 的已知限制（不得省略）
+
+- session **process-scoped**：重启后必须重新 bootstrap；A6 的 `m2/B`、`m2/C` 场景会暴露这一点。
+- `document_meta` 只在"房间首次创建"时写入：pre-Phase-2 的旧库若有内容无元数据，在有人重新 join 前
+  不会出现在 `GET /api/documents`。
+- `title` 恒为文档 id（Phase 2 无重命名 API）。
+- `SyncStep1` / `AWARENESS` 的 `canRead` 否定分支在正常流程下**不可达**（进不了房就发不了帧），
+  仅为防御性代码，未单独验证。
+- 浏览器层 P2-1 / P2-2 / P2-4 / P2-5 **全部未验证**，Node 证据不得当作浏览器证据。
+
+**后果。** WS 侧从"文档承诺"变成"可执行、可测、且拒绝发生在副作用之前"；契约里一处会制造静默空白的
+措辞被 A3 抓住并修正。代价是 `main` 暂时落后于 A3 分支、`SHARED_CONTRACT_VERSION` 到 6，且浏览器证据
+链要在 A6 手里重新接上之后，M2 Phase 2 才可能通过 final review。

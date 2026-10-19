@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 \"src/**/*.test.ts\"",
     "verify:m0": "node scripts/m0-verify.mjs"
   },
   "dependencies": {

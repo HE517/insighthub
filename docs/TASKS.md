@@ -7,40 +7,40 @@ Status legend: `todo` · `doing` · `review` · `done` · `blocked`.
 
 ## M0 — Bootstrap ✅ done
 
-| ID | Task | Owner | Status |
-| --- | --- | --- | --- |
-| M0-1 | pnpm workspace skeleton (`apps/*`, `packages/*`) | A0 | done |
-| M0-2 | Shared contracts + Zod schemas + WS protocol | A0 | done |
-| M0-3 | Express server: `GET /health`, `GET /api/meta` | A0 | done |
-| M0-4 | WebSocket server on `/ws` sending `connected` | A0 | done |
-| M0-5 | React shell + Redux + Ant Design + CodeMirror mount | A0 | done |
-| M0-6 | Client channel hook: validate frames, reconnect backoff | A0 | done |
-| M0-7 | Tests: shared contract + server integration | A0 | done |
-| M0-8 | Docs + `AGENTS.md` working agreement | A0 | done |
+| ID   | Task                                                    | Owner | Status |
+| ---- | ------------------------------------------------------- | ----- | ------ |
+| M0-1 | pnpm workspace skeleton (`apps/*`, `packages/*`)        | A0    | done   |
+| M0-2 | Shared contracts + Zod schemas + WS protocol            | A0    | done   |
+| M0-3 | Express server: `GET /health`, `GET /api/meta`          | A0    | done   |
+| M0-4 | WebSocket server on `/ws` sending `connected`           | A0    | done   |
+| M0-5 | React shell + Redux + Ant Design + CodeMirror mount     | A0    | done   |
+| M0-6 | Client channel hook: validate frames, reconnect backoff | A0    | done   |
+| M0-7 | Tests: shared contract + server integration             | A0    | done   |
+| M0-8 | Docs + `AGENTS.md` working agreement                    | A0    | done   |
 
 ## M1-A0 — Contract Freeze ✅ done
 
-| ID | Task | Owner | Status |
-| --- | --- | --- | --- |
-| M1-A0-1 | Binary data-plane framing + codec (SYNC / AWARENESS) | A0 | done |
-| M1-A0-2 | Frozen error-code vocabulary | A0 | done |
-| M1-A0-3 | Control-plane updates: `join-room` v2 + mode, `room-joined.connectionId`, typed error payload | A0 | done |
-| M1-A0-4 | `PROTOCOL_VERSION` 1 → 2, `SHARED_CONTRACT_VERSION` 1 → 2 | A0 | done |
-| M1-A0-5 | Awareness state contract + cleanup rules | A0 | done |
-| M1-A0-6 | A1 ↔ A2 `CollaborativeSession` seam + `collab/public.ts` placeholder | A0 | done |
-| M1-A0-7 | A1 ↔ A3 wire + lifecycle semantics documented | A0 | done |
-| M1-A0-8 | Dependencies approved and installed (`yjs`, `y-protocols`, `lib0`, `y-indexeddb`) | A0 | done |
-| M1-A0-9 | Codec + contract unit tests, docs updated | A0 | done |
+| ID      | Task                                                                                          | Owner | Status |
+| ------- | --------------------------------------------------------------------------------------------- | ----- | ------ |
+| M1-A0-1 | Binary data-plane framing + codec (SYNC / AWARENESS)                                          | A0    | done   |
+| M1-A0-2 | Frozen error-code vocabulary                                                                  | A0    | done   |
+| M1-A0-3 | Control-plane updates: `join-room` v2 + mode, `room-joined.connectionId`, typed error payload | A0    | done   |
+| M1-A0-4 | `PROTOCOL_VERSION` 1 → 2, `SHARED_CONTRACT_VERSION` 1 → 2                                     | A0    | done   |
+| M1-A0-5 | Awareness state contract + cleanup rules                                                      | A0    | done   |
+| M1-A0-6 | A1 ↔ A2 `CollaborativeSession` seam + `collab/public.ts` placeholder                          | A0    | done   |
+| M1-A0-7 | A1 ↔ A3 wire + lifecycle semantics documented                                                 | A0    | done   |
+| M1-A0-8 | Dependencies approved and installed (`yjs`, `y-protocols`, `lib0`, `y-indexeddb`)             | A0    | done   |
+| M1-A0-9 | Codec + contract unit tests, docs updated                                                     | A0    | done   |
 
 ### M1-A0 validation
 
-| Check | Command | Result |
-| --- | --- | --- |
-| Typecheck | `pnpm typecheck` | 3/3 packages `Done` |
-| Unit tests | `pnpm test:unit` | 63 passed (6 files) |
-| Server integration | `pnpm test:server` | 5 passed |
-| Build | `pnpm build` | shared + server `tsc`, web `vite build` |
-| Runtime | `pnpm --filter @insighthub/server verify:m0` | 7/7 checks |
+| Check              | Command                                      | Result                                  |
+| ------------------ | -------------------------------------------- | --------------------------------------- |
+| Typecheck          | `pnpm typecheck`                             | 3/3 packages `Done`                     |
+| Unit tests         | `pnpm test:unit`                             | 63 passed (6 files)                     |
+| Server integration | `pnpm test:server`                           | 5 passed                                |
+| Build              | `pnpm build`                                 | shared + server `tsc`, web `vite build` |
+| Runtime            | `pnpm --filter @insighthub/server verify:m0` | 7/7 checks                              |
 
 Codec test coverage (required by the task brief): valid control message, invalid
 control message, valid binary frame, unknown binary frame (unknown frame type,
@@ -51,17 +51,17 @@ oversize frame (default limit, exact limit boundary, caller-supplied limit).
 
 ### M0 acceptance criteria and evidence
 
-| # | Criterion | How it was verified | Result |
-| --- | --- | --- | --- |
-| 1 | `pnpm install` succeeds | `pnpm install` | `Done in 22.5s`, 283 packages |
-| 2 | React frontend starts | `pnpm --filter @insighthub/web dev` (inside `verify:m0`) | `VITE v7.3.7 ready in 367 ms`, serves app shell (200, 663 bytes) |
-| 3 | Express backend starts | `pnpm --filter @insighthub/server dev` (inside `verify:m0`) | `http ready http://127.0.0.1:3101`, `ws ready .../ws` |
-| 4 | `GET /health` returns 200 | `verify:m0` | `200 {"status":"ok"}` |
-| 5 | Browser can connect to WebSocket | `verify:m0` | upgrade accepted on `/ws`; non-`/ws` path rejected |
-| 6 | Server sends `connected` | `verify:m0` | `{"type":"connected","payload":{"connectionId":"687d...","protocolVersion":1,...}}` parsed by the shared parser |
-| 7 | `shared` referenced by web and server | `workspace:*` deps + real imports in both apps | resolves in `tsc` and in `vite build` (1494 modules) |
-| 8 | `pnpm typecheck` succeeds | `pnpm typecheck` | 3/3 packages `Done`, no errors |
-| 9 | `pnpm build` succeeds | `pnpm build` | shared `tsc` + server `tsc` + web `vite build` → `built in 21.11s` |
+| #   | Criterion                             | How it was verified                                         | Result                                                                                                          |
+| --- | ------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 1   | `pnpm install` succeeds               | `pnpm install`                                              | `Done in 22.5s`, 283 packages                                                                                   |
+| 2   | React frontend starts                 | `pnpm --filter @insighthub/web dev` (inside `verify:m0`)    | `VITE v7.3.7 ready in 367 ms`, serves app shell (200, 663 bytes)                                                |
+| 3   | Express backend starts                | `pnpm --filter @insighthub/server dev` (inside `verify:m0`) | `http ready http://127.0.0.1:3101`, `ws ready .../ws`                                                           |
+| 4   | `GET /health` returns 200             | `verify:m0`                                                 | `200 {"status":"ok"}`                                                                                           |
+| 5   | Browser can connect to WebSocket      | `verify:m0`                                                 | upgrade accepted on `/ws`; non-`/ws` path rejected                                                              |
+| 6   | Server sends `connected`              | `verify:m0`                                                 | `{"type":"connected","payload":{"connectionId":"687d...","protocolVersion":1,...}}` parsed by the shared parser |
+| 7   | `shared` referenced by web and server | `workspace:*` deps + real imports in both apps              | resolves in `tsc` and in `vite build` (1494 modules)                                                            |
+| 8   | `pnpm typecheck` succeeds             | `pnpm typecheck`                                            | 3/3 packages `Done`, no errors                                                                                  |
+| 9   | `pnpm build` succeeds                 | `pnpm build`                                                | shared `tsc` + server `tsc` + web `vite build` → `built in 21.11s`                                              |
 
 Test suites run during M0:
 
@@ -86,15 +86,15 @@ pnpm --filter @insighthub/server verify:m0
 
 状态：**M1 已收口（CLOSED）。** 已合入 `main`，merge commit `1fa2abe`。
 
-| M1 领域 | 状态 |
-| --- | --- |
-| 实现（A1 / A2 / A3） | **已完成** |
-| 浏览器 / Chaos 门禁（A6） | **已完成** —— 真实 Chromium 27/27，无 shim、无 pin |
-| P0 稳定化（A1 / A2 + 集成） | **已完成** —— 基线 `9be0e1a`；C1 经 `f2dfe1a` 集成 |
-| 最终复核（A7） | **已完成** —— Final Closing Review = **APPROVE**；C1 = CLOSED、C2 = CLOSED、无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
-| 合入 `main` | **已完成** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`） |
-| M1 里程碑 | **CLOSED** |
-| M2 | **未开始** |
+| M1 领域                     | 状态                                                                                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 实现（A1 / A2 / A3）        | **已完成**                                                                                                                                      |
+| 浏览器 / Chaos 门禁（A6）   | **已完成** —— 真实 Chromium 27/27，无 shim、无 pin                                                                                              |
+| P0 稳定化（A1 / A2 + 集成） | **已完成** —— 基线 `9be0e1a`；C1 经 `f2dfe1a` 集成                                                                                              |
+| 最终复核（A7）              | **已完成** —— Final Closing Review = **APPROVE**；C1 = CLOSED、C2 = CLOSED、无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
+| 合入 `main`                 | **已完成** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`）                                                                     |
+| M1 里程碑                   | **CLOSED**                                                                                                                                      |
+| M2                          | **未开始**                                                                                                                                      |
 
 合并后在 `main` 的最终 HEAD 上重新验证（未引用分支历史结果）：`pnpm typecheck` exit 0、
 `pnpm test` exit 0（251 + 58）、`pnpm build` exit 0、`node tests/browser/run.mjs` **27/27**。
@@ -106,26 +106,26 @@ pnpm --filter @insighthub/server verify:m0
 
 ### M1-A0.1 — Pre-Parallel Cleanup ✅ done
 
-| ID | Task | Owner | Status |
-| --- | --- | --- | --- |
-| M1-A0.1-1 | Freeze room cardinality: one socket = one room, atomic replace on re-join | A0 | done |
-| M1-A0.1-2 | Delete the duplicate presence channel (TEXT `presence` removed) | A0 | done |
-| M1-A0.1-3 | Remove `RoomJoinedPayload.revision` (room counter, no M1 consumer) | A0 | done |
-| M1-A0.1-4 | Add `yjs` + `y-protocols` to `apps/server` | A0 | done |
-| M1-A0.1-5 | Restate sync handshake as a deliberate M1 choice (client-initiated) | A0 | done |
-| M1-A0.1-6 | Awareness consumption boundary (`getCollaborators()` only for UI) | A0 | done |
-| M1-A0.1-7 | Regression tests + full validation | A0 | done |
+| ID        | Task                                                                      | Owner | Status |
+| --------- | ------------------------------------------------------------------------- | ----- | ------ |
+| M1-A0.1-1 | Freeze room cardinality: one socket = one room, atomic replace on re-join | A0    | done   |
+| M1-A0.1-2 | Delete the duplicate presence channel (TEXT `presence` removed)           | A0    | done   |
+| M1-A0.1-3 | Remove `RoomJoinedPayload.revision` (room counter, no M1 consumer)        | A0    | done   |
+| M1-A0.1-4 | Add `yjs` + `y-protocols` to `apps/server`                                | A0    | done   |
+| M1-A0.1-5 | Restate sync handshake as a deliberate M1 choice (client-initiated)       | A0    | done   |
+| M1-A0.1-6 | Awareness consumption boundary (`getCollaborators()` only for UI)         | A0    | done   |
+| M1-A0.1-7 | Regression tests + full validation                                        | A0    | done   |
 
 ### M1-A0.1 validation
 
-| Check | Command | Result |
-| --- | --- | --- |
-| Install | `pnpm install` | lockfile up to date |
-| Typecheck | `pnpm typecheck` | 3/3 packages `Done` |
-| Unit tests | `pnpm test:unit` | 67 passed (6 files) |
-| Server integration | `pnpm test:server` | 9 passed |
-| Build | `pnpm build` | shared + server `tsc`, web `vite build` |
-| Runtime | `pnpm --filter @insighthub/server verify:m0` | 7/7 checks |
+| Check              | Command                                      | Result                                  |
+| ------------------ | -------------------------------------------- | --------------------------------------- |
+| Install            | `pnpm install`                               | lockfile up to date                     |
+| Typecheck          | `pnpm typecheck`                             | 3/3 packages `Done`                     |
+| Unit tests         | `pnpm test:unit`                             | 67 passed (6 files)                     |
+| Server integration | `pnpm test:server`                           | 9 passed                                |
+| Build              | `pnpm build`                                 | shared + server `tsc`, web `vite build` |
+| Runtime            | `pnpm --filter @insighthub/server verify:m0` | 7/7 checks                              |
 
 Also implemented in this pass (the doc claimed it, the code did not do it): the
 server now distinguishes `UNKNOWN_MESSAGE_TYPE` from `INVALID_MESSAGE`, so the
@@ -138,16 +138,16 @@ JSON with no `type`). A3 inherits this classification for its room routing.
 M1-A0/M1-A0.1 froze everything the three parallel tasks touch. Work from these, not
 from memory:
 
-| Frozen artefact | Where |
-| --- | --- |
-| Binary frame framing, limits, malformed behaviour | `packages/shared/src/binary-frame.ts`, `docs/CONTRACTS.md` §6 |
-| Control-plane messages (`join-room`, `room-joined`, `leave-room`) — **no `presence`** | `packages/shared/src/protocol.ts`, `docs/CONTRACTS.md` §5 |
-| Room cardinality (one socket = one room, atomic replace) | `docs/CONTRACTS.md` §5.4, `protocol.ts` `ROOM_CARDINALITY` |
-| Error code vocabulary (9 codes) | `packages/shared/src/errors.ts`, `docs/CONTRACTS.md` §7 |
-| A1 ↔ A2 session interface | `packages/shared/src/collab-session.ts`, `docs/CONTRACTS.md` §8 |
-| A1 ↔ A3 wire semantics + lifecycle | `docs/CONTRACTS.md` §6, §10 |
-| Awareness contract, cleanup rules, **consumption boundary** | `awareness-state.ts`, `docs/CONTRACTS.md` §9, §9.1, §9.2 |
-| Source-of-truth rule | `docs/ARCHITECTURE.md` §0 |
+| Frozen artefact                                                                       | Where                                                           |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Binary frame framing, limits, malformed behaviour                                     | `packages/shared/src/binary-frame.ts`, `docs/CONTRACTS.md` §6   |
+| Control-plane messages (`join-room`, `room-joined`, `leave-room`) — **no `presence`** | `packages/shared/src/protocol.ts`, `docs/CONTRACTS.md` §5       |
+| Room cardinality (one socket = one room, atomic replace)                              | `docs/CONTRACTS.md` §5.4, `protocol.ts` `ROOM_CARDINALITY`      |
+| Error code vocabulary (9 codes)                                                       | `packages/shared/src/errors.ts`, `docs/CONTRACTS.md` §7         |
+| A1 ↔ A2 session interface                                                             | `packages/shared/src/collab-session.ts`, `docs/CONTRACTS.md` §8 |
+| A1 ↔ A3 wire semantics + lifecycle                                                    | `docs/CONTRACTS.md` §6, §10                                     |
+| Awareness contract, cleanup rules, **consumption boundary**                           | `awareness-state.ts`, `docs/CONTRACTS.md` §9, §9.1, §9.2        |
+| Source-of-truth rule                                                                  | `docs/ARCHITECTURE.md` §0                                       |
 
 If a task needs something here changed: **stop and request Supervisor approval**
 (`AGENTS.md` §2). A silent local change to a frozen seam breaks the other two
@@ -160,44 +160,44 @@ agents.
   reconnect transfers a delta rather than the document; typecheck, tests and build
   green.
 
-| ID | Task | Owner | Status |
-| --- | --- | --- | --- |
-| M1-A0 | Contract freeze: binary framing, error codes, session seam, wire semantics | A0 | **done** |
-| M1-A1 | Yjs 文档 + 离线持久化 + 重连合并 + awareness + undo | A1 | **done** —— P0-1 见 `85a1b7c`，经 `caa5376` 集成 |
-| M1-A2 | CodeMirror ⇄ `Y.Text` 绑定 + 编辑器 UI + 协作者 UI | A2 | **done** —— P0-2 `0b79a93`、P0-3 `a679856`、选区 `270cf5e`，经 `0d04161` 集成 |
-| M1-A3 | 文档房间、同步中继、presence、连接生命周期 | A3 | **done** —— 经 `47e96e3` 集成；服务端 58 测试通过 |
-| M1-A6 | Chaos 测试：重连、重复帧、乱序、幽灵 awareness | A6 | **done** —— 真实浏览器 + chaos 门禁见 `f031063`；发现 P0-1/2/3 |
-| M1-P0 | A6 发现缺陷的稳定化（A1、A2）与集成 | A1 / A2 / A0 | **done** —— 基线 `9be0e1a`；见下一节 |
-| M1-A7 | 集成门禁：typecheck、测试、构建、wire 格式复核 | A7 | **done** —— Final Closing Review = **APPROVE**；C1、C2 均 CLOSED，无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md` |
-| M1-MERGE | 将 M1 合入 `main` | A0 | **done** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`）；拓扑与 A1/A2/C1 提交历史完整保留 |
-| M1-C1 | A7 条件 C1：让 fatal 重连 pin 可被观测 | A1 | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成。**mutation validation 已由 A1 完成**：删除 `active=false`、删除 `active=false`+`closeSocket()`、删除正常自动重连，三组变异均使对应断言 **FAIL**；变异后生产文件已恢复并核对 hash。A0 在最终 merge 阶段未重复执行该实验；A7 Final Closing Review 已独立复核代码敏感性与零残留状态，**C1 = CLOSED，无剩余证据缺口**（详见 `docs/DECISIONS.md` D-039 §6） |
-| M1-C2 | A7 条件 C2：决策记录 + 修掉 `defect-pins.mjs` 悬空引用 | A0 | **done** —— `a06b6ff`（D-039、引用修复） |
+| ID       | Task                                                                       | Owner        | Status                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | -------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1-A0    | Contract freeze: binary framing, error codes, session seam, wire semantics | A0           | **done**                                                                                                                                                                                                                                                                                                                                                                                                           |
+| M1-A1    | Yjs 文档 + 离线持久化 + 重连合并 + awareness + undo                        | A1           | **done** —— P0-1 见 `85a1b7c`，经 `caa5376` 集成                                                                                                                                                                                                                                                                                                                                                                   |
+| M1-A2    | CodeMirror ⇄ `Y.Text` 绑定 + 编辑器 UI + 协作者 UI                         | A2           | **done** —— P0-2 `0b79a93`、P0-3 `a679856`、选区 `270cf5e`，经 `0d04161` 集成                                                                                                                                                                                                                                                                                                                                      |
+| M1-A3    | 文档房间、同步中继、presence、连接生命周期                                 | A3           | **done** —— 经 `47e96e3` 集成；服务端 58 测试通过                                                                                                                                                                                                                                                                                                                                                                  |
+| M1-A6    | Chaos 测试：重连、重复帧、乱序、幽灵 awareness                             | A6           | **done** —— 真实浏览器 + chaos 门禁见 `f031063`；发现 P0-1/2/3                                                                                                                                                                                                                                                                                                                                                     |
+| M1-P0    | A6 发现缺陷的稳定化（A1、A2）与集成                                        | A1 / A2 / A0 | **done** —— 基线 `9be0e1a`；见下一节                                                                                                                                                                                                                                                                                                                                                                               |
+| M1-A7    | 集成门禁：typecheck、测试、构建、wire 格式复核                             | A7           | **done** —— Final Closing Review = **APPROVE**；C1、C2 均 CLOSED，无 merge blocker；原文见 `docs/agent-governance/A7-m1-p0-review.md`                                                                                                                                                                                                                                                                              |
+| M1-MERGE | 将 M1 合入 `main`                                                          | A0           | **done** —— `--no-ff` merge commit `1fa2abe`（父：`47e96e3` + `652b66f`）；拓扑与 A1/A2/C1 提交历史完整保留                                                                                                                                                                                                                                                                                                        |
+| M1-C1    | A7 条件 C1：让 fatal 重连 pin 可被观测                                     | A1           | **done** —— `dd36169`（基于 `85a1b7c`），经 `f2dfe1a` 集成。**mutation validation 已由 A1 完成**：删除 `active=false`、删除 `active=false`+`closeSocket()`、删除正常自动重连，三组变异均使对应断言 **FAIL**；变异后生产文件已恢复并核对 hash。A0 在最终 merge 阶段未重复执行该实验；A7 Final Closing Review 已独立复核代码敏感性与零残留状态，**C1 = CLOSED，无剩余证据缺口**（详见 `docs/DECISIONS.md` D-039 §6） |
+| M1-C2    | A7 条件 C2：决策记录 + 修掉 `defect-pins.mjs` 悬空引用                     | A0           | **done** —— `a06b6ff`（D-039、引用修复）                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### M1 退出条件 —— 逐项状态
 
-| 退出条件 | 是否满足 | 证据 |
-| --- | --- | --- |
-| 两个浏览器会话收敛 | **是** | `realtime/two-tabs-converge`、`indexeddb/D-two-tabs-share-one-replica`、`indexeddb/C-offline-then-reconnect-converges` |
-| 离线不丢键击 | **实质满足** | 真实拒绝连接后重连：`indexeddb/B-offline-edits-survive-reopen`、`chaos/offline-reconnect`。条件字面的 **30 s** **未**用专门计时器断言——场景演练真实断网，但时长未固定 |
-| 重连传增量而非整篇文档 | **是** | 服务端 `M1-A3 incremental sync (acceptance criterion 4)`；传输受 state vector 约束 |
-| `typecheck` / 测试 / 构建 全绿 | **是** | 在 `f8af8d7`：`pnpm typecheck` exit 0、`pnpm test` exit 0（251 vitest + 58 服务端）、`pnpm build` exit 0 |
-| 上述项的浏览器证据 | **是——但仅一种浏览器** | `node tests/browser/run.mjs` → **27 通过 / 0 失败 / 0 错误**。Chrome 155 / Windows / 单机；跨浏览器与跨平台**未验证** |
+| 退出条件                       | 是否满足               | 证据                                                                                                                                                                  |
+| ------------------------------ | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 两个浏览器会话收敛             | **是**                 | `realtime/two-tabs-converge`、`indexeddb/D-two-tabs-share-one-replica`、`indexeddb/C-offline-then-reconnect-converges`                                                |
+| 离线不丢键击                   | **实质满足**           | 真实拒绝连接后重连：`indexeddb/B-offline-edits-survive-reopen`、`chaos/offline-reconnect`。条件字面的 **30 s** **未**用专门计时器断言——场景演练真实断网，但时长未固定 |
+| 重连传增量而非整篇文档         | **是**                 | 服务端 `M1-A3 incremental sync (acceptance criterion 4)`；传输受 state vector 约束                                                                                    |
+| `typecheck` / 测试 / 构建 全绿 | **是**                 | 在 `f8af8d7`：`pnpm typecheck` exit 0、`pnpm test` exit 0（251 vitest + 58 服务端）、`pnpm build` exit 0                                                              |
+| 上述项的浏览器证据             | **是——但仅一种浏览器** | `node tests/browser/run.mjs` → **27 通过 / 0 失败 / 0 错误**。Chrome 155 / Windows / 单机；跨浏览器与跨平台**未验证**                                                 |
 
 ### M1-P0 —— 稳定化 ✅ 已完成
 
 A6 的真实浏览器门禁发现了三个 Node 套件观测不到的缺陷。A1 与 A2 在各自分支修复，A0 集成两者并让门禁变得可信。决策与审计链见 `docs/DECISIONS.md` D-039。
 
-| ID | 任务 | Owner | 状态 | 证据 |
-| --- | --- | --- | --- | --- |
-| M1-P0-1 | 给只读的 `globalThis.indexedDB` 赋值（浏览器中它是 getter-only）→ 任何文档都打不开 | A1 | **已完成** | `85a1b7c`；`defect-pin/P0-1` 在 pin 删除前已于**未修改**路径通过 |
-| M1-P0-2 | 本地编辑只在累计 64 次变更时 flush → 击键从未进入 `Y.Text`（不持久、不共享、undo 失效） | A2 | **已完成** | `0b79a93`；九个 pinned 场景转绿；编辑器长度 == `Y.Text` 长度 |
-| M1-P0-3 | `ViewPlugin` 在自己的构造函数里 dispatch → 插件挂载即崩，远端光标从不渲染 | A2 | **已完成** | `a679856`；`cursors/remote-caret-and-selection-render` 通过 |
-| M1-P0-4 | 两条 harness 断言在产品**正确**时失败（绝对 `editorMounts === 1`；切进一个有协作者的房间后仍要求 0 光标） | A0 —— A6 域，受委派 | **已完成** | `19587fc`；`mounts 2→2`、`viewId 1→1`，光标归属新房协作者 |
-| M1-P0-5 | `sync.test.ts` 的 fatal 断言比较的是**存活** socket 数 → 抖动，且两次读数都为 0 时变成空断言 | A0 —— A1 域，ownership 例外 | **已完成，随后被 C1 取代** | `9be0e1a` 修正了计数语义；A7 随后指出**窗口**仍太短（120 ms vs 1000 ms 退避），`f2dfe1a` 用 C1 重写了整个用例；重复计数器已收敛为 A1 单一的单调 `totalConnections` |
-| M1-P0-6 | P0 pin、P0-1 shim 与"缺陷仍存在"的过期注释退场 | A0 —— A6 域，受委派 | **已完成** | `19587fc`、`fc542f8`；27 个场景，无 shim、无 `knownDefect` 标签 |
-| M1-P0-7 | **服务端持久化** —— M1 没有 | — | **未完成 → `M2-P0-1`** | 房间随最后一个成员销毁；**全新**客户端无法恢复既有内容。已知 limitation，非合并阻塞 |
-| M1-P0-8 | presence 写侧 seam 缺失；注入的 IndexedDB 工厂无引用计数 | — | **已接受风险 → `M2-P0-2` / `M2-P0-3`** | `docs/DECISIONS.md` D-039 §3 / §4；两项均已记录，**均未修复** |
-| M1-P0-9 | A7 复核报告原先不在仓库 | A0 | **已闭合** | `docs/agent-governance/A7-m1-p0-review.md`（逐字原文）；D-039 §5 已改为指向它 |
+| ID      | 任务                                                                                                      | Owner                       | 状态                                   | 证据                                                                                                                                                               |
+| ------- | --------------------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1-P0-1 | 给只读的 `globalThis.indexedDB` 赋值（浏览器中它是 getter-only）→ 任何文档都打不开                        | A1                          | **已完成**                             | `85a1b7c`；`defect-pin/P0-1` 在 pin 删除前已于**未修改**路径通过                                                                                                   |
+| M1-P0-2 | 本地编辑只在累计 64 次变更时 flush → 击键从未进入 `Y.Text`（不持久、不共享、undo 失效）                   | A2                          | **已完成**                             | `0b79a93`；九个 pinned 场景转绿；编辑器长度 == `Y.Text` 长度                                                                                                       |
+| M1-P0-3 | `ViewPlugin` 在自己的构造函数里 dispatch → 插件挂载即崩，远端光标从不渲染                                 | A2                          | **已完成**                             | `a679856`；`cursors/remote-caret-and-selection-render` 通过                                                                                                        |
+| M1-P0-4 | 两条 harness 断言在产品**正确**时失败（绝对 `editorMounts === 1`；切进一个有协作者的房间后仍要求 0 光标） | A0 —— A6 域，受委派         | **已完成**                             | `19587fc`；`mounts 2→2`、`viewId 1→1`，光标归属新房协作者                                                                                                          |
+| M1-P0-5 | `sync.test.ts` 的 fatal 断言比较的是**存活** socket 数 → 抖动，且两次读数都为 0 时变成空断言              | A0 —— A1 域，ownership 例外 | **已完成，随后被 C1 取代**             | `9be0e1a` 修正了计数语义；A7 随后指出**窗口**仍太短（120 ms vs 1000 ms 退避），`f2dfe1a` 用 C1 重写了整个用例；重复计数器已收敛为 A1 单一的单调 `totalConnections` |
+| M1-P0-6 | P0 pin、P0-1 shim 与"缺陷仍存在"的过期注释退场                                                            | A0 —— A6 域，受委派         | **已完成**                             | `19587fc`、`fc542f8`；27 个场景，无 shim、无 `knownDefect` 标签                                                                                                    |
+| M1-P0-7 | **服务端持久化** —— M1 没有                                                                               | —                           | **未完成 → `M2-P0-1`**                 | 房间随最后一个成员销毁；**全新**客户端无法恢复既有内容。已知 limitation，非合并阻塞                                                                                |
+| M1-P0-8 | presence 写侧 seam 缺失；注入的 IndexedDB 工厂无引用计数                                                  | —                           | **已接受风险 → `M2-P0-2` / `M2-P0-3`** | `docs/DECISIONS.md` D-039 §3 / §4；两项均已记录，**均未修复**                                                                                                      |
+| M1-P0-9 | A7 复核报告原先不在仓库                                                                                   | A0                          | **已闭合**                             | `docs/agent-governance/A7-m1-p0-review.md`（逐字原文）；D-039 §5 已改为指向它                                                                                      |
 
 > 以上浏览器结论**仅描述 M1 的协作面**。它们与 M2 权限、M3 AI、M4 硬化无关，不得当作那些里程碑的证据引用。
 
@@ -205,15 +205,15 @@ A6 的真实浏览器门禁发现了三个 Node 套件观测不到的缺陷。A1
 
 Design decisions that matter for review:
 
-| Concern | Decision |
-| --- | --- |
-| Truth | `Y.Text` only. No document content in React state or Redux; the editor reads content solely from the session. |
-| Binding | One `CollabTextBinding` per session, created before the view and destroyed with it, so a collaborator or connection update cannot remount the editor or duplicate the observer. |
-| Echo suppression | Three independent mechanisms: transaction-origin check, re-entrancy guard, and a derived-change marker (`REMOTE_SYNC_ORIGIN`) that stops an undo or a remote update from being re-recorded as a local edit. |
-| Remote application | `Y.TextEvent.delta` is deliberately **not** translated by hand; the authoritative content is diffed against the editor and the minimal single-range change is applied (one editor transaction per update). |
-| Undo | No CodeMirror `history()`; `Mod-z` routes to `session.undo()` so undo stays CRDT-scoped by origin. |
-| Presence | Cursor offsets come from awareness; every rendered string comes from `session.getCollaborators()`. |
-| Document switch | The editor remounts per session and the old binding is destroyed before the next session exists. |
+| Concern            | Decision                                                                                                                                                                                                    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Truth              | `Y.Text` only. No document content in React state or Redux; the editor reads content solely from the session.                                                                                               |
+| Binding            | One `CollabTextBinding` per session, created before the view and destroyed with it, so a collaborator or connection update cannot remount the editor or duplicate the observer.                             |
+| Echo suppression   | Three independent mechanisms: transaction-origin check, re-entrancy guard, and a derived-change marker (`REMOTE_SYNC_ORIGIN`) that stops an undo or a remote update from being re-recorded as a local edit. |
+| Remote application | `Y.TextEvent.delta` is deliberately **not** translated by hand; the authoritative content is diffed against the editor and the minimal single-range change is applied (one editor transaction per update).  |
+| Undo               | No CodeMirror `history()`; `Mod-z` routes to `session.undo()` so undo stays CRDT-scoped by origin.                                                                                                          |
+| Presence           | Cursor offsets come from awareness; every rendered string comes from `session.getCollaborators()`.                                                                                                          |
+| Document switch    | The editor remounts per session and the old binding is destroyed before the next session exists.                                                                                                            |
 
 Evidence: `pnpm test:unit` 169 passed (14 files), `pnpm test:server` 61 passed,
 A2-scope `tsc --noEmit` clean, `vite build` built. A browser/E2E pass is still
@@ -339,7 +339,7 @@ write path, and therefore the single backpressure enforcement point) · `context
 
 **Why the replace is genuinely atomic.** `RoomRegistry.joinRoom` is fully synchronous,
 so JavaScript runs it to completion before any other socket event can be handled: there
-is no `await` between "leave A" and "join B", and every refusal is decided *before* the
+is no `await` between "leave A" and "join B", and every refusal is decided _before_ the
 first mutation. Combined with `SocketContext.activeRoom` being a single field, there is
 no representable state in which a socket holds two rooms or neither while the server has
 already replied. One transition function (`#detach`) serves leave, disconnect and
@@ -382,11 +382,11 @@ annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck /
 
 ### M2 范围
 
-| ID | 内容 | 本轮状态 | 代码状态 |
-| --- | --- | --- | --- |
-| `M2-P0-1` | 服务端 durable persistence | **COMPLETE**（A–K 全部有证据；证据层按 D-056） | **IMPLEMENTED** —— `apps/server/src/persistence/**` + 房间生命周期 |
-| `M2-P0-2` | presence 写侧 seam | **COMPLETE**（三步齐备；`SHARED_CONTRACT_VERSION` = 4，wire 不变） | 见下「M2-P0-2 — presence 写侧 seam（3 步迁移）」 |
-| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **COMPLETE**（D-046 的 5 个回归测试存在并通过） | **IMPLEMENTED** —— `collab/internal/persistence.ts` 租约栈 |
+| ID        | 内容                          | 本轮状态                                                           | 代码状态                                                           |
+| --------- | ----------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `M2-P0-1` | 服务端 durable persistence    | **COMPLETE**（A–K 全部有证据；证据层按 D-056）                     | **IMPLEMENTED** —— `apps/server/src/persistence/**` + 房间生命周期 |
+| `M2-P0-2` | presence 写侧 seam            | **COMPLETE**（三步齐备；`SHARED_CONTRACT_VERSION` = 4，wire 不变） | 见下「M2-P0-2 — presence 写侧 seam（3 步迁移）」                   |
+| `M2-P0-3` | 注入式 IndexedDB 工厂生命周期 | **COMPLETE**（D-046 的 5 过）                                      | **IMPLEMENTED** —— `collab/internal/persistence.ts` 租约栈         |
 
 **不在 M2 范围**：AI 编辑器（M3）、UI 重设计、wire framing 变更。
 
@@ -404,11 +404,11 @@ annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck /
 
 1. `M2-P0-1` 的 **A–K 全部 PASS**，但每项要求的**证据层**按 D-056 分层：
 
-   | 证据层 | 场景 |
-   | --- | --- |
-   | **浏览器级必需**（真实 Chrome + 真实后端进程 + 真实磁盘） | **A / B / C / E / F / G / J** |
-   | **Node 级确定性证据足够**（可复现的确定性用例） | **D / H / I** |
-   | **Node + 机制证明；browser evidence 目前 N/A**（附重评触发条件） | **K** |
+   | 证据层                                                           | 场景                          |
+   | ---------------------------------------------------------------- | ----------------------------- |
+   | **浏览器级必需**（真实 Chrome + 真实后端进程 + 真实磁盘）        | **A / B / C / E / F / G / J** |
+   | **Node 级确定性证据足够**（可复现的确定性用例）                  | **D / H / I**                 |
+   | **Node + 机制证明；browser evidence 目前 N/A**（附重评触发条件） | **K**                         |
 
    **K 的正确表述**：Node 级可控 hydration 测试 + room-state-machine / error-code 机制证明；
    在当前 production `SqliteDocumentStore` 的**同步 hydration** 实现下，wire/browser 无法稳定形成
@@ -417,6 +417,7 @@ annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck /
    必须重新评估 K，并在可达时恢复 browser-level validation。
 
    > **这不是降低 A–K 验收标准。** 全部十一项仍必须 PASS，变化的只是每项所要求的 evidence layer。
+
 2. `M2-P0-2` **三步全部完成**（D-057）：step 1 seam（已 DONE）、step 2 编辑器迁移（A2）、
    step 3 收窄裸 `Awareness`（A1）；只有三步都合入后才可标 COMPLETE。
 3. `M2-P0-3` 已实现：D-046 的 **5 个回归测试**存在并通过。
@@ -426,14 +427,14 @@ annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck /
 
 **判定结果：PASS（A7 · M2-P0 Exit Review）**
 
-| 判据 | 判定 | 证据 |
-| --- | --- | --- |
-| 1 · A–K 全部 PASS（证据分层） | **PASS** | 11/11；A/B/C/E/F/G/J 浏览器级，D/H/I Node 级，K 为 Node + 机制证明（D-056） |
-| 2 · M2-P0-2 三步 | **PASS** | step1 `6714ca2`+`054d87e`→`b40ba3c`；step2 `1a8c887`→`271fb4c`；step3 `9f8cfa2`→`a278ee8` |
-| 3 · M2-P0-3 | **PASS** | D-046 的 5 个回归测试在 318 内通过 |
-| 4 · A6 浏览器门禁 | **PASS** | A7 独立重跑 **36/36**（M1 27 + M2 9），exit 0，含 pid 变化 / SHA 一致 / 1011 / 未广播 |
-| 5 · A7 P0 review | **PASS** | **APPROVE**；4 项 pinned 均为文档/流程级，无 Gate 阻断项 |
-| 6 · 三项门禁 + 浏览器在最终 HEAD 重跑 | **PASS** | `typecheck` 0 / `test` **318 + 105** / `build` 0；浏览器 36/36 |
+| 判据                                  | 判定     | 证据                                                                                      |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| 1 · A–K 全部 PASS（证据分层）         | **PASS** | 11/11；A/B/C/E/F/G/J 浏览器级，D/H/I Node 级，K 为 Node + 机制证明（D-056）               |
+| 2 · M2-P0-2 三步                      | **PASS** | step1 `6714ca2`+`054d87e`→`b40ba3c`；step2 `1a8c887`→`271fb4c`；step3 `9f8cfa2`→`a278ee8` |
+| 3 · M2-P0-3                           | **PASS** | D-046 的 5 个回归测试在 318 内通过                                                        |
+| 4 · A6 浏览器门禁                     | **PASS** | A7 独立重跑 **36/36**（M1 27 + M2 9），exit 0，含 pid 变化 / SHA 一致 / 1011 / 未广播     |
+| 5 · A7 P0 review                      | **PASS** | **APPROVE**；4 项 pinned 均为文档/流程级，无 Gate 阻断项                                  |
+| 6 · 三项门禁 + 浏览器在最终 HEAD 重跑 | **PASS** | `typecheck` 0 / `test` **318 + 105** / `build` 0；浏览器 36/36                            |
 
 **A7 pinned 缺陷的处理**：P1（契约/架构/TASKS 仍称 P0-1、P0-3 "未实现"）、P2（A1 step 3 跨域留痕）、
 P3（D-056 措辞过强）、P4（A6 evidence note 过期）均已在 release commit 内修正（`docs/DECISIONS.md` D-059）。
@@ -452,44 +453,44 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 
 ### M2 Phase 2 / P1 — permission & authentication consistency
 
-| 项 | 内容 |
-| --- | --- |
-| 目的 | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控 |
-| 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060） |
-| Owner | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据 |
-| 状态 | **A5 已合入 `main`**（merge `e718568` + 集成硬化 `cd18eb1`，见 D-062）→ **A3 WS 执行点：本轮派发** → A6/A7 未开始 |
+| 项       | 内容                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
+| 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
+| Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
+| 状态     | **A5 已合入 `main`**（`e718568` + `cd18eb1`，D-062）；**A3 代码完成于分支 `0d23af9`，等浏览器证据**——按 D-063 §3，A3 与 A6 一起进入 `main`，避免红窗口；P2 浏览器半场 → **本轮派发 A6** |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
-| 决定 | 内容 |
-| --- | --- |
-| 身份机制 | **server-issued opaque session token + `httpOnly` cookie + server-side session → `userId`**；本阶段用 **Demo Identity Bootstrap**，不实现密码凭据认证 |
+| 决定             | 内容                                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 身份机制         | **server-issued opaque session token + `httpOnly` cookie + server-side session → `userId`**；本阶段用 **Demo Identity Bootstrap**，不实现密码凭据认证            |
 | 安全承诺（原文） | 服务端签发的 session 可以防止客户端在后续 API/WS 请求中直接伪造身份；**demo bootstrap 本身不提供 credential-level identity proof**。**禁止**写成"防止跨用户冒用" |
-| 术语三分 | `Demo Identity Bootstrap` / `Session Authentication` / `Authorization` —— 不得合并、不得互相替代 |
-| 非目标 | password hash/storage、signup、password reset、OAuth/SSO、MFA |
-| space | **space-A**：不引入 space entity / membership / role；授权链止于 Document Membership |
-| 版本 | `SHARED_CONTRACT_VERSION` 4 → **5**（新增 `FORBIDDEN`）；`PROTOCOL_VERSION` 保持 **2** |
+| 术语三分         | `Demo Identity Bootstrap` / `Session Authentication` / `Authorization` —— 不得合并、不得互相替代                                                                 |
+| 非目标           | password hash/storage、signup、password reset、OAuth/SSO、MFA                                                                                                    |
+| space            | **space-A**：不引入 space entity / membership / role；授权链止于 Document Membership                                                                             |
+| 版本             | `SHARED_CONTRACT_VERSION` 4 → **5**（新增 `FORBIDDEN`）；`PROTOCOL_VERSION` 保持 **2**                                                                           |
 
 #### Phase 2 — 现状重建（A0 只读核验，2026-10-18）
 
-| 层 | 现状 | 证据 |
-| --- | --- | --- |
-| HTTP API | 只有 `/health` 与 `/api/meta`；**没有**文档端点、**没有**认证端点 | `apps/server/src/app.ts`；`CONTRACTS` §12 |
-| WebSocket | `join-room` 的 `mode: 'readonly' \| 'readwrite'` 已冻结在契约里，**服务端从不读取该字段** | `packages/shared/src/protocol.ts` §5.2；`rooms/registry.ts` `joinRoom` |
-| 授权 | `RoomRegistry` 有 `authorizeJoin?(documentId) => boolean` 钩子，**生产未接线**，默认 `() => true`（全放行） | `registry.ts` L174/L201/L306；`ws.ts` 不传该选项 |
-| 角色语义 | `DocumentRole` 词表与 `documentCapabilities` 已在 shared 冻结；**除 `aiAcceptRequiredRole` 外无消费者** | `packages/shared/src/permission.ts` |
-| 身份 | 客户端每 tab 生成随机 demo 身份；**服务端不接收、不验证** | `apps/web/src/user.ts` |
-| 成员关系持久化 | store 只有文档 snapshot + update log；**没有 user / membership 表** | `apps/server/src/persistence/types.ts` |
-| space | **代码与契约中都不存在**（仅 `AGENTS.md` 的 A5 角色描述提到 "space/document permissions"） | 全仓检索 |
+| 层             | 现状                                                                                                        | 证据                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| HTTP API       | 只有 `/health` 与 `/api/meta`；**没有**文档端点、**没有**认证端点                                           | `apps/server/src/app.ts`；`CONTRACTS` §12                              |
+| WebSocket      | `join-room` 的 `mode: 'readonly' \| 'readwrite'` 已冻结在契约里，**服务端从不读取该字段**                   | `packages/shared/src/protocol.ts` §5.2；`rooms/registry.ts` `joinRoom` |
+| 授权           | `RoomRegistry` 有 `authorizeJoin?(documentId) => boolean` 钩子，**生产未接线**，默认 `() => true`（全放行） | `registry.ts` L174/L201/L306；`ws.ts` 不传该选项                       |
+| 角色语义       | `DocumentRole` 词表与 `documentCapabilities` 已在 shared 冻结；**除 `aiAcceptRequiredRole` 外无消费者**     | `packages/shared/src/permission.ts`                                    |
+| 身份           | 客户端每 tab 生成随机 demo 身份；**服务端不接收、不验证**                                                   | `apps/web/src/user.ts`                                                 |
+| 成员关系持久化 | store 只有文档 snapshot + update log；**没有 user / membership 表**                                         | `apps/server/src/persistence/types.ts`                                 |
+| space          | **代码与契约中都不存在**（仅 `AGENTS.md` 的 A5 角色描述提到 "space/document permissions"）                  | 全仓检索                                                               |
 
 #### Phase 2 — 四层授权边界（冻结）
 
-| 层 | 权威判定点 | 允许 | 禁止 |
-| --- | --- | --- | --- |
-| **API** | `apps/server/src/authz/**` 中间件 + 路由处理：session → `userId` → 成员角色 → capability | 无 session = `401`；未知文档 / 无成员关系 / 无 `canRead` **统一** `404 not_found`；`canRead` 但 capability 不足 = `403`（`CONTRACTS` §17.4） | 把授权决定下放给 web；用 UI 门控代替服务端判定；让 403/404 区分出文档是否存在 |
-| **WS** | `join-room` 与每个 BINARY 帧的入口（`RoomRegistry` / `DocumentRoom`），使用 A5 提供的 resolver | 升级即要求有效 session（否则 HTTP `401`，不建立 WS）；无 `canRead` → `ROOM_NOT_FOUND`（与未知文档同码，非泄露）；无 `canEdit` → `FORBIDDEN` 且**不 apply、不 persist、不 broadcast**，socket 保持打开 | 采信客户端声明的 `mode`；让失败的 join 驱逐已有房间；对 AWARENESS 帧施加写权限（viewer 也要能发光标） |
-| **document** | `documentCapabilities`（`canRead` / `canComment` / `canEdit` / `canManageMembers`）+ 持久化成员关系 | 这四问是唯一判据 | 在 UI 或服务端各写一套"更细"的规则 |
-| **space** | **本 Phase 不引入**（D-061 决定 4：不制造当前不存在的领域实体） | — | 以 space 名义新增持久化实体、角色或端点 |
+| 层           | 权威判定点                                                                                          | 允许                                                                                                                                                                                                  | 禁止                                                                                                  |
+| ------------ | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **API**      | `apps/server/src/authz/**` 中间件 + 路由处理：session → `userId` → 成员角色 → capability            | 无 session = `401`；未知文档 / 无成员关系 / 无 `canRead` **统一** `404 not_found`；`canRead` 但 capability 不足 = `403`（`CONTRACTS` §17.4）                                                          | 把授权决定下放给 web；用 UI 门控代替服务端判定；让 403/404 区分出文档是否存在                         |
+| **WS**       | `join-room` 与每个 BINARY 帧的入口（`RoomRegistry` / `DocumentRoom`），使用 A5 提供的 resolver      | 升级即要求有效 session（否则 HTTP `401`，不建立 WS）；无 `canRead` → `ROOM_NOT_FOUND`（与未知文档同码，非泄露）；无 `canEdit` → `FORBIDDEN` 且**不 apply、不 persist、不 broadcast**，socket 保持打开 | 采信客户端声明的 `mode`；让失败的 join 驱逐已有房间；对 AWARENESS 帧施加写权限（viewer 也要能发光标） |
+| **document** | `documentCapabilities`（`canRead` / `canComment` / `canEdit` / `canManageMembers`）+ 持久化成员关系 | 这四问是唯一判据                                                                                                                                                                                      | 在 UI 或服务端各写一套"更细"的规则                                                                    |
+| **space**    | **本 Phase 不引入**（D-061 决定 4：不制造当前不存在的领域实体）                                     | —                                                                                                                                                                                                     | 以 space 名义新增持久化实体、角色或端点                                                               |
 
 #### Phase 2 — 依赖顺序（硬约束）
 
@@ -497,8 +498,10 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE（e718568 / cd18eb1）
    → A0 integrate                                       ← DONE（D-062）
    → A3 接线（ws.ts / registry.ts：升级 401、join 拒绝、BINARY 闸门、`room-joined.role`、documents 源）
-   → A6 浏览器 / 负向路径证据
-   → A7 Phase 2 review
+     ← 代码 DONE（分支 0d23af9，180/180 Node 证据），未合 main（D-063 §3）
+   → A6 浏览器 / 负向路径证据（本轮派发；分支由 A0 先 merge A3）
+     ← 目标：门禁回到 36/36 且 P2-1/P2-2/P2-4/P2-5 有浏览器证据
+   → A0 合并 A6（连带 A3）→ A7 Phase 2 final review
 ```
 
 理由与 D-057 同构：A5 与 A3 都改 `apps/server`。**先冻结 seam，再由 A3 接线**，否则两人同时改
@@ -506,27 +509,27 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 
 #### Phase 2 — Acceptance Criteria（冻结）
 
-| # | 场景 | 判据 | 证据层 |
-| --- | --- | --- | --- |
-| P2-1 | viewer 不能改文档 | viewer 发送 SYNC update：服务端**不 apply / 不 persist / 不 broadcast**；发送方收到 `FORBIDDEN`；第二个 peer 看不到该文本；socket 仍可接收他人更新 | browser |
-| P2-2 | 身份不可自称 | 客户端在 join payload / API body / header / query 里塞 `userId` **全部无效**；把 `mode` 改成 `readwrite` **无效**；答案只由 session + 成员关系给出 | Node + browser |
-| P2-3 | 非泄露 | 无 session = `401`；未知文档、无成员关系、无 `canRead` **三者响应完全相同**（`404 not_found`，状态码/body/headers 一致）；capability 不足才 `403` | Node |
-| P2-4 | 多层一致 | 同一角色在 API / WS join / WS frame / `documentCapabilities` 四处得到同一答案（表驱动，角色 × capability × 入口） | Node |
-| P2-5 | 权限不因重启/吊销失真 | 角色变更后重新判定为新角色；进程重启后成员关系仍在；`DELETE /api/session` 后同一 token 处处 `401` | browser + Node |
-| P2-6 | 越权管理 | `canManageMembers` 仅 owner；editor 调成员相关能力 = `403` | Node |
-| P2-7 | 既有门禁不回归 | typecheck / test / build / browser 全绿；M1 + M2-P0 的既有场景**一个都不能减少** | 全部 |
-| P2-8 | 术语与安全承诺 | 仓库文档 / UI 文案 / 报告里**不出现**被禁措辞（"无密码用户名登录可防跨用户冒用"等）；bootstrap 不得被描述为 password authentication（`CONTRACTS` §17.0）。检索时排除 D-061 的「作废表述」对照表与本条目自身——它们引用被禁措辞是为了**禁止**它 | `grep` + A6 复核 |
-| P2-9 | token 不暴露给 JS | `document.cookie` 读不到 `insighthub_session`；token 不出现在任何 JSON body、日志、Redux、localStorage、awareness；`POST /api/session/bootstrap` 的响应 body 不含 token | browser + Node |
+| #    | 场景                  | 判据                                                                                                                                                                                                                                          | 证据层           |
+| ---- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| P2-1 | viewer 不能改文档     | viewer 发送 SYNC update：服务端**不 apply / 不 persist / 不 broadcast**；发送方收到 `FORBIDDEN`；第二个 peer 看不到该文本；socket 仍可接收他人更新                                                                                            | browser          |
+| P2-2 | 身份不可自称          | 客户端在 join payload / API body / header / query 里塞 `userId` **全部无效**；把 `mode` 改成 `readwrite` **无效**；答案只由 session + 成员关系给出                                                                                            | Node + browser   |
+| P2-3 | 非泄露                | 无 session = `401`；未知文档、无成员关系、无 `canRead` **三者响应完全相同**（`404 not_found`，状态码/body/headers 一致）；capability 不足才 `403`                                                                                             | Node             |
+| P2-4 | 多层一致              | 同一角色在 API / WS join / WS frame / `documentCapabilities` 四处得到同一答案（表驱动，角色 × capability × 入口）                                                                                                                             | Node             |
+| P2-5 | 权限不因重启/吊销失真 | 角色变更后重新判定为新角色；进程重启后成员关系仍在；`DELETE /api/session` 后同一 token 处处 `401`                                                                                                                                             | browser + Node   |
+| P2-6 | 越权管理              | `canManageMembers` 仅 owner；editor 调成员相关能力 = `403`                                                                                                                                                                                    | Node             |
+| P2-7 | 既有门禁不回归        | typecheck / test / build / browser 全绿；M1 + M2-P0 的既有场景**一个都不能减少**                                                                                                                                                              | 全部             |
+| P2-8 | 术语与安全承诺        | 仓库文档 / UI 文案 / 报告里**不出现**被禁措辞（"无密码用户名登录可防跨用户冒用"等）；bootstrap 不得被描述为 password authentication（`CONTRACTS` §17.0）。检索时排除 D-061 的「作废表述」对照表与本条目自身——它们引用被禁措辞是为了**禁止**它 | `grep` + A6 复核 |
+| P2-9 | token 不暴露给 JS     | `document.cookie` 读不到 `insighthub_session`；token 不出现在任何 JSON body、日志、Redux、localStorage、awareness；`POST /api/session/bootstrap` 的响应 body 不含 token                                                                       | browser + Node   |
 
 #### Phase 2 — Ownership
 
-| Agent | 范围 | Owned Files | Do Not Touch |
-| --- | --- | --- | --- |
-| **A5** | session/store/角色解析/授权判定核心、HTTP 中间件与 §17.4 端点、`FORBIDDEN` 码、版本 4→5、web 侧权限门控 | `apps/server/src/authz/**`（新建）<br>`apps/server/src/app.ts`<br>`apps/server/src/index.ts`（构造 authz 并注入 HTTP 层）<br>`packages/shared/src/errors.ts`、`packages/shared/src/index.ts`（版本常量）、`packages/shared/src/permission*.ts`（如需新判据）、对应 `*.test.ts`<br>`apps/web/src/features/**`（仅权限门控 UI） | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`、wire framing、`PROTOCOL_VERSION` |
-| **A3** | WS 侧执行点：升级认证、join 拒绝、BINARY 闸门、`documents` 元数据源 | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`（仅新增 documents / membership 只读数据源） | `packages/shared/**`、`apps/web/**`、`apps/server/src/authz/**`、错误码词表 |
-| **A6** | security / negative-path 证据（P2-1…P2-9） | `tests/browser/**` | 生产代码 |
-| **A0** | 契约定稿、集成、`index.ts` 的一行接线（若 A5/A3 都不该写）、Phase 2 final gate 调度 | `docs/**`、`AGENTS.md` | — |
-| **A1/A2/A4** | idle | — | — |
+| Agent        | 范围                                                                                                    | Owned Files                                                                                                                                                                                                                                                                                                                   | Do Not Touch                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **A5**       | session/store/角色解析/授权判定核心、HTTP 中间件与 §17.4 端点、`FORBIDDEN` 码、版本 4→5、web 侧权限门控 | `apps/server/src/authz/**`（新建）<br>`apps/server/src/app.ts`<br>`apps/server/src/index.ts`（构造 authz 并注入 HTTP 层）<br>`packages/shared/src/errors.ts`、`packages/shared/src/index.ts`（版本常量）、`packages/shared/src/permission*.ts`（如需新判据）、对应 `*.test.ts`<br>`apps/web/src/features/**`（仅权限门控 UI） | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`、wire framing、`PROTOCOL_VERSION` |
+| **A3**       | WS 侧执行点：升级认证、join 拒绝、BINARY 闸门、`documents` 元数据源                                     | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`（仅新增 documents / membership 只读数据源）                                                                                                                                                                                             | `packages/shared/**`、`apps/web/**`、`apps/server/src/authz/**`、错误码词表                                             |
+| **A6**       | security / negative-path 证据（P2-1…P2-9）                                                              | `tests/browser/**`                                                                                                                                                                                                                                                                                                            | 生产代码                                                                                                                |
+| **A0**       | 契约定稿、集成、`index.ts` 的一行接线（若 A5/A3 都不该写）、Phase 2 final gate 调度                     | `docs/**`、`AGENTS.md`                                                                                                                                                                                                                                                                                                        | —                                                                                                                       |
+| **A1/A2/A4** | idle                                                                                                    | —                                                                                                                                                                                                                                                                                                                             | —                                                                                                                       |
 
 > **已知的跨域点（按 D-055 §1 / D-059 P2 的具名例外处理）**：`attachWebSocketServer` 需要收到
 > authz resolver。A5 不写 `ws.ts`，A3 不改 `authz/**`，因此**这一行接线由 A0 在集成时写入**
@@ -534,17 +537,17 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 
 #### Phase 2 — P1 第一棒（A5）实现现状（分支 `agent/a5-m2-phase2-authz`，等待 A0 集成）
 
-| 层 | 现状 | 位置 |
-| --- | --- | --- |
-| HTTP（session + 文档端点） | **已实现**：§17.4 五个端点、非泄露 404、`credentials: true` 的显式 origin CORS | `apps/server/src/authz/**`、`apps/server/src/app.ts` |
-| 判定核心 | **已实现**：`roleFor` / `can` 一律复用 `documentCapabilities`；无第二套规则 | `apps/server/src/authz/authz.ts` |
-| session | **已实现**：CSPRNG 256-bit opaque token、`httpOnly`/`SameSite=Lax`/`Path=/`、12 h、吊销/轮换；**process-scoped**（limitation，不是安全属性） | `apps/server/src/authz/{tokens,session-store,cookies}.ts` |
-| 成员关系 | **已实现**：A5 自有表 `authz.db`（`documentId/userId/role`），demo fixture 种子，重启后仍在 | `apps/server/src/authz/membership-store.ts` |
-| WS 执行点 | **未接线**（A3 下一棒）：升级认证、join 拒绝、BINARY `SYNC` 闸门 | `ws.ts`、`rooms/**` **未改动** |
-| 客户端身份 | **已接线**：bootstrap 取 `userId/displayName`；token 只存在于 httpOnly cookie，JS 不可达 | `apps/web/src/session/**`、`user.ts`、`App.tsx` |
-| 客户端权限门控 | 只经 `documentCapabilities`；但**角色当前没有传输通道**（§17.4 的响应体不含 `role`），故门控不生效 | `apps/web/src/features/permissions/**` |
-| `FORBIDDEN` / 版本 | **已实现**：`SHARED_CONTRACT_VERSION` 5；`PROTOCOL_VERSION` 保持 2 | `packages/shared/src/errors.ts`、`index.ts` |
-| A3 的 public surface | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定） | 同上 |
+| 层                         | 现状                                                                                                                                         | 位置                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| HTTP（session + 文档端点） | **已实现**：§17.4 五个端点、非泄露 404、`credentials: true` 的显式 origin CORS                                                               | `apps/server/src/authz/**`、`apps/server/src/app.ts`      |
+| 判定核心                   | **已实现**：`roleFor` / `can` 一律复用 `documentCapabilities`；无第二套规则                                                                  | `apps/server/src/authz/authz.ts`                          |
+| session                    | **已实现**：CSPRNG 256-bit opaque token、`httpOnly`/`SameSite=Lax`/`Path=/`、12 h、吊销/轮换；**process-scoped**（limitation，不是安全属性） | `apps/server/src/authz/{tokens,session-store,cookies}.ts` |
+| 成员关系                   | **已实现**：A5 自有表 `authz.db`（`documentId/userId/role`），demo fixture 种子，重启后仍在                                                  | `apps/server/src/authz/membership-store.ts`               |
+| WS 执行点                  | **未接线**（A3 下一棒）：升级认证、join 拒绝、BINARY `SYNC` 闸门                                                                             | `ws.ts`、`rooms/**` **未改动**                            |
+| 客户端身份                 | **已接线**：bootstrap 取 `userId/displayName`；token 只存在于 httpOnly cookie，JS 不可达                                                     | `apps/web/src/session/**`、`user.ts`、`App.tsx`           |
+| 客户端权限门控             | 只经 `documentCapabilities`；但**角色当前没有传输通道**（§17.4 的响应体不含 `role`），故门控不生效                                           | `apps/web/src/features/permissions/**`                    |
+| `FORBIDDEN` / 版本         | **已实现**：`SHARED_CONTRACT_VERSION` 5；`PROTOCOL_VERSION` 保持 2                                                                           | `packages/shared/src/errors.ts`、`index.ts`               |
+| A3 的 public surface       | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定）                                      | 同上                                                      |
 
 #### Phase 2 — Branch / worktree plan
 
@@ -569,12 +572,12 @@ main @ <freeze commit>
 ＝ `tsx --test src/**/*.test.ts` 的**默认并行运行在本机不退出**（A0 集成期观测到 2 次，
 每次 >10 分钟无进展后手动终止）。实测分层证据：
 
-| 运行方式 | 结果 |
-| --- | --- |
-| 串行 `--test-concurrency=1`（15 文件） | **163/163 pass，55 s，exit 0** |
-| 并行但排除 `persistence/restart.test.ts` | **160/160 pass，8 s，exit 0** |
-| 并行 + `--test-force-exit`（15 文件） | **163/163 pass，9 s，exit 0** |
-| 并行，默认（15 文件） | **不退出**（测试结果已全部打印） |
+| 运行方式                                 | 结果                             |
+| ---------------------------------------- | -------------------------------- |
+| 串行 `--test-concurrency=1`（15 文件）   | **163/163 pass，55 s，exit 0**   |
+| 并行但排除 `persistence/restart.test.ts` | **160/160 pass，8 s，exit 0**    |
+| 并行 + `--test-force-exit`（15 文件）    | **163/163 pass，9 s，exit 0**    |
+| 并行，默认（15 文件）                    | **不退出**（测试结果已全部打印） |
 
 结论：**测试全绿，是进程不退出**，不是测试失败；可疑点是 `restart.test.ts` 的
 `kill()` → `waitForExit()` 竞态（超时返回 `null` 后子进程可能仍存活，node:test 等事件循环排空
@@ -588,31 +591,31 @@ main @ <freeze commit>
 
 ### M2-P0-1 — 服务端 durable persistence
 
-| 项 | 内容 |
-| --- | --- |
-| Owner | **A3** |
-| Branch / Worktree | `agent/a3-m2-persistence` / `Insighthub-wt-a3-m2` |
-| Owned Files | `apps/server/src/persistence/**`（新建，含 store + hydrator + 测试）<br>`apps/server/src/rooms/room.ts`（仅 update 路径与 unhealthy 状态）<br>`apps/server/src/rooms/registry.ts`（hydration barrier、eviction 语义）<br>`apps/server/src/ws.ts`（`room-joined` 推迟到屏障之后）<br>`apps/server/src/config.ts`（`INSIGHTHUB_DATA_PATH`）<br>`apps/server/src/index.ts`（shutdown 时 `store.close()`）<br>`apps/server/src/rooms/test-harness.ts`（每测试独立临时库） |
-| Do Not Touch | `packages/shared/**`、`apps/web/**`、`tests/browser/**`、任何 `package.json`（本轮不新增依赖）、`docs/CONTRACTS.md` |
-| Dependencies | 无外部依赖：设计已冻结（ARCHITECTURE §7、CONTRACTS §14、D-041…D-044） |
-| 必须遵守 | 每文档**单一 FIFO pipeline** 且失败即停（D-048）；`apply → persist → broadcast`（D-044）；房间状态机（D-049）；hydration 溢出用 `INTERNAL_ERROR` 而非 `FRAME_TOO_LARGE`（D-050）；启动 capability-check（D-051）；append/sequence 原子（D-052）；hydration barrier 不改 wire（D-043）；Markdown 不得成为服务端权威（D-042） |
-| Acceptance | 见下 **A–K**，全部需要真实执行 |
+| 项                | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner             | **A3**                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Branch / Worktree | `agent/a3-m2-persistence` / `Insighthub-wt-a3-m2`                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Owned Files       | `apps/server/src/persistence/**`（新建，含 store + hydrator + 测试）<br>`apps/server/src/rooms/room.ts`（仅 update 路径与 unhealthy 状态）<br>`apps/server/src/rooms/registry.ts`（hydration barrier、eviction 语义）<br>`apps/server/src/ws.ts`（`room-joined` 推迟到屏障之后）<br>`apps/server/src/config.ts`（`INSIGHTHUB_DATA_PATH`）<br>`apps/server/src/index.ts`（shutdown 时 `store.close()`）<br>`apps/server/src/rooms/test-harness.ts`（每测试独立临时库） |
+| Do Not Touch      | `packages/shared/**`、`apps/web/**`、`tests/browser/**`、任何 `package.json`（本轮不新增依赖）、`docs/CONTRACTS.md`                                                                                                                                                                                                                                                                                                                                                   |
+| Dependencies      | 无外部依赖：设计已冻结（ARCHITECTURE §7、CONTRACTS §14、D-041…D-044）                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 必须遵守          | 每文档**单一 FIFO pipeline** 且失败即停（D-048）；`apply → persist → broadcast`（D-044）；房间状态机（D-049）；hydration 溢出用 `INTERNAL_ERROR` 而非 `FRAME_TOO_LARGE`（D-050）；启动 capability-check（D-051）；append/sequence 原子（D-052）；hydration barrier 不改 wire（D-043）；Markdown 不得成为服务端权威（D-042）                                                                                                                                           |
+| Acceptance        | 见下 **A–K**，全部需要真实执行                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 **M2-P0-1 验收场景（冻结）**
 
-| # | 场景 | 判据 |
-| --- | --- | --- |
-| A | 房间清空后恢复 | tab A 写文本 → A 离开 → 房间被驱逐 → **全新** tab B 打开 → 内容仍在 |
-| B | 进程重启恢复 | 写文本 → **终止 server 进程** → 启动新进程 → 新浏览器打开同一文档 → 内容完整 |
-| C | 离线客户端 + 重启 | 客户端离线编辑 → 服务端重启 → 客户端重连 → state-vector 对账 → 双方收敛 → 再开**全新**客户端 → 看到完整内容 |
-| D | 重复 update 重放 | 同一 update 重复进入持久化路径 → 重启 → 状态不重复、不损坏 |
-| E | 压缩 | 超过阈值产生日志 → compaction（**eviction-time**）→ 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言） |
-| F | 持久化失败 | 模拟写入失败 → 不得向其它 peer 宣称成功的状态 → 行为符合 D-044（error + 断开 + 房间移除） |
-| G | 文档隔离 | doc A 与 doc B 的持久状态完全隔离，互不可见、互不覆盖 |
-| H | 并发上送 | 两个 peer 几乎同时提交 update → durable append 顺序明确 → broadcast 只发生在各自 commit 之后 → 重启后完全收敛 |
-| I | 失败停止 pipeline | 强制第 N 次 append 失败 → N **不广播** → N+1 排队 mutation **不得继续成功** → room unhealthy/destroyed → 重启后 durable 只含 N 之前已提交数据 → 原作者重连后能补齐 |
-| J | hydration single-flight | 多个客户端同时 join 同一 cold document → `store.load` **只发生一次** → 所有人看到同一 hydrated `Y.Doc` → 不得出现两个竞争的 room document |
-| K | hydration backlog 溢出 | 故意阻塞 hydrate → 制造有界队列溢出 → 收 `INTERNAL_ERROR` + 关闭 → **不得误报 `FRAME_TOO_LARGE`** → server 不崩溃 |
+| #   | 场景                    | 判据                                                                                                                                                               |
+| --- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A   | 房间清空后恢复          | tab A 写文本 → A 离开 → 房间被驱逐 → **全新** tab B 打开 → 内容仍在                                                                                                |
+| B   | 进程重启恢复            | 写文本 → **终止 server 进程** → 启动新进程 → 新浏览器打开同一文档 → 内容完整                                                                                       |
+| C   | 离线客户端 + 重启       | 客户端离线编辑 → 服务端重启 → 客户端重连 → state-vector 对账 → 双方收敛 → 再开**全新**客户端 → 看到完整内容                                                        |
+| D   | 重复 update 重放        | 同一 update 重复进入持久化路径 → 重启 → 状态不重复、不损坏                                                                                                         |
+| E   | 压缩                    | 超过阈值产生日志 → compaction（**eviction-time**）→ 重启 → 文档与压缩前一致（渲染文本 + `Y.Doc` 双断言）                                                           |
+| F   | 持久化失败              | 模拟写入失败 → 不得向其它 peer 宣称成功的状态 → 行为符合 D-044（error + 断开 + 房间移除）                                                                          |
+| G   | 文档隔离                | doc A 与 doc B 的持久状态完全隔离，互不可见、互不覆盖                                                                                                              |
+| H   | 并发上送                | 两个 peer 几乎同时提交 update → durable append 顺序明确 → broadcast 只发生在各自 commit 之后 → 重启后完全收敛                                                      |
+| I   | 失败停止 pipeline       | 强制第 N 次 append 失败 → N **不广播** → N+1 排队 mutation **不得继续成功** → room unhealthy/destroyed → 重启后 durable 只含 N 之前已提交数据 → 原作者重连后能补齐 |
+| J   | hydration single-flight | 多个客户端同时 join 同一 cold document → `store.load` **只发生一次** → 所有人看到同一 hydrated `Y.Doc` → 不得出现两个竞争的 room document                          |
+| K   | hydration backlog 溢出  | 故意阻塞 hydrate → 制造有界队列溢出 → 收 `INTERNAL_ERROR` + 关闭 → **不得误报 `FRAME_TOO_LARGE`** → server 不崩溃                                                  |
 
 **运行时前置条件（D-051）**：server 需要 Node 运行时提供被验证过的 `node:sqlite` API
 （本轮实测于 Node **v22.14.0**，无需 flag，仅一条 experimental 警告）；启动时做 capability
@@ -624,40 +627,40 @@ SQLite 依赖。
 **这是三步迁移，不是一步。** 顺序冻结（D-045 设计、D-057 调度修正）：只有三步全部完成并合入，
 `M2-P0-2` 才可标 **COMPLETE**。
 
-| 步骤 | 内容 | Owner | Branch / Worktree | 状态 |
-| --- | --- | --- | --- | --- |
-| **1** | `publishPresence` 附加 seam、`updatedAt` 归协作层、写入前校验、`SHARED_CONTRACT_VERSION` 2→3 | A1 | `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence` | **DONE** —— `6714ca2` + A0 ownership 例外 `054d87e`，合入 `b40ba3c` |
-| **2** | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt` | A2 | `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（base `0075aae`） | **DONE** —— `1a8c887`，合入 `271fb4c`；生产代码裸写入 0、`updatedAt` 0、`session.awareness` 仅 1 处 binding input |
-| **3** | 收窄裸 `Awareness` 暴露（仅作 binding input） | A1 | `agent/a1-m2-presence-narrow` / `Insighthub-wt-a1-m2-narrow` | **DONE** —— `9f8cfa2`，合入 `a278ee8`；`AwarenessBinding`（`clientID`/`getStates`/`on`/`off`），17 条 `@ts-expect-error`，版本 3→4（D-058） |
+| 步骤  | 内容                                                                                         | Owner | Branch / Worktree                                                            | 状态                                                                                                                                        |
+| ----- | -------------------------------------------------------------------------------------------- | ----- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | `publishPresence` 附加 seam、`updatedAt` 归协作层、写入前校验、`SHARED_CONTRACT_VERSION` 2→3 | A1    | `agent/a1-m2-presence` / `Insighthub-wt-a1-m2-presence`                      | **DONE** —— `6714ca2` + A0 ownership 例外 `054d87e`，合入 `b40ba3c`                                                                         |
+| **2** | 编辑器迁移：不再写裸 `Awareness`、不再自维护 `updatedAt`                                     | A2    | `agent/a2-m2-presence-ui` / `Insighthub-wt-a2-m2-presence`（base `0075aae`） | **DONE** —— `1a8c887`，合入 `271fb4c`；生产代码裸写入 0、`updatedAt` 0、`session.awareness` 仅 1 处 binding input                           |
+| **3** | 收窄裸 `Awareness` 暴露（仅作 binding input）                                                | A1    | `agent/a1-m2-presence-narrow` / `Insighthub-wt-a1-m2-narrow`                 | **DONE** —— `9f8cfa2`，合入 `a278ee8`；`AwarenessBinding`（`clientID`/`getStates`/`on`/`off`），17 条 `@ts-expect-error`，版本 3→4（D-058） |
 
-| 项 | 内容 |
-| --- | --- |
-| Owner | **A1**（step 1、step 3）→ **A2**（step 2）→ **A1**（step 3 收口） |
-| A1 Owned Files | `packages/shared/src/collab-session.ts`（**仅 A0 预批准的那一处附加** + step 3 的类型收窄）、`apps/web/src/collab/internal/{document-session,awareness,public}.ts`、`apps/web/src/collab/tests/**` |
-| A2 Owned Files | `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx`、`apps/web/src/features/editor/**/*.test.ts`、`apps/web/src/features/editor/testing/fakeCollaborativeSession.ts` |
-| Do Not Touch（双方） | `apps/server/**`、`tests/browser/**`、wire framing、错误码词表 |
-| Dependencies | step 2 依赖 step 1 已合入；step 3 依赖 step 1+2 都已合入（否则收窄会先打断编辑器） |
-| Acceptance | step 1：seam 存在且校验先于写入、版本 3、wire 不变。step 2：`features/**` 内 `setLocalStateField` 与 `'updatedAt'` 写入均为 0；每次光标变化只有 1 次 awareness 写入。step 3：裸 `Awareness` 不再有生产写入口，类型上不可写。三者都需 `pnpm typecheck/test/build` 全绿 |
+| 项                   | 内容                                                                                                                                                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner                | **A1**（step 1、step 3）→ **A2**（step 2）→ **A1**（step 3 收口）                                                                                                                                                                                                     |
+| A1 Owned Files       | `packages/shared/src/collab-session.ts`（**仅 A0 预批准的那一处附加** + step 3 的类型收窄）、`apps/web/src/collab/internal/{document-session,awareness,public}.ts`、`apps/web/src/collab/tests/**`                                                                    |
+| A2 Owned Files       | `apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx`、`apps/web/src/features/editor/**/*.test.ts`、`apps/web/src/features/editor/testing/fakeCollaborativeSession.ts`                                                                                       |
+| Do Not Touch（双方） | `apps/server/**`、`tests/browser/**`、wire framing、错误码词表                                                                                                                                                                                                        |
+| Dependencies         | step 2 依赖 step 1 已合入；step 3 依赖 step 1+2 都已合入（否则收窄会先打断编辑器）                                                                                                                                                                                    |
+| Acceptance           | step 1：seam 存在且校验先于写入、版本 3、wire 不变。step 2：`features/**` 内 `setLocalStateField` 与 `'updatedAt'` 写入均为 0；每次光标变化只有 1 次 awareness 写入。step 3：裸 `Awareness` 不再有生产写入口，类型上不可写。三者都需 `pnpm typecheck/test/build` 全绿 |
 
 ### M2-P0-3 — 注入式 IndexedDB 工厂生命周期
 
-| 项 | 内容 |
-| --- | --- |
-| Owner | **A1** |
-| Branch / Worktree | `agent/a1-m2-idb-lifecycle` / `Insighthub-wt-a1-m2-idb` |
-| Owned Files | `apps/web/src/collab/internal/persistence.ts`、`apps/web/src/collab/tests/persistence.test.ts`、`apps/web/src/collab/tests/public-seam.test.ts` |
-| Do Not Touch | `packages/shared/**`、`apps/server/**`、`apps/web/src/features/**`、`tests/browser/**` |
-| Dependencies | 无（与 M2-P0-2 可并行，但两者都改 `collab/`，集成顺序由 A0 决定） |
-| Acceptance | D-046 的 5 个回归测试存在且通过；生产路径（未注入）全局零写入、getter 身份不变 |
+| 项                | 内容                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner             | **A1**                                                                                                                                          |
+| Branch / Worktree | `agent/a1-m2-idb-lifecycle` / `Insighthub-wt-a1-m2-idb`                                                                                         |
+| Owned Files       | `apps/web/src/collab/internal/persistence.ts`、`apps/web/src/collab/tests/persistence.test.ts`、`apps/web/src/collab/tests/public-seam.test.ts` |
+| Do Not Touch      | `packages/shared/**`、`apps/server/**`、`apps/web/src/features/**`、`tests/browser/**`                                                          |
+| Dependencies      | 无（与 M2-P0-2 可并行，但两者都改 `collab/`，集成顺序由 A0 决定）                                                                               |
+| Acceptance        | D-046 的 5 个回归测试存在且通过；生产路径（未注入）全局零写入、getter 身份不变                                                                  |
 
 ### 其他 Agent
 
-| Agent | M2 角色 | 说明 |
-| --- | --- | --- |
-| **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。能**真实重启 server 进程**、构造损坏库、注入写失败。**已交付**（`231253a`，36/36）。证据层分工见 D-056：A/B/C/E/F/G/J 必须有浏览器证据；D/H/I 允许 Node 级；K 在同步 store 下 browser N/A |
-| **A7** | 最终架构 + 发布终审 | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层 + D-056 的证据层分层）逐项判定。**启动条件：P0-1 + P0-2（step 1/2/3 全部）+ P0-3 都已合入，且 A6 门禁在集成后的 HEAD 上绿。** 在 P0-2 step 3 完成前不得启动（D-057） |
-| **A5** | M2-P0 **不分配**；**M2 Phase 2 起成为 Owner** | M2-P0 期间文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证），授权面未变。**Phase 2 起 A5 负责身份/成员关系/授权判定核心**（见上「M2 Phase 2 — 依赖顺序」），但**在身份机制由项目负责人选定之前不启动编码** |
-| **A4** | **idle** | M3 才启动 |
+| Agent  | M2 角色                                               | 说明                                                                                                                                                                                                                            |
+| ------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A6** | restart / persistence / corruption / chaos 浏览器门禁 | Owned：`tests/browser/**`。能**真实重启 server 进程**、构造损坏库、注入写失败。**已交付**（`231253a`，36/36）。证据层分工见 D-056：A/B/C/E/F/G/J 必须有浏览器证据；D/H/I 允许 Node 级；K 在同步 store 下 browser N/A            |
+| **A7** | 最终架构 + 发布终审                                   | 只读；按 **M2-P0 Exit Gate**（D-047 的 Gate/Milestone 分层 + D-056 的证据层分层）逐项判定。**启动条件：P0-1 + P0-2（step 1/2/3 全部）+ P0-3 都已合入，且 A6 门禁在集成后的 HEAD 上绿。** 在 P0-2 step 3 完成前不得启动（D-057） |
+| **A5** | M2-P0 **不分配**；**M2 Phase 2 起成为 Owner**         | M2-P0 期间文档隔离（场景 G）是存储层职责（A3 实现 + A6 验证），授权面未变。**Phase 2 起 A5 负责身份/成员关系/授权判定核心**（见上「M2 Phase 2 — 依赖顺序」），但**在身份机制由项目负责人选定之前不启动编码**                    |
+| **A4** | **idle**                                              | M3 才启动                                                                                                                                                                                                                       |
 
 ### Branch / worktree plan
 

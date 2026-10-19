@@ -843,6 +843,11 @@ identity is still merely claimed.
   not a membership-management feature.
 - Explicit non-goals: user creation / signup, profile editing, invitation flows, and any
   membership-mutation endpoint beyond what §17.4 lists.
+- **`DocumentMeta.ownerId` is display attribution, not authority.** Phase 2 has no create or
+  rename API (§17.7), so `ownerId` names the account whose first authorised join caused the
+  document to be persisted. It can therefore differ from the `owner`-role membership row in the
+  seeded fixture. Every authorization decision goes through membership (§17.0), never through
+  `ownerId`; nothing may derive a capability from it.
 
 ### 17.4 HTTP surface (additions to §12)
 
@@ -880,10 +885,19 @@ origin (never `*`), and the web client must send `credentials: 'include'`.
 | Identity | the server resolves `userId` from the session. Any identity supplied by the client (payload field, header, query) is **ignored** |
 | `mode` | `join-room.mode` stays in the schema for compatibility but is **advisory only**. A client claiming `readwrite` never gains write permission; the server derives the effective capability from membership |
 | Join denial | unknown document and read-denied document both answer **`ROOM_NOT_FOUND`** (non-disclosure, same rule as §17.4). A denied join **must not** evict or replace a room the socket already holds (atomic replace applies only to a successful join) |
-| BINARY `SYNC` | requires `canEdit`. Otherwise: reply `FORBIDDEN`, **do not apply, do not persist, do not broadcast**, and keep the socket open (a reader stays a reader) |
+| BINARY `SYNC` — `SyncStep1` | requires **`canRead`** only. It is a *read request*: the server answers with `SyncStep2` and changes nothing. Gating it on `canEdit` would leave a `viewer` permanently unable to receive the document (the sync handshake is client-initiated; the server never pushes state unprompted), which shows an empty editor instead of a denial — worse than refusing |
+| BINARY `SYNC` — `SyncStep2` / `Update` | requires `canEdit`. Otherwise: reply `FORBIDDEN`, **do not apply, do not persist, do not broadcast**, and keep the socket open (a reader stays a reader) |
 | BINARY `AWARENESS` | requires `canRead` only; a viewer may publish its cursor |
 | Join reply | `room-joined` carries the caller's `role` (§5.2). It is the **only** channel that tells the client its own role, it is for UI gating only, and it carries no authority |
 | Framing | unchanged. No new frame type; the only payload addition is `room-joined.role`; `PROTOCOL_VERSION` stays **2** |
+
+> **Correction (M2 Phase 2, A3 finding — this section was wrong).** The first version of this
+> table said "BINARY `SYNC` requires `canEdit`". That treated the sync plane as one operation
+> when it actually mixes a **read request** (`SyncStep1`) with **write payloads**
+> (`SyncStep2` / `Update`). Implemented literally, every `viewer` would be admitted to the room
+> and then refused the document: the editor would render empty rather than show an error, and
+> the `viewer` role would have no meaning. Split as above. The wire and `packages/shared` are
+> unaffected — this is the contract describing the plane it always meant to describe.
 
 ### 17.6 Error vocabulary addition
 
