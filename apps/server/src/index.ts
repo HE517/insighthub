@@ -30,6 +30,7 @@ import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { createAuthz, type AuthzService } from './authz/public.js';
 import { loadConfig } from './config.js';
+import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
 import type { DocumentStore } from './persistence/types.js';
@@ -73,7 +74,11 @@ async function main(): Promise<void> {
 
   let authz: AuthzService;
   try {
-    authz = await createAuthz({ dataPath });
+    // The document API's metadata comes from the durable store (`persistence/document-meta.ts`)
+    // rather than from a fixture: `authz/documents.ts` is an injected seam precisely so the real
+    // source can land here without touching `authz/**` (`docs/DECISIONS.md` D-062 §4).
+    const documents = isDocumentMetaStore(store) ? new StoreDocumentCatalog(store) : undefined;
+    authz = await createAuthz({ dataPath, ...(documents === undefined ? {} : { documents }) });
     console.log(
       `[server] authz  ready  ${authz.membershipCount} membership rows, sessions process-scoped`,
     );

@@ -67,6 +67,7 @@ import {
   COMPACTION_UPDATE_THRESHOLD,
 } from '../persistence/constants.js';
 import { DocumentHydrator } from '../persistence/hydrator.js';
+import { isDocumentMetaStore } from '../persistence/document-meta.js';
 import { SerialTaskQueue } from '../persistence/serial-queue.js';
 import type { DocumentStore } from '../persistence/types.js';
 import type { SocketContext } from './context.js';
@@ -379,7 +380,16 @@ export class RoomRegistry {
     const documentId = payload.documentId;
 
     // ---- Single synchronous transition. ----
+    const documentWasKnown = this.#rooms.has(documentId);
     const room = this.#getOrCreateRoom(documentId);
+
+    // A document becomes known to the durable metadata source at the same moment it becomes a
+    // room, and only after the caller has been authorized to read it. The write is a one-row
+    // `INSERT OR IGNORE`, so it costs a lock once per document per process and can never
+    // overwrite the recorded creator. Fire-and-forget: metadata is display data, and a failure
+    // here must not take down a join that authorization already approved — it surfaces as the
+    // document being absent from `GET /api/documents`, which is visible rather than silent.
+    if (!documentWasKnown) this.#recordDocumentMeta(documentId, context.userId, role);
 
     if (context.activeRoom !== room) {
       // `#detach` covers both "was in room A" and "was in no room": awareness
@@ -601,6 +611,36 @@ export class RoomRegistry {
     }
 
     return this.#dispatchDecodedFrame(room, participant, frame, authorization.canEdit);
+  }
+
+  /**
+   * Record the document in the durable metadata source, once, for `GET /api/documents`.
+   *
+   * Called only from an **authorized** join: the identity written as `ownerId` is the session's,
+   * and a caller who may not read the document never reaches this line. The catalog itself is
+   * read-only (`persistence/document-meta.ts`), so creation has to happen at the one moment the
+   * server learns both "this document exists" and "who brought it into existence".
+   *
+   * Not awaited, and failures are logged rather than propagated: the join has already been
+   * authorized and this is metadata, so a locked or failing store must not deny a read the
+   * decision core allowed. The visible consequence of a failure is a document missing from the
+   * list endpoint — detectable, and never a wrong authorization answer.
+   */
+  #recordDocumentMeta(documentId: string, userId: string | undefined, role: DocumentRole): void {
+    const store = this.#store;
+    if (store === undefined || userId === undefined) return;
+    if (!isDocumentMetaStore(store)) {
+      // A wrapper (a fault-injecting test double, say) hides the metadata capability. Nothing to
+      // record through, and nothing is lost: the catalog degrades to "no documents listed".
+      return;
+    }
+    void store.ensureDocumentMeta(documentId, userId).catch((error: unknown) => {
+      this.#logger.warn('could not record document metadata; it will be missing from the API', {
+        documentId,
+        role,
+        reason: describeStoreFailure(error),
+      });
+    });
   }
 
   /* ---------------------------------------------------------------- *

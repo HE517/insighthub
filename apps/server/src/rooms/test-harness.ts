@@ -38,6 +38,7 @@ import * as Y from 'yjs';
 import { createApp } from '../app.js';
 import { createAuthz, type AuthzService } from '../authz/public.js';
 import type { ServerConfig } from '../config.js';
+import { isDocumentMetaStore, StoreDocumentCatalog } from '../persistence/document-meta.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
 import { attachWebSocketServer, type WebSocketHandle, type WebSocketServerOptions } from '../ws.js';
@@ -174,7 +175,13 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   // meaningless. When the store was injected there is no data directory, so the membership
   // table gets a temporary one of its own.
   const authzDirectory = dataPath ?? mkdtempSync(join(tmpdir(), 'insighthub-authz-test-'));
-  const authz = await createAuthz({ dataPath: authzDirectory });
+  // The document-metadata source is wired exactly as `index.ts` wires it, so no test can pass on a
+  // fixture that production does not use (`persistence/document-meta.ts`).
+  const documents = isDocumentMetaStore(store) ? new StoreDocumentCatalog(store) : undefined;
+  const authz = await createAuthz({
+    dataPath: authzDirectory,
+    ...(documents === undefined ? {} : { documents }),
+  });
   const ownsAuthz = dataPath === undefined;
 
   // The socket layer gets the real service only when the test asked for enforcement; see

@@ -38,7 +38,10 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type { DocumentMeta } from '@insighthub/shared';
+
 import { SQLITE_BUSY_TIMEOUT_MS } from './constants.js';
+import { defaultDocumentTitle, type DocumentMetaStore } from './document-meta.js';
 import {
   StoreClosedError,
   StoreOperationError,
@@ -57,7 +60,7 @@ const EMPTY = new Uint8Array(0);
 type Db = InstanceType<SqliteModule['DatabaseSync']>;
 type Stmt = ReturnType<Db['prepare']>;
 
-export class SqliteDocumentStore implements DocumentStore {
+export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
   readonly #db: Db;
   readonly #statements: {
     selectDocument: Stmt;
@@ -70,6 +73,12 @@ export class SqliteDocumentStore implements DocumentStore {
     deleteUpdatesThrough: Stmt;
     deleteUpdates: Stmt;
     deleteDocument: Stmt;
+    insertMetaIfMissing: Stmt;
+    selectMeta: Stmt;
+    listMeta: Stmt;
+    touchMeta: Stmt;
+    deleteMeta: Stmt;
+    selectHighestSequence: Stmt;
   };
   #closed = false;
 
@@ -100,6 +109,25 @@ export class SqliteDocumentStore implements DocumentStore {
       ),
       deleteUpdates: db.prepare('DELETE FROM document_update WHERE document_id = ?'),
       deleteDocument: db.prepare('DELETE FROM document WHERE document_id = ?'),
+      // ---- document_meta (M2 Phase 2) ----
+      // `OR IGNORE` is what makes creation write-once: the first creator's `owner_id` stands,
+      // so a later joiner (or a restart) cannot take ownership by arriving first.
+      insertMetaIfMissing: db.prepare(
+        'INSERT OR IGNORE INTO document_meta (document_id, title, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ),
+      selectMeta: db.prepare(
+        'SELECT document_id, title, owner_id, created_at, updated_at FROM document_meta WHERE document_id = ?',
+      ),
+      listMeta: db.prepare(
+        'SELECT document_id, title, owner_id, created_at, updated_at FROM document_meta ORDER BY document_id ASC',
+      ),
+      touchMeta: db.prepare('UPDATE document_meta SET updated_at = ? WHERE document_id = ?'),
+      deleteMeta: db.prepare('DELETE FROM document_meta WHERE document_id = ?'),
+      selectHighestSequence: db.prepare(
+        `SELECT
+           COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0) AS log_seq,
+           COALESCE((SELECT snapshot_seq FROM document WHERE document_id = ?), 0) AS snapshot_seq`,
+      ),
     };
   }
 
@@ -140,6 +168,20 @@ export class SqliteDocumentStore implements DocumentStore {
           update_bytes BLOB NOT NULL,
           created_at INTEGER NOT NULL,
           PRIMARY KEY (document_id, seq)
+        )
+      `);
+      // Metadata is a separate table rather than extra columns on `document` (M2 Phase 2):
+      // `document` is the *content* seam's row and is written by `append`/`compact` inside the
+      // mutation pipeline, while metadata is written once at creation and read by the HTTP
+      // document API. Keeping them apart means a metadata change can never take part in a
+      // content transaction, and `append` keeps its narrow `(documentId, update)` shape.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS document_meta (
+          document_id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
         )
       `);
     } catch (error) {
@@ -234,8 +276,70 @@ export class SqliteDocumentStore implements DocumentStore {
       this.#transaction(() => {
         this.#statements.deleteUpdates.run(documentId);
         this.#statements.deleteDocument.run(documentId);
+        // Metadata describes the document that no longer exists; leaving the row behind would
+        // make the document API list a document whose content cannot be loaded.
+        this.#statements.deleteMeta.run(documentId);
       }),
     );
+  }
+
+  /* ---------------------------------------------------------------- *
+   * document_meta (M2 Phase 2) — the read side of the document API
+   * ---------------------------------------------------------------- */
+
+  async ensureDocumentMeta(documentId: string, ownerId: string): Promise<void> {
+    await this.#guard('append', () => {
+      const now = Date.now();
+      // `OR IGNORE`: write-once. The creator recorded first stays the owner, so neither a later
+      // joiner nor a restart re-assigns it.
+      this.#statements.insertMetaIfMissing.run(
+        documentId,
+        defaultDocumentTitle(documentId),
+        ownerId,
+        now,
+        now,
+      );
+    });
+  }
+
+  async documentMeta(documentId: string): Promise<DocumentMeta | null> {
+    return await this.#guard('load', () => {
+      const row = this.#statements.selectMeta.get(documentId);
+      if (row === undefined) return null;
+      const sequence = this.#statements.selectHighestSequence.get(documentId, documentId);
+      return toDocumentMeta(
+        row,
+        readInteger(sequence?.['log_seq']),
+        readInteger(sequence?.['snapshot_seq']),
+      );
+    });
+  }
+
+  async listDocumentMeta(): Promise<readonly DocumentMeta[]> {
+    return await this.#guard('load', () => {
+      const documents: DocumentMeta[] = [];
+      for (const row of this.#statements.listMeta.all()) {
+        const documentId = String(row['document_id']);
+        const sequence = this.#statements.selectHighestSequence.get(documentId, documentId);
+        documents.push(
+          toDocumentMeta(
+            row,
+            readInteger(sequence?.['log_seq']),
+            readInteger(sequence?.['snapshot_seq']),
+          ),
+        );
+      }
+      return documents;
+    });
+  }
+
+  async touchDocumentMeta(documentId: string): Promise<void> {
+    await this.#guard('append', () => {
+      // Never creates a row: a document with content but no metadata row is a state only a
+      // pre-Phase-2 store can be in, and inventing an owner here would be worse than leaving it
+      // to `ensureDocumentMeta`, which has a real identity to record.
+      this.#statements.touchMeta.run(Date.now(), documentId);
+    });
   }
 
   async close(): Promise<void> {
@@ -310,4 +414,27 @@ function readInteger(value: unknown): number {
   if (typeof value === 'number') return value;
   if (typeof value === 'bigint') return Number(value);
   return 0;
+}
+
+/**
+ * Map one `document_meta` row plus the document's committed sequences to `DocumentMeta`.
+ *
+ * `revision` is the highest durably committed sequence — the same number `append` returns, and
+ * monotonic because compaction advances `snapshot_seq` rather than resetting it
+ * (`docs/DECISIONS.md` D-052). Using it means the API's revision cannot drift from the log's
+ * actual position.
+ */
+function toDocumentMeta(
+  row: Record<string, unknown>,
+  highestLogSequence: number,
+  snapshotSequence: number,
+): DocumentMeta {
+  return {
+    id: String(row['document_id']),
+    title: String(row['title']),
+    revision: Math.max(highestLogSequence, snapshotSequence),
+    ownerId: String(row['owner_id']),
+    createdAt: new Date(readInteger(row['created_at'])).toISOString(),
+    updatedAt: new Date(readInteger(row['updated_at'])).toISOString(),
+  };
 }
