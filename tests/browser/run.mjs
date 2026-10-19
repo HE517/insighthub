@@ -35,6 +35,10 @@ import {
   loadInstrumentSource,
   waitForSessionActive,
 } from './lib/app.mjs';
+import {
+  configureAuthzFixture,
+  DEFAULT_DEMO_USER,
+} from './lib/authz-fixture.mjs';
 import { newPage } from './lib/cdp.mjs';
 import { Browser } from './lib/chrome.mjs';
 import { artifactsDir, repoRoot } from './lib/deps.mjs';
@@ -103,6 +107,18 @@ async function main() {
   const instrumentSource = await loadInstrumentSource();
 
   const stack = new DevStack({ repoRoot });
+  /**
+   * Session + membership fixture (M2 Phase 2).
+   *
+   * Constructed before the stack starts because it only needs the backend URL and a *provider*
+   * for the data directory — the directory itself moves whenever a scenario restarts onto a
+   * fresh store. See `lib/authz-fixture.mjs`: since `docs/CONTRACTS.md` §17 every upgrade needs
+   * a session cookie and every join needs a membership row, and both must be real.
+   */
+  const authz = configureAuthzFixture({
+    serverUrl: `http://127.0.0.1:${stack.serverPort}`,
+    dataPath: () => stack.dataPath,
+  });
   let browser;
   /** Pages this run opened, closed between scenarios. */
   const openPages = [];
@@ -116,13 +132,29 @@ async function main() {
    * replace it, press Enter). `target` selects a specific browser instance, which is
    * how a durability scenario proves the content came from the server: a browser with
    * an empty profile has no client-side replica to read from.
+   *
+   * `as` selects the **demo identity the page claims** (default `demo-ada`). Because the
+   * browser is a real client with its own session, a scenario that needs a `viewer` page asks
+   * for `demo-linus` here rather than forging a role: the page bootstraps a real session for
+   * that identity and the server's seeded membership decides its role.
+   *
+   * `role` controls the membership row the harness arranges for this (document, identity)
+   * pair: `undefined` = fill in `owner` **only when no row exists** (legacy scenarios),
+   * `null` = do not touch membership (the scenario manages it), a string = same "only if
+   * absent" rule with that role. A scenario that is *deciding* a role calls
+   * `ctx.authz.grant(...)` explicitly.
    */
-  async function newAppPage({ documentId, target } = {}) {
-    const page = await openInstrumentedPage({ target });
+  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role } = {}) {
+    const page = await openInstrumentedPage({ target, as });
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
     if (documentId !== undefined) {
+      if (role !== null) {
+        // `ifAbsent` is load-bearing: asking for `owner` on `demo-document` for `demo-linus`
+        // must not promote the seeded `viewer` the denial scenarios depend on.
+        await authz.grant(documentId, as, role ?? 'owner', { ifAbsent: true });
+      }
       const { setDocumentId } = await import('./lib/app.mjs');
       await setDocumentId(page, documentId);
     }
@@ -130,11 +162,18 @@ async function main() {
   }
 
   /** Instrumented page on the app URL, without waiting for a usable session. */
-  async function openInstrumentedPage({ target } = {}) {
+  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER } = {}) {
     const connection = (target ?? browser).connection;
     const page = await newPage(connection);
     openPages.push(page);
+    // The identity pin must exist *before* the instrumentation installs its `fetch` wrapper,
+    // and both must exist before any application script runs. `addInitScript` preserves order.
+    if (as !== null) {
+      await page.addInitScript(`window.__qaIdentity = ${JSON.stringify(as)};`);
+    }
     await page.addInitScript(instrumentSource);
+    /** Which demo identity this page claims; `setDocumentId` reuses it for its own grant. */
+    page.demoUserId = as;
     await page.goto(stack.appUrl);
     return page;
   }
@@ -180,6 +219,11 @@ async function main() {
     },
     stack,
     artifactsDir,
+    /**
+     * Session + membership fixture. Every scenario that needs a non-default identity, a role,
+     * a raw HTTP call with an explicit cookie, or a cookie renewal after a restart uses this.
+     */
+    authz,
     newAppPage,
     openInstrumentedPage,
     withFreshBrowser,
@@ -241,6 +285,15 @@ async function main() {
       context,
       filter: options.filter,
       onResult: (result) => {
+        // The fixture's own writes belong to the scenario's evidence: every result shows
+        // exactly which membership rows it arranged, so "the oracle could join" is never an
+        // unexplained privilege.
+        for (const write of authz.takeLog()) {
+          result.notes.push(
+            `authz fixture: ${write.action} ${write.documentId} ${write.userId}=${write.role}` +
+              (write.requested === undefined ? '' : ` (requested ${write.requested})`),
+          );
+        }
         const icon = result.status === 'pass' ? 'PASS' : result.status === 'fail' ? 'FAIL' : 'ERROR';
         const pin = result.knownDefect === null ? '' : ` [pinned ${result.knownDefect}]`;
         console.log(
@@ -291,18 +344,43 @@ async function main() {
         await extra.close().catch(() => {});
       }
       extraBrowsers.clear();
+      for (const page of openPages.splice(0, openPages.length)) {
+        await page.close().catch(() => {});
+      }
       const removed = await stack.dispose().catch(() => []);
       await browser?.close().catch(() => {});
       // Postflight: the run must not leave the environment behind.
       const stillOpen = await assertPortsReleased(requiredPorts);
-      cleanup = { portsStillOpen: stillOpen, removedDataPaths: removed ?? [] };
+      // **The exit contract.** A runner that prints its summary and then never exits is not
+      // evidence of anything, so the harness proves the event loop is empty instead of trusting
+      // that it is. The previous revision left Chrome's `stdout`/`stderr` pipes open
+      // (`lib/chrome.mjs` now hands the child file descriptors instead), which kept the process
+      // alive after every scenario had finished; an orphaned browser would have done the same
+      // thing through those pipes. `remainingHandles` is what a future regression shows up as.
+      const remainingHandles = await waitForEventLoopToDrain(5_000);
+      cleanup = {
+        portsStillOpen: stillOpen,
+        removedDataPaths: removed ?? [],
+        remainingHandles,
+      };
       console.log('');
       console.log('postflight:');
       console.log(
         `  ports ${requiredPorts.join(', ')}: ${stillOpen.length === 0 ? 'released' : `STILL OPEN ${stillOpen.join(', ')}`}`,
       );
       console.log(`  temporary data directories removed: ${(removed ?? []).length}`);
+      console.log(
+        `  live handles after teardown: ${
+          remainingHandles.length === 0
+            ? 'none (the process exits on its own)'
+            : `${remainingHandles.join(', ')} — the runner would hang`
+        }`,
+      );
       if (stillOpen.length > 0 && exitCode === 0) exitCode = 2;
+      if (remainingHandles.length > 0) {
+        cleanup.forcedExit = true;
+        if (exitCode === 0) exitCode = 2;
+      }
     }
   }
 
@@ -319,7 +397,63 @@ async function main() {
     }
   }
 
+  if (cleanup?.forcedExit === true) {
+    // Reported before this point, never a silent mask: a leaked handle is a FAILED run, and the
+    // only reason to end it here is that the handle itself would otherwise keep us alive.
+    console.error(
+      '\nthe browser suite finished but left live handles; exiting with a failure instead of hanging',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    process.exit(exitCode === 0 ? 2 : exitCode);
+  }
+
   return exitCode;
+}
+
+/**
+ * Wait until Node has no live handle left that would keep the process alive.
+ *
+ * Returns the handles still alive when the timeout expires (`[]` when the loop is empty), named
+ * with their constructor and, when available, the fd/pid they belong to. A handle that is
+ * `unref`ed cannot keep the process alive, so it is not a leak and is not reported: this asks
+ * the only question that matters — "would the runner exit on its own?" — instead of counting
+ * whatever the loop happens to hold.
+ */
+async function waitForEventLoopToDrain(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const live = referencedHandles();
+    if (live.length === 0) return [];
+    if (Date.now() >= deadline) return live;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Handles that still hold a reference (i.e. that would keep this process alive). */
+function referencedHandles() {
+  const describe = (handle) => {
+    const name = handle?.constructor?.name ?? 'handle';
+    const details = [];
+    if (typeof handle?.fd === 'number') details.push(`fd ${handle.fd}`);
+    if (typeof handle?.pid === 'number') details.push(`pid ${handle.pid}`);
+    if (typeof handle?.localPort === 'number') details.push(`port ${handle.localPort}`);
+    if (typeof handle?.remoteAddress === 'string') details.push(handle.remoteAddress);
+    return details.length === 0 ? name : `${name} (${details.join(', ')})`;
+  };
+
+  // `process.getActiveResourcesInfo()` is the public summary but it cannot tell a referenced
+  // handle from an unref'd one, so `_getActiveHandles` is used for the decision and is only
+  // ever read (never mutated). It is intentionally the last-resort API for this job.
+  const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles() : [];
+  const referenced = [];
+  for (const handle of handles) {
+    // This process's own stdout/stderr are always present and never keep it alive, so they are
+    // not part of the question being asked here (`fd 1`/`fd 2`).
+    if (handle?.fd === 1 || handle?.fd === 2) continue;
+    const keepsAlive = typeof handle?.hasRef === 'function' ? handle.hasRef() : true;
+    if (keepsAlive) referenced.push(describe(handle));
+  }
+  return referenced;
 }
 
 main()

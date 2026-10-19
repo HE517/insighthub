@@ -241,6 +241,44 @@ export class CdpPage {
     return this.send('Page.addScriptToEvaluateOnNewDocument', { source });
   }
 
+  /**
+   * Write one cookie for this page's origin through the **browser**, not through JS.
+   *
+   * `HttpOnly` cookies cannot be set from page script at all, which is exactly why the harness
+   * needs this: a scenario that must renew a session (`docs/CONTRACTS.md` §17.2 makes sessions
+   * process-scoped) has to go through the browser's cookie store, the same store the real
+   * upgrade request reads.
+   */
+  async setCookie({ name, value, url, httpOnly = true, sameSite = 'Lax', secure = false }) {
+    const params = { name, value, url, httpOnly, sameSite, secure };
+    let result;
+    try {
+      result = await this.send('Network.setCookie', params);
+    } catch (error) {
+      // The value is a credential: name the shape, never the token.
+      const shape = {
+        ...params,
+        value: typeof value === 'string' ? `<${value.length} chars>` : value,
+      };
+      throw new Error(`${error.message} (params: ${JSON.stringify(shape)})`);
+    }
+    if (result?.success === false) {
+      throw new Error(`the browser refused the cookie ${name} for ${url}`);
+    }
+    return result;
+  }
+
+  /**
+   * Every cookie the browser holds for `urls`, **including `HttpOnly` ones**.
+   *
+   * This is the only way to prove both halves of P2-9 at once: the cookie really exists in the
+   * browser, and page script still cannot see it (`document.cookie`).
+   */
+  async getCookies({ urls } = {}) {
+    const result = await this.send('Network.getCookies', urls === undefined ? {} : { urls });
+    return result?.cookies ?? [];
+  }
+
   async goto(url, { timeoutMs = 30_000 } = {}) {
     const loaded = this.#connection.waitForEvent('Page.loadEventFired', {
       sessionId: this.#sessionId,

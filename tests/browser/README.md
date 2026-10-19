@@ -12,6 +12,7 @@ It covers two milestones:
 | --- | --- | --- |
 | M1 collaboration | `suite/00…07` | editor, IndexedDB, realtime, presence, offline/reconnect, chaos, performance, lifecycle, wire robustness |
 | M2 durable persistence | `suite/10-m2-durability.mjs` | the server's document survives room eviction, a hard process kill, compaction, and is never faked on a failed write |
+| M2 Phase 2 authorization | `suite/20-m2-phase2-authz.mjs` | viewer/editor/owner enforcement, identity cannot be self-declared, non-disclosure, session revocation, token never reachable by JS |
 
 ## Why there is no Playwright
 
@@ -51,6 +52,31 @@ and is never skipped. Results land in `artifacts/results.md` and
 The suite runs **serially** and owns ports `5173`/`3101`: it refuses to start when
 either is occupied, and its postflight prints whether both were released again.
 
+### The runner must be able to exit (and now proves it)
+
+A suite that prints a summary and then never returns is not evidence of anything. The
+postflight therefore reports **live handles after teardown** and the process exits with a
+failure (code `2`) if any remain, instead of hanging:
+
+```text
+postflight:
+  ports 5173, 3101: released
+  temporary data directories removed: 1
+  live handles after teardown: none (the process exits on its own)
+```
+
+The one real leak found this way was the browser child's `stdout`/`stderr` **pipes**: a
+`stdio: 'pipe'` child keeps a readable handle in this process for as long as Chromium's
+inherited copies exist, so `Browser.close()` ended the browser and Node still could not
+exit. `lib/chrome.mjs` now hands the child a log **file descriptor** instead (no handle
+here), and `Browser.close()` returns a record of whether the process exited cleanly or had
+to be killed with its tree. `run.mjs` reports that record, so "no leftover browser" is
+measured rather than assumed.
+
+Note that `process.getActiveHandles()` alone is the wrong check: this process's own
+`stdout`/`stderr` are always present and never keep it alive, so `run.mjs` asks
+`hasRef()` and ignores `fd 1`/`fd 2`.
+
 ## Durable-storage isolation (M2)
 
 Server persistence outlives the process, so a test that reused a data directory would
@@ -87,11 +113,14 @@ test-only hook was added to A1/A2/A3 code.**
 | File | Role |
 | --- | --- |
 | `lib/chrome.mjs` | launches a throwaway-profile browser and reports its real version |
-| `lib/cdp.mjs` | minimal CDP client, real input (`Input.insertText`, key events, mouse) |
+| `lib/cdp.mjs` | minimal CDP client, real input (`Input.insertText`, key events, mouse), and the browser's cookie store (`Network.getCookie`/`setCookie`) |
 | `lib/stack.mjs` | starts/stops the real backend and Vite; `stopServer()` is a verified process death |
-| `instrument/page-instrument.js` | transport recording, fault injection, mount/timer/IDB counting |
+| `instrument/page-instrument.js` | transport recording, fault injection, mount/timer/IDB counting, control-frame capture |
 | `lib/app.mjs` | drives the real UI and reads real state back |
 | `lib/oracle.mjs` | an independent Yjs peer on the real server (the convergence witness) |
+| `lib/authz-fixture.mjs` | session bootstrap + membership fixture for M2 Phase 2 (see below) |
+| `lib/wire-socket.mjs` | a browser-shaped `ws` client, so a Node socket can carry a `Cookie` header and observe an upgrade refusal |
+| `lib/durable-store.mjs` | reads/interferes with `insighthub.db` directly |
 | `lib/harness.mjs` | scenario registry, assertions, reporting |
 
 ### Real `EditorView` state
@@ -117,6 +146,9 @@ Both `ChangeSpec[]` and `ChangeSet` shapes are handled: `applyDelta` passes a
 | `releaseHeld(documentId, {reverse})` | delivers buffered frames, and reports how many were delivered vs dropped because the handler was detached |
 | `injectInbound(documentId, base64, times)` | replays captured bytes verbatim (duplicate-frame test) |
 | `summary()` | sockets, live collaboration sockets, frames, mounts, live intervals, IndexedDB opens |
+| `inboundControl(documentId)` / `outboundControl(documentId)` | the TEXT control frames the page received/sent, including `error.code` and `room-joined.role` — the browser's own view of the authorization answers |
+| `sendControl(documentId, text)` | send a raw control frame on the page's newest socket (used to inject a `userId` into a `join-room` payload from the real connection) |
+| `bootstrapCalls` / `demoIdentity` | every `POST /api/session/bootstrap` the page performed and the identity it claimed |
 
 Vite's HMR socket is deliberately **excluded** from the offline simulation: closing it
 makes Vite reload the page, which resets the instrumentation and would silently make an
@@ -154,6 +186,79 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `06-lifecycle.mjs` | 20 open/switch/disconnect cycles; navigation teardown |
 | `07-robustness.mjs` | frozen error codes for malformed/oversized/unsigned traffic, and browser survival |
 | `10-m2-durability.mjs` | M2-P0-1: room emptied, real process restart, offline client + restart, compaction, persist failure, document isolation, concurrent cold joins, backlog-overflow constructibility |
+| `20-m2-phase2-authz.mjs` | M2 Phase 2: viewer cannot write (P2-1), identity cannot be self-declared (P2-2), non-disclosure 404 (P2-3), role/capability consistency (P2-4), role change + session revocation (P2-5), token invisible to JS (P2-9), what a restart really does to a session |
+
+### The M2 Phase 2 scenarios and the acceptance IDs they map to
+
+| Scenario id | P2 | Where the assertion comes from |
+| --- | --- | --- |
+| `p2/1-viewer-cannot-write` | P2-1 | real typing into a `viewer` editor; the `FORBIDDEN` frame the browser received; the unchanged durable bytes; the owner's later edit arriving on the same socket |
+| `p2/2-identity-cannot-be-self-declared` | P2-2 | `mode: 'readwrite'` claimed by the client itself; `userId` injected into the join payload from the page's socket, plus query/header/in-payload claims from an oracle; `room-joined.role` stays `viewer` |
+| `p2/3-non-disclosure-404` | P2-3 | the page's own `fetch` for an unknown id, a document outside the membership, and its own document; bodies and headers compared byte-for-byte; `401` without a session |
+| `p2/4-role-capability-consistency` | P2-4 | one table over owner/editor/viewer: `documentCapabilities`, HTTP, WS join, WS frame and `room-joined.role`, with the browser performing the keystroke |
+| `p2/5-role-change-is-re-evaluated` | P2-5 | demotion refused in the browser on the live socket; promotion accepted on one live oracle socket, without reconnecting |
+| `p2/5-session-revocation-is-everywhere` | P2-5 | `DELETE /api/session` → `401` on HTTP and on the WS upgrade, through the proxy and directly; the page's own revocation; the already-open socket measured |
+| `p2/9-token-not-exposed-to-js` | P2-9 | `Network.getCookies` (what the browser holds, `HttpOnly`) against `document.cookie`, `localStorage`, `sessionStorage`, `/api/session`, the bootstrap body and the server log |
+| `p2/S-session-scope-after-restart` | limitation | records that a restarted server invalidates the session **and** that the page does not re-bootstrap; then proves a renewed session restores writing |
+
+## Sessions and membership in the suite (M2 Phase 2)
+
+Since `docs/CONTRACTS.md` §17 the collaboration socket is authenticated and authorized, so
+the harness has two obligations it did not have before:
+
+1. **Every upgrade carries a session cookie.** Without one the server answers HTTP `401`
+   and no socket exists. `lib/authz-fixture.mjs` bootstraps a real session with
+   `POST /api/session/bootstrap { demoUserId }` and keeps the cookie; the `Cookie` header is
+   then passed **explicitly** on every request (`fetch`, and the `ws` handshake in
+   `lib/wire-socket.mjs`). Node's global `WebSocket` cannot send headers at all, which is
+   why `ws` — already a dependency of `apps/server` — is used for the Node-side peers.
+2. **Every `join-room` needs a membership row.** Each scenario keeps its own `a6-*` /
+   `p2-*` document for isolation, so the fixture writes the row the scenario needs into the
+   run's own `authz.db` before anything joins.
+
+### Identity of a browser page
+
+The application bootstraps as `demo-ada` and there is no identity selector. A scenario that
+needs a `viewer` page says so: `ctx.newAppPage({ documentId, as: 'demo-linus' })`. The page
+instrumentation rewrites **only** the `demoUserId` field of the bootstrap request body, so the
+session is still issued by the real server, still arrives as a real `HttpOnly` cookie, and the
+role still comes from the seeded or fixture membership. Nothing about the resulting session is
+simulated.
+
+### ⚠ The membership fixture is coupled to `authz.db`'s schema
+
+`lib/authz-fixture.mjs` writes `authz_document_membership(document_id, user_id, role)`
+(`apps/server/src/authz/membership-store.ts`). **A change to that table or those column names
+must update the fixture in the same change** — the same rule `docs/DECISIONS.md` D-055 §2
+applies to `lib/durable-store.mjs` and the `insighthub.db` schema.
+
+The coupling is asserted rather than assumed: every write first reads the real table and
+column list and **fails loudly** when the file, the table or a column is missing. A fixture
+that created `authz.db` itself, or that skipped a missing table, would present a broken
+authorization store as a passing test.
+
+`grant()` has two modes, and the difference matters:
+
+- the harness's own arranging of access uses `ifAbsent: true` — it must **not** overwrite a
+  seeded or scenario-chosen role (asking for `owner` on `demo-document` for `demo-linus`
+  would otherwise silently promote the seeded `viewer` that a denial scenario depends on);
+- a scenario stating a role calls `ctx.authz.grant(documentId, userId, role)` and *replaces*
+  an existing row, which the evidence records as `replaced`.
+
+Every write appears in the scenario's evidence as an `authz fixture: …` line, so no scenario
+silently grants itself access.
+
+### The one place a scenario renews a session by hand
+
+`m2/C-offline-client-survives-restart` renews the writer's cookie after its restart
+(`ctx.authz.renewBrowserSession`). Sessions are **process-scoped** (§17.2), so the restart
+invalidated the page's session, and the client has no 401-driven re-bootstrap
+(`p2/S-session-scope-after-restart` records that: the page never returns to `connected` and
+performs no further bootstrap). Without the renewal that scenario could only measure session
+recovery. Everything it asserts is still the real path — real reconnect, real state-vector
+handshake, real durable store — and the line disappears the day the client re-bootstraps on
+its own. It is called out here, in the scenario's evidence and in the A6 report so it cannot
+be mistaken for a green result about session recovery.
 
 ### M2 durability scenarios and the acceptance IDs they map to
 
@@ -161,7 +266,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | --- | --- | --- |
 | `m2/A-room-emptied-then-recovered` | A | after every peer leaves, a brand-new device hydrates the stored document; the durable row still exists |
 | `m2/B-real-process-restart` | B | a hard kill (no graceful shutdown, no `store.close()`) followed by a new pid on the same directory still serves the document |
-| `m2/C-offline-client-survives-restart` | C | offline edit + restart + reconnect reconciles through the state-vector handshake; store, client and a new device all converge |
+| `m2/C-offline-client-survives-restart` | C | offline edit + restart + reconnect reconciles through the state-vector handshake; store, client and a new device all converge. **The session cookie is renewed after the restart** — see "Sessions and membership" below for why that is required and what it does not claim |
 | `m2/E-compaction-survives-restart` | E | crossing the update threshold then evicting folds the log into the snapshot; text **and** `encodeStateAsUpdate` SHA are unchanged after restart |
 | `m2/F-persist-failure-is-honest` | F | holding SQLite's write lock makes an append fail: 1011 close, no "connected" claim, no broadcast to peers, nothing durable, committed data intact |
 | `m2/G-document-isolation` | G | two documents keep separate rows and never cross, before and after a restart |
