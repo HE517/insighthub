@@ -1,4 +1,4 @@
-﻿/**
+/**
  * M2-P0-1 acceptance scenarios **B and C**: recovery across a real process death.
  *
  * ## Why a spawned process, and not a reopened store
@@ -65,12 +65,49 @@ const SERVER_ARGS = ['--import', 'tsx', 'src/index.ts'];
  */
 const SERVER_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
+/** How long a terminated child may take to be reaped before that is a test failure. */
+const TERMINATION_TIMEOUT_MS = 10_000;
+
 const children = new Set<ChildServer>();
 const tempRoots: string[] = [];
 
+/**
+ * Cleanup that is allowed to **fail**, but never allowed to hang.
+ *
+ * `pnpm --filter @insighthub/server test` is a Definition-of-Done gate (`AGENTS.md` §5), and a
+ * gate that never returns cannot distinguish "passed" from "stuck" (`docs/TASKS.md`
+ * TOOLING-P2). So every step here is bounded, every failure is collected, and the hook ends by
+ * failing loudly with the diagnostics instead of awaiting a process that may never die.
+ */
 after(async () => {
-  for (const child of children) await child.stop();
-  for (const root of tempRoots) rmSync(root, { recursive: true, force: true });
+  const problems: string[] = [];
+
+  for (const child of [...children]) {
+    try {
+      await child.stop();
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  for (const root of tempRoots) {
+    // A surviving child still holds its database open, and Windows refuses to remove a locked
+    // file — so a failed cleanup here is evidence of a leaked process, not just of a dirty
+    // temp directory.
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (error) {
+      problems.push(
+        `could not remove ${root}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  assert.deepEqual(
+    problems,
+    [],
+    `server processes could not be cleaned up:\n${problems.join('\n')}`,
+  );
 });
 
 function tempRoot(): string {
@@ -102,7 +139,11 @@ class ChildServer {
   readonly port: number;
   readonly url: string;
   readonly #child: ChildProcessByStdio<null, Readable, Readable>;
-  readonly #exited: Promise<{ code: number | null }>;
+  readonly #exitPromise: Promise<void>;
+  #exited = false;
+  #exitCode: number | null = null;
+  /** Released on exit so a later `kill()` cannot destroy pipes a test is still reading. */
+  #released = false;
   readonly stdout = '';
   readonly stderr = '';
 
@@ -120,7 +161,18 @@ class ChildServer {
       stderr += chunk.toString();
       (this as { stderr: string }).stderr = stderr;
     });
-    this.#exited = new Promise((resolve) => child.once('exit', (code) => resolve({ code })));
+    this.#exitPromise = new Promise<void>((resolve) => {
+      child.once('exit', (code) => {
+        this.#exited = true;
+        this.#exitCode = code;
+        resolve();
+      });
+    });
+    // A child handle counts as a live handle for this process. Without `unref`, a child that
+    // somehow survives teardown keeps the test *process* alive, and `node:test` waits for the
+    // event loop to drain before exiting — which is exactly the "gate never returns" shape this
+    // file must not have. Output streaming is unaffected: `unref` only changes the ref count.
+    child.unref();
   }
 
   static async start(port: number, dataPath: string): Promise<ChildServer> {
@@ -161,13 +213,16 @@ class ChildServer {
     return server;
   }
 
+  /** Everything an operator needs to see when this child misbehaved. */
+  #diagnostics(): string {
+    return `\npid: ${String(this.#child.pid)}\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`;
+  }
+
   async #waitForReady(timeoutMs = 30_000): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(
-          new Error(
-            `server process did not become ready in ${timeoutMs}ms\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`,
-          ),
+          new Error(`server process did not become ready in ${timeoutMs}ms${this.#diagnostics()}`),
         );
       }, timeoutMs);
 
@@ -178,11 +233,11 @@ class ChildServer {
         }
       };
       this.#child.stdout.on('data', check);
-      this.#child.once('exit', (code) => {
+      void this.#exitPromise.then(() => {
         clearTimeout(timer);
         reject(
           new Error(
-            `server process exited with code ${code} before becoming ready\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`,
+            `server process exited with code ${String(this.#exitCode)} before becoming ready${this.#diagnostics()}`,
           ),
         );
       });
@@ -190,26 +245,109 @@ class ChildServer {
     });
   }
 
-  /** Kill the process without any chance to shut down gracefully 闁?a real crash. */
+  /**
+   * Terminate the child and **everything it spawned**, then confirm it is gone.
+   *
+   * ## Why a single-PID kill is not enough on Windows
+   *
+   * The child is `node --import tsx src/index.ts`. `child.kill()` on Windows ends up in
+   * `TerminateProcess` for **that PID only**: if anything in the tree outlives it (a helper
+   * process, a re-spawned wrapper), the server keeps its port and its SQLite handle, and this
+   * file's `after` hook would wait for an exit that never comes. `taskkill /T` walks the tree and
+   * `/F` forces it, which is the difference between "flaky" and "deterministic" here.
+   */
+  async #terminateTree(): Promise<void> {
+    const pid = this.#child.pid;
+    if (pid === undefined) return;
+
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolve) => {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+        killer.once('exit', () => resolve());
+        // `taskkill` missing is not fatal: the direct kill below is the fallback.
+        killer.once('error', () => resolve());
+        // Deliberately **not** unref'd: this await is the only thing keeping the loop alive while
+        // `taskkill` runs, and an unref'd handle would let the loop drain mid-await — which
+        // `node:test` reports as "promise resolution is still pending but the event loop has
+        // already resolved".
+      });
+    }
+
+    try {
+      this.#child.kill('SIGKILL');
+    } catch {
+      // Already gone; `#awaitExit` is what decides whether it really is.
+    }
+  }
+
+  /** Resolve `true` when the child has exited, `false` when the bounded wait ran out. */
+  async #awaitExit(timeoutMs: number): Promise<boolean> {
+    if (this.#exited) return true;
+    return await new Promise<boolean>((resolve) => {
+      // This timer is ref'd on purpose. The child handle is unref'd (see the constructor), so
+      // without a ref'd timer a bounded wait would be cancelled the moment the loop had nothing
+      // else to do — turning "wait up to 10 s for the exit" into "give up immediately".
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      void this.#exitPromise.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  /**
+   * Release our ends of the stdio pipes and forget the child.
+   *
+   * Destroying the pipes matters on the failure path: they are handles this process owns, and
+   * leaving them open would keep the event loop non-empty even after the test has already
+   * failed — trading a loud failure for a silent hang.
+   */
+  #release(): void {
+    if (this.#released) return;
+    this.#released = true;
+    this.#child.stdout.destroy();
+    this.#child.stderr.destroy();
+    this.#child.removeAllListeners();
+    children.delete(this);
+  }
+
+  /** Kill the process without any chance to shut down gracefully — a real crash. */
   async kill(): Promise<void> {
-    if (this.#child.exitCode !== null) {
-      children.delete(this);
+    if (this.#exited) {
+      this.#release();
       return;
     }
-    this.#child.kill();
-    await this.#exited;
-    children.delete(this);
+
+    await this.#terminateTree();
+    const exited = await this.#awaitExit(TERMINATION_TIMEOUT_MS);
+    this.#release();
+
+    if (!exited) {
+      // Never continue silently: a child that outlived termination keeps a port bound and a
+      // database locked, so the next scenario would fail for a reason that has nothing to do
+      // with the code under test.
+      throw new Error(
+        `server process did not exit within ${TERMINATION_TIMEOUT_MS}ms of termination${this.#diagnostics()}`,
+      );
+    }
   }
 
   /** Wait for the process to exit on its own, returning its code. */
   async waitForExit(timeoutMs = 30_000): Promise<number | null> {
-    const result = await Promise.race([
-      this.#exited,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-    ]);
-    if (result === null) throw new Error('server process did not exit in time');
-    children.delete(this);
-    return result.code;
+    const exited = await this.#awaitExit(timeoutMs);
+    if (!exited) {
+      // The caller asserts an *exit*, so failing to get one must be that assertion failing with
+      // the child's own output attached — not a hang, and not a silent `null`.
+      await this.#terminateTree();
+      await this.#awaitExit(TERMINATION_TIMEOUT_MS);
+      this.#release();
+      throw new Error(
+        `server process did not exit within ${timeoutMs}ms (it was still running, so it was terminated)${this.#diagnostics()}`,
+      );
+    }
+    const code = this.#exitCode;
+    this.#release();
+    return code;
   }
 
   async stop(): Promise<void> {
