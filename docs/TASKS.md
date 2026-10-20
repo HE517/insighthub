@@ -717,6 +717,21 @@ m1-closed (tag, f3c353e, immutable)
 AI request pipeline, suggestion + diff generation, Diff Preview, Accept / Reject
 / Undo applied through a Yjs transaction. Owner: A4.
 
+### M3 前置：从 M2 移交的具名风险（A7 final review，必须写进 M3 kickoff）
+
+这七条**不是**"以后有空再说"，而是 A7 在 M2 终审中逐条确认、且 M3 会真实撞上的东西。
+M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进该 milestone 的发布说明。
+
+| # | 风险 | 为什么 M3 会撞上 | 归属建议 |
+| --- | --- | --- | --- |
+| **R1** | 吊销/过期**不追溯已建 socket**（`writeApplied: true`） | AI 建议会以某个用户的身份被接受；若该用户已登出，服务端仍会接受来自其既有 socket 的写入 | A3（实现） |
+| **R2** | session 是**进程内**的，客户端**不**会在 401 后重新 bootstrap（页面停在 `reconnecting`） | M3 的建议链路会跨多次请求；一次服务端重启就让整条链路失效且没有自愈 | A1 + A2 |
+| **R3** | 角色变更**不推送**给客户端（UI 门控滞后到下次 join；需要新控制面消息 + `PROTOCOL_VERSION` bump） | AI 接受权限与角色强相关；滞后会让"能点接受"和"服务端会接受"错位 | A0（契约）→ A1/A2 |
+| **R4** | `B3-residual`：6 处诊断字符串仍含 mojibake（注释与标题已清零，**全文件不是 0**） | M3 的报告若引用"mojibake 已清零"会与仓库事实不符 | A3 |
+| **R5** | `commenter` 无浏览器证据；§17.9 的"被拒 join 之后"的 null 窗口未覆盖 | M3 会引入新的角色相关 UI，缺这两块会让"角色相关行为已验证"过度泛化 | A6 |
+| **R6** | `tests/browser/lib/app.mjs#openApp` 仍以隐式 `arrangeAccess` 打开文档（latent F3 入口，当前未被使用） | M3 的新场景一旦用它，就会重新获得"夹具发权限"的假成功通道 | A6 |
+| **R7** | 主 bundle **1.41 MB 未拆分** | M3 会显著增大前端体积，首屏会更差 | A2（性能） |
+
 ## M4 — Hardening (sketch)
 
 Markdown preview performance, virtualized lists, chaos/regression suite.
