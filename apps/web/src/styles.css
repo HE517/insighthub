@@ -68,6 +68,29 @@ body {
   background: #fffbe6;
 }
 
+/* Read-only notice: a *known* role without edit permission (CONTRACTS §17.9).
+   Deliberately distinct from the offline notice: one is "not shared yet", the other
+   is "your role may not edit", and confusing the two would misstate both. */
+.read-only-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid #adc6ff;
+  border-radius: 4px;
+  background: #f0f5ff;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.read-only-notice__title {
+  color: #1d39c4;
+}
+
+.read-only-notice__detail {
+  color: #2f54eb;
+}
+
 /* CodeMirror surface */
 .markdown-editor .cm-editor {
   border: 1px solid #d9d9d9;
