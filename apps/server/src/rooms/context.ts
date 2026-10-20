@@ -15,6 +15,16 @@ export interface SocketContext {
   readonly connectionId: string;
   readonly peer: Peer;
   /**
+   * The identity this socket speaks for, resolved **once** at the WebSocket upgrade from the
+   * server-issued session token (`docs/CONTRACTS.md` §17.5).
+   *
+   * `undefined` only when the transport was wired without an `authz` service at all — the
+   * M1-compatible mode that a hand-built config reaches and production never does. It is
+   * never read from a frame: a payload, header or query `userId` has no path into this field
+   * (`docs/CONTRACTS.md` §17.1, §17.5), which is what makes identity non-self-declarable.
+   */
+  readonly userId: string | undefined;
+  /**
    * The single room this socket is currently in, or `null`.
    *
    * Exactly one of these is non-null at a time; membership is never expressed as

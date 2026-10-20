@@ -23,6 +23,7 @@
  * Nothing here is a fake: it is the application's own editor instance.
  */
 import { artifactsDir } from './deps.mjs';
+import { authzFixture, DEFAULT_DEMO_USER } from './authz-fixture.mjs';
 
 /** Stable selectors the application already exposes for exactly this purpose. */
 export const SELECTORS = {
@@ -59,8 +60,10 @@ export async function loadInstrumentSource() {
 
 
 /** Install the instrumentation on a fresh page and open the application. */
-export async function openApp(page, { url, documentId } = {}) {
+export async function openApp(page, { url, documentId, as = DEFAULT_DEMO_USER } = {}) {
+  if (as !== null) await page.addInitScript(`window.__qaIdentity = ${JSON.stringify(as)};`);
   await page.addInitScript(await loadInstrumentSource());
+  page.demoUserId = as;
   await page.goto(url);
   await waitForSessionActive(page);
   if (documentId !== undefined) await setDocumentId(page, documentId);
@@ -95,8 +98,19 @@ export async function waitForSessionActive(page, { timeoutMs = 30_000 } = {}) {
 /**
  * Switch the workspace to another document, the way a user does it: focus the
  * document field, replace its contents, press Enter.
+ *
+ * ## Why this writes a membership row
+ *
+ * Since `docs/CONTRACTS.md` §17.5 a `join-room` requires a membership row, and every scenario's
+ * document id is its own (`a6-*`) so scenarios stay isolated. A switch to a document with no
+ * membership would be denied with `ROOM_NOT_FOUND` — the same answer as "this document does not
+ * exist" — which would look like a product failure. The harness therefore *arranges access* for
+ * the page's own identity before switching, with the `ifAbsent` rule: a seeded or
+ * scenario-chosen role is never overwritten by the harness.
  */
 export async function setDocumentId(page, documentId) {
+  const identity = page.demoUserId ?? DEFAULT_DEMO_USER;
+  await authzFixture().grant(documentId, identity, 'owner', { ifAbsent: true });
   await page.click(SELECTORS.documentInput);
   await page.pressKey('a', { modifiers: 2 }); // Ctrl+A selects the field contents.
   await page.insertText(documentId);
@@ -456,6 +470,64 @@ export async function readPageDiagnostics(page) {
     consoleErrors: page.consoleErrors.slice(-6),
     pageErrors: page.pageErrors.slice(-6),
   };
+}
+
+/* -------------------------------------------------------------------- *
+ * Control plane as the browser saw it (M2 Phase 2)
+ * -------------------------------------------------------------------- */
+
+/**
+ * Inbound TEXT control frames the page received for a document.
+ *
+ * Read from the instrumentation, i.e. from the frames the **real client** received — not from
+ * a proxy socket. Each entry carries `messageType`, and for the two phase-2 messages also
+ * `code` (`error`) or `role` (`room-joined`).
+ */
+export async function inboundControl(page, documentId) {
+  return page.evaluate((id) => window.__qa.inboundControl(id), documentId);
+}
+
+/**
+ * Outbound TEXT control frames the page sent for a document.
+ *
+ * This is where a claim the client itself made is observable — e.g. the `mode: 'readwrite'`
+ * that every join carries, or a `userId` a scenario injected into the payload.
+ */
+export async function outboundControl(page, documentId) {
+  return page.evaluate((id) => window.__qa.outboundControl(id), documentId);
+}
+
+/** The role from the page's most recent `room-joined` (§17.5's only role channel). */
+export async function lastRoomJoinedRole(page, documentId) {
+  return page.evaluate((id) => window.__qa.lastRoomJoinedRole(id), documentId);
+}
+
+/**
+ * Wait until the page has received a server `error` frame with `code`.
+ *
+ * A denial is only evidence if the real client received it, so this reads the page's own
+ * traffic. The failure message lists what the page *did* receive, because "timed out" alone
+ * cannot distinguish a missing denial from a broken socket.
+ */
+export async function waitForServerErrorCode(page, code, { timeoutMs = 20_000, documentId } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const frames = await inboundControl(page, documentId);
+    const found = frames.find((frame) => frame.messageType === 'error' && frame.code === code);
+    if (found !== undefined) return found;
+    if (Date.now() >= deadline) {
+      const seen = frames.map((frame) => `${frame.messageType}${frame.code === undefined ? '' : `(${frame.code})`}`);
+      throw new Error(
+        `the page never received a ${code} error frame (saw: ${seen.join(', ') || 'nothing'})`,
+      );
+    }
+    await sleep(100);
+  }
+}
+
+/** Every close code the page has observed, with its document and reason. */
+export async function pageCloseCodes(page) {
+  return page.evaluate(() => window.__qa.closeCodes());
 }
 
 /* -------------------------------------------------------------------- *

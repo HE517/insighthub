@@ -17,17 +17,25 @@ import {
   readPageDiagnostics,
   waitForEditorText,
 } from '../lib/app.mjs';
+import { authzFixture } from '../lib/authz-fixture.mjs';
 import { sleep } from '../lib/cdp.mjs';
 import { assert, assertEqual, assertIncludes } from '../lib/harness.mjs';
 import { importDependency, loadShared, loadYjs } from '../lib/deps.mjs';
+import { openWireSocket, waitForOpen } from '../lib/wire-socket.mjs';
 
-/** Open a raw WebSocket that records what the server says. */
+/**
+ * Open a raw WebSocket that records what the server says.
+ *
+ * Since M2 Phase 2 the upgrade requires a session (`docs/CONTRACTS.md` §17.5), so the raw
+ * client presents a real bootstrapped cookie. It is still a **bare** client in every other
+ * respect — no A1/A2 code — which is what makes "a hostile peer" a meaningful subject.
+ */
 async function openRawSocket(url) {
   const shared = await loadShared();
+  const { cookie } = await authzFixture().session();
   const text = [];
   const binary = [];
-  const socket = new WebSocket(url);
-  socket.binaryType = 'arraybuffer';
+  const socket = await openWireSocket(url, { cookie });
   let closed = false;
 
   socket.addEventListener('message', (event) => {
@@ -49,25 +57,7 @@ async function openRawSocket(url) {
     closed = true;
   });
 
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('raw socket did not open')), 10_000);
-    socket.addEventListener(
-      'open',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-    socket.addEventListener(
-      'error',
-      () => {
-        clearTimeout(timer);
-        reject(new Error('raw socket failed to open'));
-      },
-      { once: true },
-    );
-  });
+  await waitForOpen(socket, { label: 'the raw robustness socket' });
 
   return {
     socket,

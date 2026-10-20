@@ -21,7 +21,7 @@
  * `./rooms/**`.
  */
 import { randomUUID } from 'node:crypto';
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
 
 import {
   WS_ERROR_CODES,
@@ -31,11 +31,13 @@ import {
   createRoomJoinedMessage,
   isFatalErrorCode,
   parseMessageJson,
+  type DocumentRole,
   type WsErrorCode,
   type WsServerMessage,
 } from '@insighthub/shared';
 import { WebSocketServer, type WebSocket } from 'ws';
 
+import type { AuthzService } from './authz/public.js';
 import type { ServerConfig } from './config.js';
 import { Heartbeat } from './rooms/heartbeat.js';
 import { RoomRegistry, type HydrationOutcome, type RoomRegistryOptions } from './rooms/registry.js';
@@ -127,8 +129,21 @@ export function attachWebSocketServer(
     );
   }
 
+  // The same fail-closed rule for authorization: a server that names a data directory is a
+  // production-shaped server, and one of those must never accept an unauthenticated socket.
+  // Without this the mistake is invisible — the transport simply stops enforcing
+  // (`docs/CONTRACTS.md` §17.5), which looks like "permissions are broken" rather than "nobody
+  // wired the resolver".
+  if (options.authz === undefined && config.dataPath !== undefined) {
+    throw new Error(
+      'durable storage is configured (config.dataPath) but no AuthzService was supplied: ' +
+        'await createAuthz({ dataPath }) and pass it as options.authz',
+    );
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   const registry = new RoomRegistry(options);
+  const authz: AuthzService | undefined = options.authz;
   const heartbeat = new Heartbeat({
     ...options.heartbeat,
     onTerminate: (reason) => {
@@ -140,6 +155,26 @@ export function attachWebSocketServer(
   /** The context for each live socket, so teardown knows which one died. */
   const contextBySocket = new Map<WebSocket, SocketContext>();
 
+  /**
+   * Identity resolved during the upgrade, handed to the `connection` handler.
+   *
+   * A `WeakMap` keyed by the upgrade request, not a header and not a query parameter: the
+   * resolved `userId` never becomes part of anything the socket layer reads, so no frame,
+   * header or query string can supply or override it (`docs/CONTRACTS.md` §17.5).
+   */
+  const userIdByUpgrade = new WeakMap<IncomingMessage, string>();
+
+  /**
+   * Refuse an unauthenticated upgrade with HTTP `401` (`docs/CONTRACTS.md` §17.5).
+   *
+   * Done at the HTTP level, before `handleUpgrade`, so **no WebSocket is established** — the
+   * contract's wording, and the difference between "the client is told it has no session" and
+   * "the client gets a socket that is then closed for reasons it must infer".
+   *
+   * The identity comes from the session cookie and from nowhere else: a `userId` in the query
+   * string, in a header or in a later payload is not consulted, not validated and not logged
+   * as a candidate (§17.1, §17.5).
+   */
   server.on('upgrade', (request, socket, head) => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
 
@@ -147,6 +182,28 @@ export function attachWebSocketServer(
       socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
+    }
+
+    if (authz !== undefined) {
+      const session = authz.resolveSession(request.headers.cookie);
+      if (session === null) {
+        // 401 with the same body shape the HTTP API uses for an unauthenticated caller
+        // (§17.4), so one client rule covers both transports.
+        const body = JSON.stringify({ error: 'unauthenticated' });
+        socket.write(
+          'HTTP/1.1 401 Unauthorized\r\n' +
+            'Connection: close\r\n' +
+            'Content-Type: application/json\r\n' +
+            `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+            '\r\n' +
+            body,
+        );
+        socket.destroy();
+        return;
+      }
+      // Carried to the socket's context below. The cookie is not retained: only the resolved
+      // identity is, so a token cannot leak into a room, a log line or an error message.
+      userIdByUpgrade.set(request, session.userId);
     }
 
     wss.handleUpgrade(request, socket, head, (ws) => {
@@ -205,6 +262,7 @@ export function attachWebSocketServer(
     room: DocumentRoom,
     barrier: Promise<HydrationOutcome>,
     requestId: string | undefined,
+    role: DocumentRole,
   ): Promise<void> => {
     const outcome = await barrier;
 
@@ -223,7 +281,7 @@ export function attachWebSocketServer(
     sendControl(
       context,
       createRoomJoinedMessage(
-        { documentId, connectionId: context.connectionId, peers },
+        { documentId, connectionId: context.connectionId, peers, role },
         requestId === undefined ? {} : { requestId },
       ),
     );
@@ -282,6 +340,7 @@ export function attachWebSocketServer(
         result.room,
         result.barrier,
         requestId,
+        result.role,
       ).catch((error: unknown) => {
         console.error(
           `[ws] connection ${context.connectionId} join acknowledgement failed:`,
@@ -305,9 +364,11 @@ export function attachWebSocketServer(
     fail(context, WS_ERROR_CODES.UNKNOWN_MESSAGE_TYPE, `unhandled message type ${message.type}`);
   };
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     const connectionId = randomUUID();
-    const context = registry.registerSocket(ws, connectionId);
+    // The identity comes from the session resolved at the upgrade — never from the frame
+    // stream. `undefined` only in the no-authz mode described on `RoomRegistryOptions.authz`.
+    const context = registry.registerSocket(ws, connectionId, userIdByUpgrade.get(request));
     contextBySocket.set(ws, context);
     heartbeat.track(ws);
 
@@ -395,7 +456,39 @@ export function attachWebSocketServer(
         }
         contextBySocket.clear();
         registry.destroy();
-        wss.close(() => resolve());
+
+        // `wss.close()` calls back once libuv reports every client socket closed. We have just
+        // force-terminated all of them, so any further waiting is a stalled FIN rather than work
+        // in progress — and an unbounded wait here is what turns "shutdown hangs" into "the whole
+        // test gate never returns" (`docs/TASKS.md` TOOLING-P2).
+        //
+        // The bound is safe because this server is `noServer: true`: there is no listening handle
+        // of its own to leak, and every socket is already terminated. Hitting the bound is
+        // reported, never swallowed — silence would hide a real leak.
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(watchdog);
+          resolve();
+        };
+        const watchdog = setTimeout(() => {
+          console.warn(
+            `[ws] shutdown waited 2000ms for ${wss.clients.size} socket(s) to close; resolving anyway`,
+          );
+          settle();
+        }, 2_000);
+        // Reference-neutral: the stalled socket is what keeps the loop alive, so the watchdog
+        // still fires when it matters, but a clean shutdown is not delayed by it.
+        watchdog.unref?.();
+
+        try {
+          wss.close(() => settle());
+        } catch (error: unknown) {
+          // `wss.close()` throws if the server was never started; nothing to wait for.
+          console.warn(`[ws] shutdown: ${error instanceof Error ? error.message : 'close failed'}`);
+          settle();
+        }
       }),
   };
 }

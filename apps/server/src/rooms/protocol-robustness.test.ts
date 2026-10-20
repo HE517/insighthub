@@ -624,8 +624,18 @@ describe('M1-A3 slow client / backpressure', () => {
         );
       }
 
+      // Resume before tearing down. A paused socket holds a *referenced* handle, and while the
+      // server still has megabytes queued for it the close handshake cannot finish — that is a
+      // leaked handle rather than a slow test, and `node:test` waits for the event loop to drain
+      // before the file process exits, so the whole gate would never return (TOOLING-P2).
+      // Resuming lets the queued bytes flush and both ends reach CLOSED.
+      slow.socket.resume();
       slow.destroy();
       talker.destroy();
+      await waitUntil(
+        () => constrained.handle.registry.connectionCount === 0,
+        'both peers to be reaped from the registry',
+      );
     } finally {
       await constrained.close();
     }

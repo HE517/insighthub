@@ -11,7 +11,17 @@
  * `getCollaborators()` and cannot perturb a presence assertion. It does join the
  * room, so it keeps the room alive while attached; tests that care about room
  * teardown close the oracle first.
+ *
+ * ## M2 Phase 2: it is an *authenticated, member* peer
+ *
+ * Since `docs/CONTRACTS.md` §17.5 the upgrade needs a session cookie and the join needs a
+ * membership row, so a bare socket is refused with HTTP `401` and never joins. `connect()`
+ * therefore bootstraps a real session through `lib/authz-fixture.mjs` (or accepts an explicit
+ * `cookie`) and writes the membership row the scenario needs before it connects. Both are
+ * recorded in the scenario's evidence, so "the oracle could join" is never an unexplained
+ * privilege. A scenario that needs a **non-member** passes `membership: false`.
  */
+import { authzFixture, DEFAULT_DEMO_USER } from './authz-fixture.mjs';
 import {
   importDependency,
   loadAwarenessProtocol,
@@ -19,6 +29,7 @@ import {
   loadSyncProtocol,
   loadYjs,
 } from './deps.mjs';
+import { openWireSocket, waitForOpen } from './wire-socket.mjs';
 
 const JOIN_TIMEOUT_MS = 20_000;
 
@@ -38,27 +49,42 @@ export class WireOracle {
   #socket;
   #joined = false;
   #errors = [];
+  #serverErrors = [];
+  #role = null;
   #framesIn = 0;
   #framesOut = 0;
   #awarenessClientIds = new Set();
   #joinResolve;
   #joinReject;
   #joinSettled;
+  #query;
+  #joinExtras;
+  #mode = 'readwrite';
+  #headers = {};
+  #cookie;
 
   constructor({
     url,
     documentId,
     label,
+    userId,
+    role,
     shared,
     Y,
     syncProtocol,
     awarenessProtocol,
     encoding,
     decoding,
+    query,
+    joinExtras,
   }) {
     this.url = url;
     this.documentId = documentId;
     this.label = label;
+    /** The identity this peer's session denotes (never something it declares on the wire). */
+    this.userId = userId;
+    /** The membership role the fixture wrote for `(documentId, userId)`, when it wrote one. */
+    this.fixtureRole = role;
     this.#shared = shared;
     this.#encoding = encoding;
     this.#decoding = decoding;
@@ -67,6 +93,8 @@ export class WireOracle {
     this.#doc = new Y.Doc();
     this.#text = this.#doc.getText(shared.DOCUMENT_TEXT_KEY);
     this.#awareness = new awarenessProtocol.Awareness(this.#doc);
+    this.#query = query ?? null;
+    this.#joinExtras = joinExtras ?? null;
 
     this.#joinSettled = new Promise((resolve, reject) => {
       this.#joinResolve = resolve;
@@ -81,8 +109,33 @@ export class WireOracle {
    * Connect, join the document room and complete the client-initiated sync
    * handshake. Resolves once the room is joined (not converged — call
    * `waitForText` for that).
+   *
+   * Options beyond the wire:
+   *
+   * | Option | Meaning |
+   * | --- | --- |
+   * | `userId` | which demo identity this peer *is* (default `demo-ada`, the page default) |
+   * | `role` | membership row to write for `(documentId, userId)` (default `owner`) |
+   * | `membership: false` | write **no** row — the non-member control of a denial test |
+   * | `cookie` | present this session cookie instead of bootstrapping one (requires `userId`) |
+   * | `mode` | `join-room.mode` claim; advisory by contract (§17.5) |
+   * | `query` | extra query parameters on the upgrade URL (P2-2's "identity in the query") |
+   * | `headers` | extra upgrade headers (P2-2's "identity in a header") |
+   * | `joinExtras` | extra `join-room` payload fields (P2-2's "identity in the payload") |
    */
-  static async connect({ url, documentId, label = 'oracle' }) {
+  static async connect({
+    url,
+    documentId,
+    label = 'oracle',
+    userId,
+    role = 'owner',
+    membership = true,
+    cookie,
+    mode = 'readwrite',
+    query,
+    headers,
+    joinExtras,
+  }) {
     const [shared, Y, syncProtocol, awarenessProtocol, encoding, decoding] = await Promise.all([
       loadShared(),
       loadYjs(),
@@ -92,18 +145,36 @@ export class WireOracle {
       importDependency('lib0/decoding'),
     ]);
 
+    const fixture = authzFixture();
+    if (cookie !== undefined && typeof userId !== 'string') {
+      throw new Error(
+        `${label}: an explicit cookie names a session, not an identity — pass userId as well`,
+      );
+    }
+    const session = cookie === undefined ? await fixture.session(userId ?? DEFAULT_DEMO_USER) : null;
+    const effectiveUserId = userId ?? session.userId;
+    const presentedCookie = cookie ?? session.cookie;
+    if (membership) await fixture.grant(documentId, effectiveUserId, role);
+
     const oracle = new WireOracle({
       url,
       documentId,
       label,
+      userId: effectiveUserId,
+      role: membership ? role : null,
       shared,
       Y,
       syncProtocol,
       awarenessProtocol,
       encoding,
       decoding,
+      query,
+      joinExtras,
     });
-    oracle.#open();
+    oracle.#mode = mode;
+    oracle.#headers = headers ?? {};
+    oracle.#cookie = presentedCookie;
+    await oracle.#open();
     await oracle.waitForJoin();
     return oracle;
   }
@@ -126,8 +197,42 @@ export class WireOracle {
     return this.#joined;
   }
 
+  /** The role `room-joined` reported for this peer, or `null` before the join. */
+  get roomJoinedRole() {
+    return this.#role;
+  }
+
+  /** Server error frames this peer received, in arrival order. */
+  get serverErrors() {
+    return [...this.#serverErrors];
+  }
+
+  /** The demo identity this peer's session denotes. Not a value it can declare on the wire. */
+  get identity() {
+    return this.userId;
+  }
+
   get errors() {
     return [...this.#errors];
+  }
+
+  /**
+   * Wait until a server error frame with `code` arrives.
+   *
+   * Used by the denial scenarios: "the server said FORBIDDEN" is a positive observation, and
+   * a missing one must fail with the codes that *did* arrive rather than a bare timeout.
+   */
+  async waitForErrorCode(code, { timeoutMs = 15_000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const found = this.#serverErrors.find((entry) => entry.code === code);
+      if (found !== undefined) return found;
+      if (Date.now() >= deadline) {
+        const seen = this.#serverErrors.map((entry) => entry.code).join(', ') || 'none';
+        throw new Error(`${this.label} never received ${code} (server errors: ${seen})`);
+      }
+      await delay(50);
+    }
   }
 
   get statistics() {
@@ -154,21 +259,19 @@ export class WireOracle {
     }
   }
 
-  #open() {
+  async #open() {
     const shared = this.#shared;
-    const socket = new WebSocket(this.url);
-    socket.binaryType = 'arraybuffer';
+    const socket = await openWireSocket(this.#handshakeUrl(), {
+      cookie: this.#cookie,
+      headers: this.#headers,
+    });
     this.#socket = socket;
 
     const timer = setTimeout(() => {
       this.#settleJoin(
         new Error(`${this.label} did not join room ${this.documentId} within ${JOIN_TIMEOUT_MS}ms`),
       );
-      try {
-        socket.close();
-      } catch {
-        /* already gone */
-      }
+      socket.close();
     }, JOIN_TIMEOUT_MS);
 
     // Relay this oracle's own edits as ordinary incremental updates, exactly as the
@@ -177,20 +280,6 @@ export class WireOracle {
       if (origin === shared.TRANSACTION_ORIGINS.remote) return;
       if (!this.#joined) return;
       this.#sendBinary(shared.encodeSyncUpdate(update));
-    });
-
-    socket.addEventListener('open', () => {
-      // The control plane is TEXT carrying a JSON envelope: `send` must receive a
-      // string, not the envelope object.
-      socket.send(
-        JSON.stringify(
-          shared.createEnvelope(shared.WS_MESSAGE_TYPES.joinRoom, {
-            documentId: this.documentId,
-            protocolVersion: shared.PROTOCOL_VERSION,
-            mode: 'readwrite',
-          }),
-        ),
-      );
     });
 
     socket.addEventListener('message', (event) => {
@@ -223,6 +312,29 @@ export class WireOracle {
         );
       }
     });
+
+    // The upgrade is authenticated now, so "did it even connect?" has to be answered by
+    // the handshake: a refused upgrade (HTTP 401) is a different failure from a refused
+    // join (ROOM_NOT_FOUND), and the two must never be reported as the same thing.
+    await waitForOpen(socket, { label: `${this.label}'s upgrade` });
+    socket.send(
+      JSON.stringify(
+        shared.createEnvelope(shared.WS_MESSAGE_TYPES.joinRoom, {
+          documentId: this.documentId,
+          protocolVersion: shared.PROTOCOL_VERSION,
+          mode: this.#mode,
+          ...(this.#joinExtras ?? {}),
+        }),
+      ),
+    );
+  }
+
+  /** The upgrade URL, with the scenario's extra query parameters (P2-2). */
+  #handshakeUrl() {
+    if (this.#query === null) return this.url;
+    const url = new URL(this.url);
+    for (const [key, value] of Object.entries(this.#query)) url.searchParams.set(key, String(value));
+    return url.toString();
   }
 
   #handleControl(raw, timer) {
@@ -242,6 +354,9 @@ export class WireOracle {
     const message = parsed.data;
     if (message.type === shared.WS_MESSAGE_TYPES.roomJoined) {
       this.#joined = true;
+      // The only channel that tells a client its own role (§17.5). Recorded, never trusted:
+      // the server is what enforces, and this peer asserts what it was *told*.
+      this.#role = message.payload.role ?? null;
       clearTimeout(timer);
       // Frozen client-initiated handshake (docs/CONTRACTS.md §10.2).
       this.#sendBinary(shared.encodeSyncStep1(this.#doc));
@@ -249,6 +364,7 @@ export class WireOracle {
       return;
     }
     if (message.type === shared.WS_MESSAGE_TYPES.error) {
+      this.#serverErrors.push({ code: message.payload.code, message: message.payload.message });
       this.#errors.push(`${message.payload.code}: ${message.payload.message}`);
     }
   }
@@ -351,6 +467,20 @@ export class WireOracle {
     return this.text;
   }
 
+  /**
+   * Send one SYNC **update** frame built from a *different* `Y.Doc`, without touching this
+   * peer's document.
+   *
+   * Used by the denial scenarios: a refused write must be observable **without** leaving the
+   * peer's own `Y.Doc` diverged. If the peer mutated its own document instead, the refused
+   * structs would stay local and every later update would depend on them — Yjs would then park
+   * that update as pending on the server, and "the role change was re-evaluated" would become
+   * indistinguishable from "the update could not be integrated".
+   */
+  sendRawSyncUpdate(update) {
+    return this.#sendBinary(this.#shared.encodeSyncUpdate(update));
+  }
+
   /* ---------------------------------------------------------------- *
    * Presence (real y-protocols awareness, over the real server)
    * ---------------------------------------------------------------- */
@@ -448,6 +578,28 @@ export class WireOracle {
     }
     this.#joined = false;
     // Releases the y-protocols 3 s liveness interval, so the harness process exits.
+    try {
+      this.#awareness.destroy();
+    } catch {
+      /* already destroyed */
+    }
+  }
+
+  /**
+   * Hard close, for a scenario that wants the predecessor socket gone right now.
+   *
+   * A graceful `close()` is the default because the server's normal teardown path is part of
+   * what the suite observes; `terminate()` skips the closing handshake, which is what a
+   * crashed peer looks like.
+   */
+  forceClose() {
+    try {
+      if (this.#presenceEnabled) this.withdrawPresence();
+      this.#socket?.terminate();
+    } catch {
+      /* already gone */
+    }
+    this.#joined = false;
     try {
       this.#awareness.destroy();
     } catch {

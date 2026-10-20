@@ -40,6 +40,52 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * Demo identity pin + bootstrap accounting (M2 Phase 2)
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Which demo identity this page claims, when the harness pins one.
+   *
+   * `null` means "whatever the application asks for" (`demo-ada`, the app's default). A value
+   * rewrites **only** the `demoUserId` field of the `POST /api/session/bootstrap` body. That is
+   * the one place `docs/CONTRACTS.md` §17.0 lets a client claim an identity, and the session
+   * itself is still issued by the real server in a real `HttpOnly` cookie — so a scenario that
+   * needs a viewer page gets a genuine viewer session, not a simulated one. Rewriting the
+   * *claim* is the only thing the harness does; nothing about the resulting session is faked.
+   */
+  qa.demoIdentity = typeof window.__qaIdentity === 'string' ? window.__qaIdentity : null;
+
+  /**
+   * Every bootstrap the page performed, with the identity it claimed.
+   *
+   * This is how the restart scenarios can assert the client did (**not**) re-bootstrap after a
+   * server restart, instead of inferring it from a connection badge.
+   */
+  qa.bootstrapCalls = [];
+
+  const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+  if (nativeFetch !== null) {
+    window.fetch = function qaFetch(input, init) {
+      const target = typeof input === 'string' ? input : (input && input.url) || '';
+      if (typeof target === 'string' && target.endsWith('/api/session/bootstrap')) {
+        qa.bootstrapCalls.push({ t: Date.now() - qa.startedAt, claimed: qa.demoIdentity });
+        if (qa.demoIdentity !== null && init !== null && typeof init === 'object') {
+          if (typeof init.body === 'string') {
+            try {
+              const body = JSON.parse(init.body);
+              body.demoUserId = qa.demoIdentity;
+              init = { ...init, body: JSON.stringify(body) };
+            } catch {
+              /* an unexpected body shape is the application's business, not ours */
+            }
+          }
+        }
+      }
+      return nativeFetch(input, init);
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
    * Policy state
    * ------------------------------------------------------------------ */
 
@@ -132,7 +178,26 @@
   function describeControlFrame(text) {
     try {
       const parsed = JSON.parse(text);
-      return { messageType: parsed?.type ?? 'unknown' };
+      const type = parsed?.type ?? 'unknown';
+      const payload = parsed?.payload ?? {};
+      const detail = { messageType: type };
+      // `error.code` and `room-joined.role` are the two control-plane facts the M2 Phase 2
+      // scenarios assert from the **browser** (a denial is only real if the real client
+      // received it; the role is only meaningful if the real client was told it). Recording
+      // them here keeps the assertion on the page's own traffic instead of on a proxy socket.
+      if (type === 'error' && typeof payload.code === 'string') detail.code = payload.code;
+      if (type === 'room-joined') {
+        detail.role = payload.role ?? null;
+        detail.roomJoinedDocumentId = payload.documentId ?? null;
+      }
+      if (type === 'join-room') {
+        detail.mode = payload.mode ?? null;
+        detail.joinDocumentId = payload.documentId ?? null;
+      }
+      // Only recorded when the client actually claimed an identity on the wire — which is the
+      // thing P2-2 needs to show it did (and that the server ignored).
+      if (typeof payload.userId === 'string') detail.claimedUserId = payload.userId;
+      return detail;
     } catch {
       return { messageType: 'unparseable' };
     }
@@ -465,6 +530,64 @@
     return { ok: true };
   };
 
+  /**
+   * Send a raw TEXT control frame on the newest socket for a document.
+   *
+   * The M2 Phase 2 identity scenarios need to send a `join-room` whose payload carries a
+   * `userId` the client would never send. Doing it through the page's **own** socket means the
+   * frame really is produced by the browser connection the application is using, not by a
+   * proxy socket — which is what makes "the payload is ignored" a browser observation.
+   */
+  qa.sendControl = function sendControl(documentId, text) {
+    const sockets = qa.sockets.filter((socket) => socket.documentId === documentId);
+    const target = sockets[sockets.length - 1];
+    if (target === undefined) return { ok: false, reason: 'no socket for that document' };
+    try {
+      target.native.send(text);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: String(error) };
+    }
+  };
+
+  /**
+   * TEXT control frames recorded for a document, optionally one direction.
+   *
+   * NOTE the one wrinkle: a socket learns `record.documentId` **from** its `join-room`, so the
+   * first outbound join frame is recorded before the socket knows its document. That frame still
+   * carries `joinDocumentId` (read out of the payload), which is why the filter accepts either.
+   */
+  qa.controlFrames = function controlFrames(documentId, direction) {
+    return qa.frames
+      .filter(
+        (frame) =>
+          frame.kind === 'text' &&
+          (direction === undefined || frame.direction === direction) &&
+          (documentId === undefined ||
+            frame.documentId === documentId ||
+            frame.joinDocumentId === documentId),
+      )
+      .map((frame) => ({ ...frame }));
+  };
+
+  /** Inbound TEXT frames (control plane) for a document, newest last. */
+  qa.inboundControl = function inboundControl(documentId) {
+    return qa.controlFrames(documentId, 'in');
+  };
+
+  /** Outbound TEXT frames (control plane) for a document, newest last. */
+  qa.outboundControl = function outboundControl(documentId) {
+    return qa.controlFrames(documentId, 'out');
+  };
+
+  /** The role from the most recent `room-joined`, or `null`. */
+  qa.lastRoomJoinedRole = function lastRoomJoinedRole(documentId) {
+    const frames = qa.inboundControl(documentId)
+      .filter((frame) => frame.messageType === 'room-joined')
+      .reverse();
+    return frames.length === 0 ? null : frames[0].role ?? null;
+  };
+
   /* ------------------------------------------------------------------ *
    * Counters
    * ------------------------------------------------------------------ */
@@ -535,6 +658,8 @@
         (delay) => delay === 3000,
       ).length,
       droppedAfterDetach: qa.droppedAfterDetach ?? 0,
+      bootstrapCalls: qa.bootstrapCalls.length,
+      demoIdentity: qa.demoIdentity,
       errors: qa.errors.length,
       /** Close codes seen so far, so a report can name 1011 without a second call. */
       closeCodes: qa
@@ -552,6 +677,7 @@
     qa.editor.unmounts = 0;
     qa.editor.live = 0;
     qa.droppedAfterDetach = 0;
+    qa.bootstrapCalls.length = 0;
     qa.errors.length = 0;
     policies.clear();
     held.clear();

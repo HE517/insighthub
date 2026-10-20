@@ -191,6 +191,13 @@ export function register(runner) {
         );
 
         await ctx.stack.startServer();
+        // M2 Phase 2: the restart destroyed the page's session (`docs/CONTRACTS.md` §17.2 makes
+        // sessions process-scoped) and the client has no re-bootstrap, so the reconnect can never
+        // be admitted without a valid cookie. Renewing it keeps this scenario's subject — "a
+        // connection-status change must not remount the 5 000-line editor" — measurable. The
+        // client-side gap is recorded by `p2/S-session-scope-after-restart`; see
+        // `tests/browser/README.md`.
+        await ctx.authz.renewBrowserSession(page);
         await waitForConnectionStatus(page, 'connected', { timeoutMs: 60_000 });
         ctx.note('reconnected after the outage', await readConnectionStatus(page));
 

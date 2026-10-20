@@ -36,24 +36,73 @@ import { WebSocket } from 'ws';
 import * as Y from 'yjs';
 
 import { createApp } from '../app.js';
-import { createAuthz } from '../authz/public.js';
+import { createAuthz, type AuthzService } from '../authz/public.js';
 import type { ServerConfig } from '../config.js';
+import { isDocumentMetaStore, StoreDocumentCatalog } from '../persistence/document-meta.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
 import { attachWebSocketServer, type WebSocketHandle, type WebSocketServerOptions } from '../ws.js';
+import { PermissiveTestAuthz } from './test-authz.js';
 
 /** One recorded inbound frame. Binary frames keep their raw bytes. */
 export type ReceivedFrame =
   { kind: 'text'; message: WsServerMessage } | { kind: 'binary'; bytes: Uint8Array };
 
+/**
+ * Bootstrap a demo session over HTTP and return the `Cookie` header value for the WS upgrade.
+ *
+ * The demo bootstrap is the one place a client may name an identity (`docs/CONTRACTS.md` §17.0,
+ * §17.3). Everything after it is decided by the session token, which is why the tests do not have
+ * — and must not get — a way to pass a `userId` to the socket.
+ */
+export async function bootstrapSessionCookie(
+  httpBaseUrl: string,
+  demoUserId: string,
+): Promise<string> {
+  const response = await fetch(`${httpBaseUrl}/api/session/bootstrap`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      // No keep-alive. Node's `fetch` pools sockets process-wide, and a pooled socket is a live
+      // handle that keeps the *test process* alive after the last assertion — the gate would then
+      // print every result and never exit (TOOLING-P2). One request per connection keeps the
+      // handle's lifetime inside the test that made it.
+      connection: 'close',
+    },
+    body: JSON.stringify({ demoUserId }),
+    // Bounded: an unbounded `fetch` inherits undici's 300 s timers, so a stuck request would look
+    // like a hung gate instead of a failed assertion (TOOLING-P2).
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.status !== 200) {
+    throw new Error(`session bootstrap failed: ${response.status} ${await response.text()}`);
+  }
+  const setCookie = response.headers.get('set-cookie');
+  if (setCookie === null) throw new Error('session bootstrap did not set a cookie');
+  // Drain the body so the socket is finished with before we return.
+  await response.text();
+  const match = /(insighthub_session=[^;,\s]+)/.exec(setCookie);
+  if (match === null) throw new Error(`no session cookie in: ${setCookie}`);
+  return match[1];
+}
+
 export interface TestServer {
   readonly port: number;
   readonly url: string;
+  /** Base HTTP URL — for `POST /api/session/bootstrap` and the document API. */
+  readonly httpUrl: string;
   readonly handle: WebSocketHandle;
   /** The durable store this server uses. Owned by the harness unless one was injected. */
   readonly store: DocumentStore;
   /** Directory holding the database file (`undefined` when a store was injected). */
   readonly dataPath: string | undefined;
+  /**
+   * The **real** authorization service this server was built with.
+   *
+   * Exposed so a test can bootstrap a session and hold the token the HTTP layer would set as a
+   * cookie; the socket layer only receives it when `authorization: 'enforced'`.
+   */
+  readonly authz: AuthzService;
   close(): Promise<void>;
 }
 
@@ -73,6 +122,21 @@ export interface TestServer {
 export interface TestServerOptions extends WebSocketServerOptions {
   /** Directory for a harness-created store. Ignored when `store` is supplied. */
   dataPath?: string;
+  /**
+   * Which authorization service the **WebSocket** layer receives.
+   *
+   * - `'permissive'` (default): a double that admits every socket and grants every capability.
+   *   The M1/M2-P0 suites join arbitrary document ids that exist in no membership table, so a
+   *   real service would deny them all and the suites would stop testing room mechanics
+   *   (`test-authz.ts` states the trade-off).
+   * - `'enforced'`: the real `AuthzService` (created on this server's data directory). A session
+   *   cookie is required at the upgrade and memberships decide document access — this is the
+   *   mode every Phase 2 test uses, and the only mode production ever runs.
+   *
+   * In both modes the HTTP layer always gets the real service, so the API side is never
+   * permissive.
+   */
+  authorization?: 'permissive' | 'enforced';
 }
 
 /**
@@ -85,7 +149,12 @@ export interface TestServerOptions extends WebSocketServerOptions {
  * from colliding on a fixed 3001.
  */
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
-  const { dataPath: requestedDataPath, store: injectedStore, ...transportOptions } = options;
+  const {
+    dataPath: requestedDataPath,
+    store: injectedStore,
+    authorization = 'permissive',
+    ...transportOptions
+  } = options;
 
   let store: DocumentStore;
   let dataPath: string | undefined;
@@ -113,17 +182,30 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(dataPath === undefined ? {} : { dataPath }),
   };
 
-  // M2 Phase 2: `createApp` requires an authorization service (A0 integration exception,
-  // `docs/DECISIONS.md` D-062 §2). These suites are about room and transport behaviour rather
-  // than authorization, so the service is real but no enforcement point consumes it until A3
-  // wires the WebSocket side. When the store was injected there is no data directory, so the
-  // membership table gets a temporary one of its own.
+  // `createApp` requires an authorization service (A0 integration exception, D-062 §2), and the
+  // HTTP surface must always be the real one — a permissive app would make the API tests
+  // meaningless. When the store was injected there is no data directory, so the membership
+  // table gets a temporary one of its own.
   const authzDirectory = dataPath ?? mkdtempSync(join(tmpdir(), 'insighthub-authz-test-'));
-  const authz = await createAuthz({ dataPath: authzDirectory });
+  // The document-metadata source is wired exactly as `index.ts` wires it, so no test can pass on a
+  // fixture that production does not use (`persistence/document-meta.ts`).
+  const documents = isDocumentMetaStore(store) ? new StoreDocumentCatalog(store) : undefined;
+  const authz = await createAuthz({
+    dataPath: authzDirectory,
+    ...(documents === undefined ? {} : { documents }),
+  });
   const ownsAuthz = dataPath === undefined;
 
+  // The socket layer gets the real service only when the test asked for enforcement; see
+  // `TestServerOptions.authorization` for why the default is the permissive double.
+  const socketAuthz = authorization === 'enforced' ? authz : new PermissiveTestAuthz();
+
   const server: Server = createServer(createApp(config, authz));
-  const handle = attachWebSocketServer(server, config, { ...transportOptions, store });
+  const handle = attachWebSocketServer(server, config, {
+    ...transportOptions,
+    store,
+    authz: socketAuthz,
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   const address = server.address() as AddressInfo;
@@ -132,21 +214,40 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   return {
     port,
     url: `ws://127.0.0.1:${port}${config.wsPath}`,
+    httpUrl: `http://127.0.0.1:${port}`,
     handle,
     store,
     dataPath,
+    authz,
     close: async () => {
       await handle.close();
       // Close the databases before removing their directories: on Windows an open handle makes
       // the removal fail, and a leaked temp directory per test run is its own bug.
       authz.close();
       await store.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+
+      // `server.close()` only calls back once every HTTP connection has drained, and the
+      // document-API tests use `fetch`, whose keep-alive pool holds sockets open. Unbounded, that
+      // is the same "the gate never returns" failure as TOOLING-P2 — so: release idle sockets
+      // immediately, and hard-drop whatever is left if the drain does not finish in time.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          server.closeAllConnections?.();
+          resolve();
+        }, 2_000);
+        timer.unref();
+        server.close(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+        server.closeIdleConnections?.();
+      });
+
       if (ownsStore && dataPath !== undefined) {
-        rmSync(dataPath, { recursive: true, force: true });
+        rmSync(dataPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       }
       if (ownsAuthz) {
-        rmSync(authzDirectory, { recursive: true, force: true });
+        rmSync(authzDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       }
     },
   };
@@ -190,8 +291,19 @@ export class TestClient {
   }
 
   /** Connect and complete the `connected` handshake. */
-  static async connect(url: string): Promise<TestClient> {
-    const socket = new WebSocket(url);
+  /**
+   * Connect and complete the `connected` handshake.
+   *
+   * `cookie` carries the server-issued session when the transport enforces authentication
+   * (`docs/CONTRACTS.md` §17.5). It is the **only** identity carrier the upgrade reads, which is
+   * why there is no `userId` option here: a test must not be able to helpfully self-declare one
+   * through the harness.
+   */
+  static async connect(url: string, options: { cookie?: string } = {}): Promise<TestClient> {
+    const socket = new WebSocket(
+      url,
+      options.cookie === undefined ? {} : { headers: { cookie: options.cookie } },
+    );
 
     // The recording listeners must be attached synchronously, before the `open` event
     // can fire: the server writes `connected` as soon as the upgrade completes, so a
@@ -204,11 +316,53 @@ export class TestClient {
     return client;
   }
 
-  #waitForOpen(): Promise<void> {
+  /**
+   * Attempt a connection and wait for the upgrade to be **refused**.
+   *
+   * Used by the negative tests: an unauthenticated upgrade must fail before a socket exists, so
+   * the observable outcome is a handshake error carrying the HTTP status — not a socket that
+   * opens and is then closed for an unexplained reason.
+   */
+  static async expectRefused(url: string, cookie?: string): Promise<number | undefined> {
+    const socket = new WebSocket(url, cookie === undefined ? {} : { headers: { cookie } });
+    return await new Promise<number | undefined>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('upgrade was neither refused nor opened')),
+        5000,
+      );
+      socket.once('unexpected-response', (_request, response) => {
+        clearTimeout(timer);
+        socket.terminate();
+        resolve(response.statusCode);
+      });
+      socket.once('open', () => {
+        clearTimeout(timer);
+        socket.close();
+        reject(new Error('the upgrade was accepted'));
+      });
+      socket.once('error', (error: Error & { statusCode?: number }) => {
+        clearTimeout(timer);
+        resolve(error.statusCode);
+      });
+    });
+  }
+
+  #waitForOpen(timeoutMs = 10_000): Promise<void> {
     if (this.socket.readyState === WebSocket.OPEN) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
-      this.socket.once('open', () => resolve());
-      this.socket.once('error', (error: Error) => reject(error));
+      // Bounded on purpose: if neither `open` nor `error` ever fires, an unbounded wait is a
+      // hung gate rather than a failing test (TOOLING-P2).
+      const timer = setTimeout(() => {
+        reject(new Error(`the socket neither opened nor errored within ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.socket.once('open', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      this.socket.once('error', (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
     });
   }
 

@@ -73,13 +73,17 @@ async function durableText(dataPath, documentId) {
 /** A bare WebSocket that records what the server says (used by the K probe). */
 async function openRawSocket(url) {
   const { loadShared, loadYjs } = await import('../lib/deps.mjs');
+  const { authzFixture } = await import('../lib/authz-fixture.mjs');
+  const { openWireSocket, waitForOpen } = await import('../lib/wire-socket.mjs');
   const shared = await loadShared();
   const Y = await loadYjs();
   const text = [];
   let binaryCount = 0;
   let closed = false;
-  const socket = new WebSocket(url);
-  socket.binaryType = 'arraybuffer';
+  // The upgrade is authenticated (`docs/CONTRACTS.md` §17.5), so the probe presents a real
+  // session cookie exactly as a browser would.
+  const { cookie } = await authzFixture().session();
+  const socket = await openWireSocket(url, { cookie });
   socket.addEventListener('message', (event) => {
     if (typeof event.data !== 'string') {
       binaryCount += 1;
@@ -94,25 +98,7 @@ async function openRawSocket(url) {
   socket.addEventListener('close', () => {
     closed = true;
   });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('raw socket did not open')), 10_000);
-    socket.addEventListener(
-      'open',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-    socket.addEventListener(
-      'error',
-      () => {
-        clearTimeout(timer);
-        reject(new Error('raw socket failed to open'));
-      },
-      { once: true },
-    );
-  });
+  await waitForOpen(socket, { label: 'the K probe socket' });
 
   return {
     socket,
@@ -326,6 +312,29 @@ export function register(runner) {
       const { before: pidBefore, after: pidAfter } = await ctx.stack.restartServer();
       ctx.note('restart', { pidBefore, pidAfter });
       assert(pidAfter !== pidBefore, 'this must be a real process restart');
+
+      // ## M2 Phase 2: the session has to be renewed, and that is a documented limitation
+      //
+      // Sessions are **process-scoped** (`docs/CONTRACTS.md` §17.2), so the restart above
+      // destroyed this page's cookie, and the client has no 401-driven re-bootstrap. Without a
+      // valid session the reconnect can never be admitted, so this scenario would end up
+      // measuring session recovery instead of durability.
+      //
+      // The harness therefore puts a freshly bootstrapped session into the browser's own cookie
+      // store. Everything the scenario claims is still the real path: the real reconnect, the
+      // real state-vector handshake and the real durable store. The client-side gap is recorded
+      // by `p2/S-session-scope-after-restart` (page never returns to `connected`, zero bootstrap
+      // calls) and `p2/5-session-revocation-is-everywhere`; it is reported for A1/A2, and this
+      // line becomes unnecessary the day the client re-bootstraps on its own.
+      ctx.note(
+        'connection status with the invalidated session (before renewal)',
+        await readConnectionStatus(writer),
+      );
+      await ctx.authz.renewBrowserSession(writer);
+      ctx.note(
+        'session renewed out-of-band',
+        'sessions are process-scoped and the client does not re-bootstrap (see p2/S)',
+      );
 
       // Back online: reconnect must reconcile the client's offline state with the
       // server's durable state (state-vector handshake, no special case).

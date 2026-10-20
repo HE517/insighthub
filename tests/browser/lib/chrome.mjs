@@ -4,9 +4,19 @@
  * Recorded browser facts for the report come from `CdpConnection.send(
  * 'Browser.getVersion')`, so the version string in the report is read from the
  * browser itself rather than hard-coded here.
+ *
+ * ## Why the child's output goes to a file descriptor, not a pipe
+ *
+ * A `stdio: 'pipe'` child keeps a libuv handle open in this process for as long as the write
+ * end exists, and Chromium's own children inherit it. `Browser.close` ends the browser process,
+ * but the pipe stayed readable until every inherited copy was gone — which is how the runner
+ * printed its summary and postflight and then never exited (measured: two live `PipeWrap`
+ * handles after every browser had been closed). Opening one log file in the throwaway profile
+ * and passing its descriptor keeps the launch diagnostics while holding **no** handle here: an
+ * orphaned browser process can no longer keep the suite alive.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -45,14 +55,17 @@ export class Browser {
   #connection;
   #userDataDir;
   #version;
+  #logPath;
+  #logFd = null;
 
-  constructor({ process, connection, userDataDir, version, executablePath, headed }) {
+  constructor({ process, connection, userDataDir, version, executablePath, headed, logPath }) {
     this.#process = process;
     this.#connection = connection;
     this.#userDataDir = userDataDir;
     this.#version = version;
     this.executablePath = executablePath;
     this.headed = headed;
+    this.#logPath = logPath;
   }
 
   get connection() {
@@ -90,11 +103,24 @@ export class Browser {
       args.unshift('--headless=new');
     }
 
-    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
+    /**
+     * One log file inside the throwaway profile, shared by the child's stdout and stderr.
+     *
+     * A file descriptor cannot keep this process's event loop alive; a pipe can (see the file
+     * header). The profile directory is removed on `close()`, so the log is thrown away with it.
+     */
+    const logPath = path.join(userDataDir, 'chrome-output.log');
+    const logFd = openSync(logPath, 'a');
+    const child = spawn(binary, args, { stdio: ['ignore', logFd, logFd] });
+    closeSync(logFd);
+    /** Chromium's own output, kept for the "it did not start" diagnostic. */
+    const browserLog = () => {
+      try {
+        return readFileSync(logPath, 'utf8').slice(-8_000);
+      } catch {
+        return '';
+      }
+    };
 
     const portFile = path.join(userDataDir, 'DevToolsActivePort');
     const deadline = Date.now() + timeoutMs;
@@ -117,13 +143,13 @@ export class Browser {
         }
       }
       if (child.exitCode !== null) {
-        throw new Error(`the browser exited immediately (code ${child.exitCode}): ${stderr}`);
+        throw new Error(`the browser exited immediately (code ${child.exitCode}): ${browserLog()}`);
       }
       await sleep(150);
     }
     if (port === undefined) {
       child.kill();
-      throw new Error(`the browser did not open a debugging port within ${timeoutMs}ms: ${stderr}`);
+      throw new Error(`the browser did not open a debugging port within ${timeoutMs}ms: ${browserLog()}`);
     }
 
     const response = await fetch(`http://127.0.0.1:${port}/json/version`);
@@ -138,9 +164,18 @@ export class Browser {
       version,
       executablePath: binary,
       headed,
+      logPath,
     });
   }
 
+  /**
+   * Stop the browser and prove the process is gone.
+   *
+   * `Browser.close` is the graceful path and is what actually ends Chromium's helper
+   * processes; the `taskkill /T /F` fallback (Windows) is only for the case where that did not
+   * happen in time, because a survivor is a real leak. The returned record is reported by
+   * `run.mjs`'s postflight.
+   */
   async close({ removeProfile = true } = {}) {
     try {
       await this.#connection.send('Browser.close');
@@ -158,9 +193,42 @@ export class Browser {
       exited.then(() => false),
       sleep(3_000).then(() => true),
     ]);
-    if (timedOut) this.#process.kill();
-    if (removeProfile) {
-      await rm(this.#userDataDir, { recursive: true, force: true }).catch(() => {});
+    let killed = false;
+    if (timedOut) {
+      killed = true;
+      // Windows has no process-group signal from Node, so the whole tree has to be named.
+      if (process.platform === 'win32' && this.#process.pid !== undefined) {
+        await new Promise((resolve) => {
+          const killer = spawn(
+            'taskkill',
+            ['/PID', String(this.#process.pid), '/T', '/F'],
+            { stdio: 'ignore' },
+          );
+          killer.once('exit', resolve);
+          killer.once('error', resolve);
+        });
+      }
+      try {
+        this.#process.kill();
+      } catch {
+        /* already gone */
+      }
     }
+
+    let profileRemoved = false;
+    if (removeProfile) {
+      try {
+        await rm(this.#userDataDir, { recursive: true, force: true });
+        profileRemoved = true;
+      } catch {
+        /* a leaked temp dir must not fail the run; the postflight counts what was removed */
+      }
+    }
+    return {
+      pid: this.#process.pid ?? null,
+      exitedCleanly: !killed,
+      killed,
+      profileRemoved,
+    };
   }
 }

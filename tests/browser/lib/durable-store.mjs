@@ -44,17 +44,25 @@ async function loadSqlite() {
 }
 
 /**
- * Open the database for inspection.
+ * Open one SQLite file from outside the server.
  *
- * Not `readOnly`: a WAL database that a crashed process left behind has to be
- * recovered on open, and SQLite will not do that read-only. `busy_timeout` is kept
- * short so an inspection can never look like a hang.
+ * The **single** place the harness decides how an external connection is opened and how long
+ * its handle lives, so `authz-fixture.mjs` (`authz.db`) and this module (`insighthub.db`)
+ * cannot drift into two connection-management conventions.
+ *
+ * Not `readOnly`: a WAL database that a crashed process left behind has to be recovered on
+ * open, and SQLite will not do that read-only. `busy_timeout` is kept short so an inspection
+ * can never look like a hang.
  */
-async function openInspector(dataPath, { busyTimeoutMs = 2_000 } = {}) {
+export async function openDatabaseFile(file, { busyTimeoutMs = 2_000 } = {}) {
   const sqlite = await loadSqlite();
-  const db = new sqlite.DatabaseSync(databaseFilePath(dataPath));
+  const db = new sqlite.DatabaseSync(file);
   db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   return db;
+}
+
+async function openInspector(dataPath, { busyTimeoutMs = 2_000 } = {}) {
+  return await openDatabaseFile(databaseFilePath(dataPath), { busyTimeoutMs });
 }
 
 /** True when the store has ever been created in this directory. */
