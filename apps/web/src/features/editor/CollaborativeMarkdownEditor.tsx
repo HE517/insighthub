@@ -46,6 +46,15 @@
  * (`AGENTS.md` R14), and it is passed to the remote-cursor extension for that purpose
  * alone. `updatedAt` belongs to the collaboration layer, so A2 neither computes nor
  * sends it (`docs/CONTRACTS.md` §15, M2-P0-2).
+ *
+ * ## Read-only (`readOnly`)
+ *
+ * The caller passes the one bit `capabilityGate(role).readOnly`, i.e. "a **known** role may
+ * not edit" (`docs/CONTRACTS.md` §17.9). It is applied by **reconfiguring a compartment**, so
+ * a demotion flips the flags on the existing view without remounting the editor and without
+ * touching `Y.Text`: text typed before the demotion stays in the document. The view is
+ * created once per session (`[session]`), so this prop must never be added to that effect's
+ * dependencies — a role change is not a document change.
  */
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -57,12 +66,18 @@ import type { CollaborativeSession } from '@insighthub/shared';
 
 import { createCollabTextBinding, type CollabTextBinding } from './collabTextBinding.js';
 import { createCodeMirrorSurface } from './codeMirrorSurface.js';
+import { deliverLocalChanges, editorEditability, runSessionHistory } from './editorEditability.js';
 import { publishEditorPresence } from './editorPresence.js';
 import { remoteCursors } from './remoteCursorExtension.js';
 
 export interface CollaborativeMarkdownEditorProps {
   /** An `active` session. The caller narrows `CollaborativeSessionResult` first. */
   session: CollaborativeSession;
+  /**
+   * `true` only when a **known** role without `canEdit` owns this document. `false` for
+   * `owner`/`editor` **and** for the unknown role, which must stay editable (R10, §17.9).
+   */
+  readOnly?: boolean;
   /** Optional handle so a parent can flush pending edits before tearing down. */
   bindingRef?: (binding: CollabTextBinding | null) => void;
   /** Diagnostics: called when the binding had to resync wholesale. */
@@ -79,6 +94,7 @@ const noCursors: Extension = [];
 
 export function CollaborativeMarkdownEditor({
   session,
+  readOnly = false,
   bindingRef,
   onResync,
 }: CollaborativeMarkdownEditorProps) {
@@ -91,6 +107,20 @@ export function CollaborativeMarkdownEditor({
   onResyncRef.current = onResync;
   const bindingRefCb = useRef(bindingRef);
   bindingRefCb.current = bindingRef;
+
+  /**
+   * The current read-only flag, in a ref for the same reason as the callbacks: the view is
+   * built in an effect keyed on `[session]` only, so a change of role must not restart that
+   * effect. The ref is updated during render, so both the creation path (initial value) and
+   * the delivery guard (latest value) see the truth without re-running the effect.
+   */
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+
+  /** Holds `editorEditability(readOnly)`; swapped in place, never rebuilt with the view. */
+  const editabilityRef = useRef<Compartment | null>(null);
+  if (editabilityRef.current === null) editabilityRef.current = new Compartment();
+  const editability = editabilityRef.current;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -111,7 +141,10 @@ export function CollaborativeMarkdownEditor({
         onLocalChanges: (changes) => {
           // `null` until the view has been constructed: that transaction is the
           // seeding of the buffer from `Y.Text`, not a user edit.
-          binding?.handleLocalChanges(changes);
+          if (binding === null) return;
+          // Read the flag through the ref: the editor is created once per session, so a
+          // closure over the first render's prop would freeze the role.
+          deliverLocalChanges(readOnlyRef.current, binding, changes);
         },
         onSelectionChange: (range) => {
           if (binding === null) return;
@@ -143,13 +176,22 @@ export function CollaborativeMarkdownEditor({
     const state = EditorState.create({
       doc: session.text.toString(),
       extensions: [
+        // Initial read-only state, from the prop as it stood when the view was created:
+        // a document opened by a viewer is read-only from its first keystroke, not a
+        // moment later. Later changes go through the reconfigure effect below.
+        editability.of(editorEditability(readOnlyRef.current)),
         cursorExtension.of(noCursors),
         lineNumbers(),
         keymap.of([
-          // The session's UndoManager, not CodeMirror history: see the module note.
-          { key: 'Mod-z', run: () => (session.undo(), true) },
-          { key: 'Mod-Shift-z', run: () => (session.redo(), true) },
-          { key: 'Mod-y', run: () => (session.redo(), true) },
+          // The session's UndoManager, not CodeMirror history: see the module note. These
+          // bindings also carry the read-only flag, because `session.undo()` is a local
+          // `Y.Text` write that CodeMirror's own `state.readOnly` check cannot see.
+          { key: 'Mod-z', run: () => runSessionHistory(readOnlyRef.current, session, 'undo') },
+          {
+            key: 'Mod-Shift-z',
+            run: () => runSessionHistory(readOnlyRef.current, session, 'redo'),
+          },
+          { key: 'Mod-y', run: () => runSessionHistory(readOnlyRef.current, session, 'redo') },
           ...defaultKeymap,
         ]),
         markdown(),
@@ -190,6 +232,28 @@ export function CollaborativeMarkdownEditor({
       view.destroy();
     };
   }, [session]);
+
+  /**
+   * Flip the read-only flags on the **existing** view when the gate changes.
+   *
+   * This is deliberately a separate effect with a primitive dependency: a role change
+   * (promotion or demotion) reconfigures a compartment, so the editor keeps its `Y.Doc`
+   * binding, its undo history and everything the user already typed. Rebuilding the editor
+   * here would be the "remount on permission change" regression, and would risk dropping
+   * text that never reached `Y.Text`.
+   *
+   * On mount this also runs (after the creation effect), dispatching an idempotent
+   * reconfiguration of the value the view was just created with.
+   */
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    view.dispatch({
+      effects: editability.reconfigure(editorEditability(readOnly)),
+    });
+    // `editability` is the per-editor compartment held in a ref: its identity never
+    // changes, so the only *behavioural* dependency is the boolean.
+  }, [readOnly, editability]);
 
   return <div className="markdown-editor" ref={hostRef} data-testid="markdown-editor" />;
 }

@@ -13,6 +13,7 @@ import {
   selectCollaborators,
   selectConnectionStatus,
   selectLocalAwareness,
+  selectRole,
   selectUndoState,
 } from './useCollaborativeSession.js';
 import { createFakeCollaborativeSession } from './testing/fakeCollaborativeSession.js';
@@ -84,6 +85,44 @@ describe('session selectors', () => {
     expect(names).toContain('Ada');
     expect(names.some((name) => name === undefined)).toBe(false);
     expect(store.getSnapshot().some((entry) => entry.clientId === 6)).toBe(false);
+    session.destroy();
+  });
+
+  it('reads the role through session.getRole(), the frozen seam', () => {
+    // `useSessionRole` is `createSessionStore(session, selectRole)` — this asserts the two
+    // halves of that: the selector delegates to the seam, and nothing re-derives a role from
+    // a payload (docs/CONTRACTS.md §17.9 rule 1).
+    const session = createSession();
+    const seam = vi.spyOn(session, 'getRole');
+
+    expect(selectRole(session)).toBeNull(); // unknown by default, never a guess
+    session.setRole('viewer');
+    expect(selectRole(session)).toBe('viewer');
+    expect(seam).toHaveBeenCalledTimes(2);
+
+    // The unknown state is also what a disposed session reports.
+    session.destroy();
+    expect(selectRole(session)).toBeNull();
+  });
+
+  it('announces a role change through the existing subscription', () => {
+    const session = createSession();
+    const store = createSessionStore(session, selectRole);
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    const before = store.getSnapshot();
+    session.setRole('editor');
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(before).toBeNull();
+    expect(store.getSnapshot()).toBe('editor');
+
+    // A demotion reuses the same channel — no second mechanism (§17.9 rule 4).
+    session.setRole('viewer');
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot()).toBe('viewer');
+
     session.destroy();
   });
 });
