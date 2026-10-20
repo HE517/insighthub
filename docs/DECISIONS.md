@@ -2383,3 +2383,77 @@ roomRole : null`。原因：存储的 `roomRole` 可能比房间活得久（fata
 
 **后果。** F1 的输入端闭合（A2 有了唯一、不能猜的角色来源），B3 以可审计的方式结案并留下具名残留；
 代价是禁令清单多一条、契约到 v7，且"UI 能否即时反映权限变更"被明确划到 M2 之外。
+
+---
+
+## D-067 · 2026-10-18 · accepted · A2 F1 UI 半场：门控生效、ctrl-Z 缺口、以及三场景重新瞄准 (M2 Phase 2 closure)
+
+**背景。** A2 在 `agent/a2-m2-p2-ui-role @ 5afdab9`（base `ddf133d`）实现 UI 门控，12 个 `apps/web/src/**`
+文件、+915/−37，未触碰 `docs/**`、`packages/**`、`apps/server/**`、`apps/web/src/collab/**`、
+`tests/browser/**`。三门禁全绿（typecheck 0 / test 0：vitest **34 files / 378 tests** + server 180/180 /
+build 0）。
+
+### 1. 复核：门控确实只读冻结 seam，且覆盖三条写路径
+
+| 声称 | 复核 |
+| --- | --- |
+| 角色只来自 `session.getRole()` | `useSessionRole` → `useSessionSnapshot(session, selectRole)` → `selectRole` 仅 `return session.getRole()`；复用既有 `createSessionStore`，**无第二订阅通道** |
+| 未知角色不锁死 | `capabilityGate(null).readOnly === false`；`readOnlyNoticeFor` 对 `gate.role === null` 返回 `null`（双保险：既不只读、也不出提示） |
+| 不镜像 Redux | `documentSlice.ts` 的 `role` / `documentRoleReceived` 槽位**已删除**，头注释写明理由 |
+| 只读覆盖非 UI 写路径 | `editorEditability` 同时设 `EditorState.readOnly` 与 `EditorView.editable`，并对 `session.undo()/redo()` 加闸——见下 |
+
+### 2. 一处真实 bug（A2 在自己的第一版里发现的）
+
+| 字段 | 内容 |
+| --- | --- |
+| **Problem** | 只读 viewer 按 `Ctrl+Z` 仍能改 `Y.Text` |
+| **Root Cause** | `@codemirror/commands` 的命令会读 `state.readOnly` 自我禁用，但**手写 keymap 绑定不继承该检查**；而这里的撤销不是 CodeMirror history，是 `session.undo()`——一个对 `Y.Text` 的**本地写入**（R13） |
+| **Impact** | viewer 在"曾为 editor / 角色未知时输入过、随后 rejoin 报更低角色"的状态下按撤销，会删掉已进入 `Y.Text` 的文本；该更新服务端必拒 → 本地分叉（**非安全缺陷**，服务端仍在副作用前拒绝） |
+| **Fix** | `runSessionHistory(readOnly, session, 'undo'\|'redo')`：只读时不做任何事但吞掉按键；三个 keymap 绑定改走它 |
+| **Regression Test** | `editorRoleGate.test.ts`："refuses to undo while read-only…" 断言 `undo/redo` 未被调用且 `Y.Text` 不变（修复前必红） |
+
+**为什么记这一条**：只读"看起来"是 UI 层的事，但撤销/重做是一条**绕过编辑器的写通道**。凡是"只读"的实现，
+都必须把**所有本地写入路径**列一遍，而不是只设 `readOnly` 一个 facet。
+
+### 3. 分支名：以实际检出为准
+
+A0 派发单写 `agent/a2-m2-p2-ui`，实际 worktree 检出 `agent/a2-m2-p2-ui-role`。**以实际为准，不 rename**：
+分支名不承载语义，重命名既有提交只会制造一次无收益的历史改写。此后引用一律用 `agent/a2-m2-p2-ui-role`。
+
+### 4. 浏览器 41/44：三个 errored 是门控生效的**证据**，不是回归
+
+`p2/1-viewer-cannot-write`、`p2/2-identity-cannot-be-self-declared`、`p2/4-role-capability-consistency`
+全部 timeout 于"the page never received a FORBIDDEN error frame"。原因：viewer 页面现在是
+`contenteditable=false` + `state.readOnly`，**UI 不再产生写入** → 没有东西让服务端拒绝。
+
+**决定（A0）：采用 A2 的建议 (a)，不做 (b)。**
+
+| 方案 | 判定 |
+| --- | --- |
+| **(a) UI 只读断言 + 用非 UI 路径证明服务端仍拒绝**（wire oracle / 页面内对 `EditorView` 直接 dispatch） | **采纳**。这两个断言回答两个不同问题：「UI 是否挡住」与「服务端是否是边界」，缺一不可 |
+| (b) 让这些场景改用 editor 身份打字、viewer 只测读 | **否决**。它把"UI 不是安全边界"这条最重要的性质从证据里删掉了 |
+
+**禁止**为了让这三个场景变绿而放宽门控（A2 已按此执行：只报告、不改测试、不放宽）。
+
+### 5. `main` 仍不出现红窗口
+
+与 D-063 §3 同一处理：A2 **不单独合入 `main`**（否则 `main` 的浏览器门禁立刻 41/44）。
+A6 的 worktree 由 A0 先 merge `agent/a2-m2-p2-ui-role`，在集成后的树上重新瞄准三个场景并补齐证据；
+**A0 再把 A6 整体合入 `main`（A2 + A6 一次性进入）**。
+
+### 6. 新增工程规则 R16（写入 `AGENTS.md` §1）
+
+同一目录下不得存在**仅大小写不同**的两个文件名。理由：Windows 的 TS 编译报 `TS1149`，而 CI/Linux
+不会——A2 的 `readOnlyNotice.ts` 与 `ReadOnlyNotice.tsx` 就撞在这一点上，最后以 `readOnlyNoticeCopy.ts`
+解决。这类错误只在特定平台上出现，必须写成规则而不是靠踩到的人记住。
+
+### 7. 带入 A6 的未验证项（不得省略）
+
+- 提示文案在**真实浏览器**中可见（本轮只有 SSR markup、state 与交付层断言）；
+- 角色变化时 **DOM 不重挂载**（本轮只证明 state 层 `reconfigure`）；
+- `getRole() === null` 的**真实浏览器**窗口（首帧 / 离线 / rejoin 前）编辑器确实可输入；
+- 角色滞后（D-066 §5）与"UI 不是安全边界"这两条**禁令式**表述。
+
+**后果。** F1 的两半都实现完毕且经 A0 复核；UI 现在真的会挡住 viewer 的本地写入（含一条容易被忽略的
+撤销通道），而"服务端才是边界"这件事因为三个场景失效反而获得了更明确的验证计划——只是需要 A6 用
+非 UI 路径把它重新证明一遍。

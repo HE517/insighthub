@@ -35,6 +35,7 @@ Supervisor instead of guessing.
 | R13  | A local undo reverts only local/AI-origin edits. Never undo a remote collaborator's change, and never implement undo as a text-snapshot restore. Use `UNDO_TRACKED_ORIGINS`.                                                                                                                |
 | R14  | Collaborator UI data must come from the schema-validated `session.getCollaborators()`, never from `session.awareness.getStates()`. The raw `Awareness` instance is allowed only as input to a Yjs/CodeMirror collaboration binding — never business UI state, never Redux, never persisted. |
 | R15  | One socket carries **at most one** active document room. A second `join-room` means atomic replace, not a second concurrent room. Never route a binary frame without an unambiguous room.                                                                                                   |
+| R16  | Two files in the same directory must never differ **only by letter case** (`readOnlyNotice.ts` vs `ReadOnlyNotice.tsx`). On a case-insensitive filesystem `tsc` fails with `TS1149` while a Linux CI passes — a break that only shows up on one platform. Name the pair apart (e.g. `…Copy.ts` + `…Notice.tsx`). |
 
 ## 2. Supervisor Review Required
 
