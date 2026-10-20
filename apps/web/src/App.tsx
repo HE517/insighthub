@@ -30,6 +30,13 @@
  *
  * `useServerHealth` remains: it is a plain HTTP `GET /health` poll, opens no socket, and
  * is the backend-liveness indicator.
+ *
+ * ## Role (M2 Phase 2)
+ *
+ * This component does **not** hold or pass the document role. The role is read from the
+ * collaboration session inside `DocumentWorkspace` (`session.getRole()`, §17.9), and
+ * `docs/DECISIONS.md` D-065 §3 forbids mirroring it into Redux or React state here: a copy in
+ * the shell would be a second source that can disagree with the seam.
  */
 import { Card, Input, Layout, Space, Tag, Typography } from 'antd';
 
@@ -52,7 +59,6 @@ export function App() {
   const dispatch = useAppDispatch();
   const activeDocumentId = useAppSelector((state) => state.document.activeDocumentId);
   const pendingDocumentId = useAppSelector((state) => state.document.pendingDocumentId);
-  const role = useAppSelector((state) => state.document.role);
 
   return (
     <Layout className="app-shell">
@@ -101,7 +107,6 @@ export function App() {
               key={activeDocumentId}
               documentId={activeDocumentId}
               user={presenceUserFor(identity)}
-              role={role}
             />
 
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>

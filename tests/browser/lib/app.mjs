@@ -41,7 +41,20 @@ export const SELECTORS = {
   remoteCaret: '[data-insighthub-cursor="caret"]',
   remoteCursorLabel: '[data-insighthub-cursor="label"]',
   remoteSelection: '[data-insighthub-selection]',
+  /** The read-only notice (`apps/web/src/features/permissions/ReadOnlyNotice.tsx`). */
+  readOnlyNotice: '[data-testid="read-only-notice"]',
+  sessionIdentity: '[data-testid="session-identity"]',
 };
+
+/**
+ * Words that must never appear in the read-only notice
+ * (`docs/CONTRACTS.md` §17.9, `docs/DECISIONS.md` D-064 §1).
+ *
+ * The notice may explain *why* typing does nothing. It may not imply that anything was
+ * saved, and it may not claim that a role change reached the UI immediately — the client
+ * only learns a role from `room-joined` (D-066 §5).
+ */
+export const READ_ONLY_NOTICE_BANNED_WORDS = ['saved', 'saving', 'immediately', 'instant'];
 
 /** Load the instrumentation source once, so it can be injected on every page. */
 let instrumentSource;
@@ -99,7 +112,7 @@ export async function waitForSessionActive(page, { timeoutMs = 30_000 } = {}) {
  * Switch the workspace to another document, the way a user does it: focus the
  * document field, replace its contents, press Enter.
  *
- * ## Why this writes a membership row
+ * ## Why this *may* write a membership row
  *
  * Since `docs/CONTRACTS.md` §17.5 a `join-room` requires a membership row, and every scenario's
  * document id is its own (`a6-*`) so scenarios stay isolated. A switch to a document with no
@@ -107,10 +120,21 @@ export async function waitForSessionActive(page, { timeoutMs = 30_000 } = {}) {
  * exist" — which would look like a product failure. The harness therefore *arranges access* for
  * the page's own identity before switching, with the `ifAbsent` rule: a seeded or
  * scenario-chosen role is never overwritten by the harness.
+ *
+ * ## Why the write is optional (`arrangeAccess: false`)
+ *
+ * `docs/DECISIONS.md` D-065 §5 (the F3 evidence condition) makes an implicit membership write a
+ * **false-success hazard**: a fixture that quietly gives itself `owner` can turn a denial
+ * scenario green, and it can make a `getRole() === null` window look like a permission decision.
+ * A scenario that must observe "this identity has no role at all" therefore passes
+ * `arrangeAccess: false`, and *nothing* on the page-opening path touches `authz.db`. The default
+ * stays `true` so legacy scenarios keep working unchanged.
  */
-export async function setDocumentId(page, documentId) {
+export async function setDocumentId(page, documentId, { arrangeAccess = true } = {}) {
   const identity = page.demoUserId ?? DEFAULT_DEMO_USER;
-  await authzFixture().grant(documentId, identity, 'owner', { ifAbsent: true });
+  if (arrangeAccess) {
+    await authzFixture().grant(documentId, identity, 'owner', { ifAbsent: true });
+  }
   await page.click(SELECTORS.documentInput);
   await page.pressKey('a', { modifiers: 2 }); // Ctrl+A selects the field contents.
   await page.insertText(documentId);
@@ -292,6 +316,15 @@ export async function installEditorProbe(page) {
         viewId: probe.viewIds.get(view) ?? 0,
         anchor: main.anchor,
         head: main.head,
+        /**
+         * The two read-only facts, read from the live `EditorState`/`EditorView` rather than
+         * from a DOM attribute alone: `EditorState.readOnly` is what CodeMirror's commands and
+         * input handlers consult, and the content element's `contenteditable` attribute is what
+         * `EditorView.editable` makes the browser enforce. A gate that set only one of them
+         * would look correct in whichever one a test happened to check.
+         */
+        readOnly: view.state.readOnly === true,
+        contentEditable: view.contentDOM?.getAttribute('contenteditable') ?? null,
       };
     };
 
@@ -447,6 +480,165 @@ export async function readUndoState(page) {
   );
 }
 
+/* -------------------------------------------------------------------- *
+ * The role gate as the browser actually renders it (M2 Phase 2 / A7 F1)
+ * -------------------------------------------------------------------- */
+
+/**
+ * Everything the browser shows about the role gate, read from the **live DOM and the real
+ * `EditorView`** — not from a prop and not from the source.
+ *
+ * Three independent observations are folded into one call on purpose, because §17.9's
+ * consequence ("a known non-editing role makes the editor read-only and says so; an unknown
+ * role must never lock the editor") is only proven when all three agree:
+ *
+ * | Field | Read from | What it proves |
+ * | --- | --- | --- |
+ * | `contentEditable` | the real `.cm-content` attribute | the browser refuses the keystroke (`EditorView.editable`) |
+ * | `viewReadOnly` | `EditorView.state.readOnly` of the live view | CodeMirror's own gate (`EditorState.readOnly`) |
+ * | `notice` | `[data-testid="read-only-notice"]` + `getBoundingClientRect` | the explanation is **visible**, not merely present |
+ * | `roleTag` | the `role: …` chip in the card title | `session.getRole()`'s value as the UI renders it (`null` = no chip) |
+ */
+export async function readEditorGate(page) {
+  return page.evaluate(() => {
+    const editor = document.querySelector('.cm-editor');
+    const content = document.querySelector('.cm-content');
+    const notice = document.querySelector('[data-testid="read-only-notice"]');
+    const rect = notice === null ? null : notice.getBoundingClientRect();
+    const style = notice === null ? null : getComputedStyle(notice);
+    // The header chip is the only element whose trimmed text is exactly `role: <something>`.
+    const chip = [...document.querySelectorAll('span')].find((node) =>
+      /^role:\s*\S+$/.test((node.textContent ?? '').trim()),
+    );
+    const probe = window.__qa?.probe;
+    const state = typeof probe?.state === 'function' ? probe.state() : null;
+    return {
+      editorPresent: editor !== null,
+      contentEditable: content === null ? null : content.getAttribute('contenteditable'),
+      viewId: state?.viewId ?? null,
+      viewReadOnly: state === null ? null : state.readOnly === true,
+      viewText: state?.text ?? null,
+      notice: {
+        present: notice !== null,
+        text: notice === null ? null : (notice.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        title: notice?.querySelector('.read-only-notice__title')?.textContent?.trim() ?? null,
+        detail: notice?.querySelector('.read-only-notice__detail')?.textContent?.trim() ?? null,
+        testId: notice === null ? null : notice.getAttribute('data-testid'),
+        visible:
+          notice !== null &&
+          rect !== null &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style !== null &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          style.opacity !== '0',
+        width: rect === null ? null : Math.round(rect.width),
+        height: rect === null ? null : Math.round(rect.height),
+      },
+      roleTag: chip === undefined ? null : (chip.textContent ?? '').trim(),
+      undoState: document.querySelector('[data-testid="undo-state"]')?.textContent?.trim() ?? null,
+    };
+  });
+}
+
+/**
+ * Stamp a token on the live `.cm-editor` element.
+ *
+ * `EditorView.findFromDOM()` returns an object, but two evaluations cannot compare object
+ * identity across the CDP boundary. A property on the DOM node can be read back later, so
+ * "the same element, not a rebuilt one" becomes an assertion instead of an inference — which is
+ * what `docs/DECISIONS.md` D-067 §7 asks A6 to prove (A2 only measured the `reconfigure`).
+ *
+ * The mount/unmount counters come from the page's own `MutationObserver`
+ * (`instrument/page-instrument.js`), so they answer the same question a second way.
+ */
+export async function markEditorDom(page, token) {
+  return page.evaluate((value) => {
+    const editor = document.querySelector('.cm-editor');
+    if (editor === null) return { ok: false, reason: 'no .cm-editor in the DOM' };
+    editor.__qaIdentityMarker = value;
+    return {
+      ok: true,
+      mounts: window.__qa.editor.mounts,
+      unmounts: window.__qa.editor.unmounts,
+      live: window.__qa.editor.live,
+    };
+  }, token);
+}
+
+/** Read the marker back, together with the mount counters. */
+export async function readEditorDomMarker(page) {
+  return page.evaluate(() => {
+    const editor = document.querySelector('.cm-editor');
+    return {
+      present: editor !== null,
+      marker: editor === null ? null : (editor.__qaIdentityMarker ?? null),
+      mounts: window.__qa.editor.mounts,
+      unmounts: window.__qa.editor.unmounts,
+      live: window.__qa.editor.live,
+    };
+  });
+}
+
+/**
+ * Outbound **SYNC** frames (frame type `0`) the page sent for one document.
+ *
+ * Awareness frames (frame type `1`) are excluded deliberately: a read-only viewer still
+ * publishes its cursor (`§17.5`: AWARENESS requires `canRead` only), so counting all binary
+ * frames would make "no write frame was emitted" false for a reason that has nothing to do with
+ * writing text.
+ */
+export async function countOutboundSyncFrames(page, documentId) {
+  return page.evaluate((id) => {
+    return window.__qa.frames.filter(
+      (frame) =>
+        frame.direction === 'out' &&
+        frame.kind === 'binary' &&
+        frame.frameType === 0 &&
+        (frame.documentId === id || frame.documentId === null || frame.documentId === undefined),
+    ).length;
+  }, documentId);
+}
+
+/**
+ * Send one **SYNC update** frame on the page's own socket, bypassing the editor entirely.
+ *
+ * This is the "UI is not a security boundary" instrument (`docs/DECISIONS.md` D-065 §4 point 4):
+ * the frame travels over the browser's own authenticated connection, so the server's answer is
+ * observed by the real client — but no UI control, no role gate and no keyboard produced it.
+ *
+ * The bytes are built by the harness with the frozen codec (`packages/shared`), because the
+ * page's own `Y.Doc` is module-scoped and not reachable from an injected script. What the frame
+ * *carries* is therefore harness-authored; *who sends it* is the real page.
+ */
+export async function sendSyncUpdateFromPage(page, documentId, base64) {
+  return page.evaluate(
+    (id, encoded) => {
+      const result = window.__qa.sendBinary(id, encoded);
+      return { ...result, frame: window.__qa.frames.at(-1) ?? null };
+    },
+    documentId,
+    base64,
+  );
+}
+
+/**
+ * Deliver one **server** control frame to the page's own message handler.
+ *
+ * Used for the one thing the browser cannot otherwise be made to do: believe a role it was not
+ * given. The envelope is built with `packages/shared`'s own constructor, so the client accepts
+ * it exactly as it accepts a real `room-joined`; the server is not involved and is not
+ * simulated afterwards — what it answers to the resulting write is observed for real.
+ */
+export async function deliverServerFrame(page, documentId, envelopeJson) {
+  return page.evaluate(
+    (id, text) => window.__qa.injectRawText(id, text),
+    documentId,
+    envelopeJson,
+  );
+}
+
 /** Remote cursor / selection DOM as the user sees it. */
 export async function readRemoteCursorDom(page) {
   return page.evaluate(() => {
@@ -528,6 +720,45 @@ export async function waitForServerErrorCode(page, code, { timeoutMs = 20_000, d
 /** Every close code the page has observed, with its document and reason. */
 export async function pageCloseCodes(page) {
   return page.evaluate(() => window.__qa.closeCodes());
+}
+
+/** How many `error` frames with `code` the page has received for a document. */
+export async function countServerErrorCode(page, code, documentId) {
+  const frames = await inboundControl(page, documentId);
+  return frames.filter((frame) => frame.messageType === 'error' && frame.code === code).length;
+}
+
+/**
+ * Wait until the page receives a **new** `error` frame with `code` — i.e. one beyond
+ * `afterCount`.
+ *
+ * `waitForServerErrorCode` answers "has this code ever arrived". That is too weak for a
+ * scenario that provokes the code itself: any earlier frame of the same code would satisfy it,
+ * and the scenario would pass without having tested what it claims. Since M2 Phase 2 those
+ * scenarios send their write **themselves** (a SYNC frame on the page's own socket), so "the
+ * denial must be newer than my attempt" is the honest question.
+ */
+export async function waitForNewServerErrorCode(
+  page,
+  code,
+  { documentId, afterCount = 0, timeoutMs = 20_000 } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const frames = await inboundControl(page, documentId);
+    const matches = frames.filter((frame) => frame.messageType === 'error' && frame.code === code);
+    if (matches.length > afterCount) return { frame: matches[afterCount], count: matches.length };
+    if (Date.now() >= deadline) {
+      const seen = frames.map(
+        (frame) => `${frame.messageType}${frame.code === undefined ? '' : `(${frame.code})`}`,
+      );
+      throw new Error(
+        `the page never received a new ${code} error frame beyond ${afterCount} ` +
+          `(saw ${matches.length}: ${seen.join(', ') || 'nothing'})`,
+      );
+    }
+    await sleep(100);
+  }
 }
 
 /* -------------------------------------------------------------------- *

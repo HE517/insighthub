@@ -140,29 +140,44 @@ async function main() {
    *
    * `role` controls the membership row the harness arranges for this (document, identity)
    * pair: `undefined` = fill in `owner` **only when no row exists** (legacy scenarios),
-   * `null` = do not touch membership (the scenario manages it), a string = same "only if
-   * absent" rule with that role. A scenario that is *deciding* a role calls
-   * `ctx.authz.grant(...)` explicitly.
+   * `null` = **write nothing at all** ("the scenario manages membership, or deliberately has
+   * none"), a string = same "only if absent" rule with that role. A scenario that is
+   * *deciding* a role calls `ctx.authz.grant(...)` explicitly.
+   *
+   * `role: null` has to silence **both** membership writers on this path — the one here and the
+   * one inside `setDocumentId` — because an implicit `owner` row is exactly the false-success
+   * hazard `docs/DECISIONS.md` D-065 §5 turned into an evidence condition (A6 F3).
    */
-  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role } = {}) {
-    const page = await openInstrumentedPage({ target, as });
+  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role, offlineFirst = false } = {}) {
+    const page = await openInstrumentedPage({ target, as, offlineFirst });
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
     if (documentId !== undefined) {
-      if (role !== null) {
+      const arrangeAccess = role !== null;
+      if (arrangeAccess) {
         // `ifAbsent` is load-bearing: asking for `owner` on `demo-document` for `demo-linus`
         // must not promote the seeded `viewer` the denial scenarios depend on.
         await authz.grant(documentId, as, role ?? 'owner', { ifAbsent: true });
       }
       const { setDocumentId } = await import('./lib/app.mjs');
-      await setDocumentId(page, documentId);
+      await setDocumentId(page, documentId, { arrangeAccess });
     }
     return page;
   }
 
-  /** Instrumented page on the app URL, without waiting for a usable session. */
-  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER } = {}) {
+  /**
+   * Instrumented page on the app URL, without waiting for a usable session.
+   *
+   * `offlineFirst` makes the page "offline" **before its first collaboration frame**: the
+   * instrumentation rewrites every new collaboration socket to an unreachable port *and* this
+   * script runs before any application script. The client therefore never completes a
+   * `join-room`, which is the honest way to construct the `getRole() === null` window
+   * (`docs/CONTRACTS.md` §17.9 rule 2: before the first successful join) without arranging any
+   * membership at all. `--keep-open` runs still have a reachable URL; `setOffline(false)`
+   * restores the real socket.
+   */
+  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER, offlineFirst = false } = {}) {
     const connection = (target ?? browser).connection;
     const page = await newPage(connection);
     openPages.push(page);
@@ -172,6 +187,10 @@ async function main() {
       await page.addInitScript(`window.__qaIdentity = ${JSON.stringify(as)};`);
     }
     await page.addInitScript(instrumentSource);
+    if (offlineFirst) {
+      // Order is load-bearing: `__qa` exists by now, and no application script has run yet.
+      await page.addInitScript('window.__qa.setOffline(true);');
+    }
     /** Which demo identity this page claims; `setDocumentId` reuses it for its own grant. */
     page.demoUserId = as;
     await page.goto(stack.appUrl);

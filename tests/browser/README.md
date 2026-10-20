@@ -13,6 +13,7 @@ It covers two milestones:
 | M1 collaboration | `suite/00…07` | editor, IndexedDB, realtime, presence, offline/reconnect, chaos, performance, lifecycle, wire robustness |
 | M2 durable persistence | `suite/10-m2-durability.mjs` | the server's document survives room eviction, a hard process kill, compaction, and is never faked on a failed write |
 | M2 Phase 2 authorization | `suite/20-m2-phase2-authz.mjs` | viewer/editor/owner enforcement, identity cannot be self-declared, non-disclosure, session revocation, token never reachable by JS |
+| M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
 
 ## Why there is no Playwright
 
@@ -187,19 +188,50 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `07-robustness.mjs` | frozen error codes for malformed/oversized/unsigned traffic, and browser survival |
 | `10-m2-durability.mjs` | M2-P0-1: room emptied, real process restart, offline client + restart, compaction, persist failure, document isolation, concurrent cold joins, backlog-overflow constructibility |
 | `20-m2-phase2-authz.mjs` | M2 Phase 2: viewer cannot write (P2-1), identity cannot be self-declared (P2-2), non-disclosure 404 (P2-3), role/capability consistency (P2-4), role change + session revocation (P2-5), token invisible to JS (P2-9), what a restart really does to a session |
+| `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
 
 | Scenario id | P2 | Where the assertion comes from |
 | --- | --- | --- |
-| `p2/1-viewer-cannot-write` | P2-1 | real typing into a `viewer` editor; the `FORBIDDEN` frame the browser received; the unchanged durable bytes; the owner's later edit arriving on the same socket |
-| `p2/2-identity-cannot-be-self-declared` | P2-2 | `mode: 'readwrite'` claimed by the client itself; `userId` injected into the join payload from the page's socket, plus query/header/in-payload claims from an oracle; `room-joined.role` stays `viewer` |
+| `p2/1-viewer-cannot-write` | P2-1 | **re-aimed** (see below): the viewer page's editor is read-only in the DOM *and* in `EditorState`, a real keystroke changes nothing and emits no SYNC frame — then a genuine SYNC update on the page's own socket is answered `FORBIDDEN`, the durable bytes are unchanged, no peer sees it, the socket stays open, and the owner's later edit arrives on it |
+| `p2/2-identity-cannot-be-self-declared` | P2-2 | `mode: 'readwrite'` claimed by the client itself; `userId` injected into the join payload from the page's socket, plus query/header/in-payload claims from an oracle; `room-joined.role` stays `viewer`; the UI stays read-only; a write sent on that same socket is still refused |
 | `p2/3-non-disclosure-404` | P2-3 | the page's own `fetch` for an unknown id, a document outside the membership, and its own document; bodies and headers compared byte-for-byte; `401` without a session |
-| `p2/4-role-capability-consistency` | P2-4 | one table over owner/editor/viewer: `documentCapabilities`, HTTP, WS join, WS frame and `room-joined.role`, with the browser performing the keystroke |
+| `p2/4-role-capability-consistency` | P2-4 | one table over owner/editor/viewer: `documentCapabilities`, HTTP, WS join, WS frame, `room-joined.role` **and the browser's own editable/read-only state**, with the browser performing the keystroke (or the bypassed write) |
 | `p2/5-role-change-is-re-evaluated` | P2-5 | demotion refused in the browser on the live socket; promotion accepted on one live oracle socket, without reconnecting |
 | `p2/5-session-revocation-is-everywhere` | P2-5 | `DELETE /api/session` → `401` on HTTP and on the WS upgrade, through the proxy and directly; the page's own revocation; the already-open socket measured |
 | `p2/9-token-not-exposed-to-js` | P2-9 | `Network.getCookies` (what the browser holds, `HttpOnly`) against `document.cookie`, `localStorage`, `sessionStorage`, `/api/session`, the bootstrap body and the server log |
 | `p2/S-session-scope-after-restart` | limitation | records that a restarted server invalidates the session **and** that the page does not re-bootstrap; then proves a renewed session restores writing |
+| `f1/1-viewer-is-read-only-and-not-remounted` | F1 (1) | a viewer page: `contenteditable="false"`, `EditorState.readOnly`, a visible `read-only-notice` whose copy says "read-only for your role" and contains none of `saved` / `saving` / `immediately` / `instant`, a real keystroke that changes nothing and emits no SYNC frame — and the same `.cm-editor` element (marker + `EditorView` identity + mount counters) before and after the demotion, through the reconnect |
+| `f1/2-owner-and-editor-have-no-regression` | F1 (2) | owner/editor: editable UI, typing persists, `Mod-z` still reverts through the session's `Y.UndoManager`, a remote edit merges, and a document switch still works (and stays isolated) |
+| `f1/3-unknown-role-does-not-lock-the-editor` | F1 (3) | `getRole() === null` in a real browser: offline from before the first frame, no `room-joined`, no membership row — the editor is editable, a real keystroke is accepted, a Yjs update appears in the local replica, and after an explicitly granted membership the server durably holds that text |
+| `f1/4-ui-gate-is-not-a-security-boundary` | F1 (4) | the page is fed a schema-valid forged `room-joined(role: 'owner')`: the UI becomes editable and the notice disappears — and the write it then produces (keystroke **and** an explicit SYNC frame) is answered `FORBIDDEN`, with nothing applied, persisted or broadcast, no reconnect, and the socket still receiving |
+
+### Re-aimed by D-067 §4: the UI gate removed the write, not the assertion
+
+A2's gate (D-067) makes a viewer's editor `EditorState.readOnly` + `EditorView.editable = false`
+and refuses the local write in the delivery layer as well, so the three scenarios that used to
+**type into a viewer's editor and wait for the `FORBIDDEN`** had nothing left to send, and timed
+out. A0's decision was to keep both questions:
+
+| Question | How it is answered |
+| --- | --- |
+| Does the **UI** stop a viewer from editing? | `assertUiReadOnly` + `assertKeystrokeProducesNoWrite` (`lib/role-gate.mjs`): DOM, `EditorState`, a visible notice, and a real keystroke that changes nothing and emits no SYNC frame |
+| Is the **server** still the boundary? | `sendBypassWrite`: a genuine SYNC update built with `packages/shared`'s codec, sent over the **page's own authenticated socket** (`window.__qa.sendBinary`), so the `FORBIDDEN` is still received by the real browser — and it must be a **new** frame (`waitForBypassDenial`), not one that arrived earlier |
+
+Neither assertion was weakened and no scenario was deleted. What did change: a viewer's keystroke
+is now *expected* to produce nothing, and the `FORBIDDEN` is provoked by a write that bypasses the
+editor on purpose.
+
+### Two things a green run must not be read as claiming
+
+- **Role changes are not reflected in the UI immediately.** The client learns its role only from
+  `room-joined` (§17.9 rule 1) and Phase 2 has no server→client role-change message, so the gate
+  can lag until the next successful join. `f1/1` measures that lag instead of hiding it.
+- **Revocation is request-scoped, not retroactive.** An already-established socket keeps the
+  identity it was admitted with; a *role* change is re-derived per frame, a *revoked session* is
+  not. `p2/5-session-revocation-is-everywhere` records `writeApplied: true` for that socket.
+  Do not read "the upgrade is refused" as "existing connections are terminated".
 
 ## Sessions and membership in the suite (M2 Phase 2)
 
@@ -247,6 +279,33 @@ authorization store as a passing test.
 
 Every write appears in the scenario's evidence as an `authz fixture: …` line, so no scenario
 silently grants itself access.
+
+### The fixture must never create access implicitly (F3 — an evidence condition, not a note)
+
+`docs/DECISIONS.md` D-065 §5 turned the old F3 remark into an **evidence condition**: a fixture that
+quietly writes an `owner` row can turn a denial scenario green, and can make a `getRole() === null`
+window look like a permission decision. Two call sites used to do exactly that for *every* page that
+opened a document:
+
+| Site | Before | Now |
+| --- | --- | --- |
+| `run.mjs#newAppPage` | always wrote `owner` with `ifAbsent` | `role: null` writes **nothing** |
+| `lib/app.mjs#setDocumentId` | always wrote `owner` with `ifAbsent` | `arrangeAccess: false` writes **nothing** |
+
+`role: null` silences **both**, so a scenario that needs "this identity has no role at all" cannot
+be helped by the harness. `f1/3-unknown-role-does-not-lock-the-editor` proves it rather than
+asserting it: the fixture's own log is empty and `ctx.authz.membership(...)` is `null` while the
+unknown-role window is observed, and the row it later relies on is recorded as `inserted` at that
+moment. A scenario that *states* a role still calls `ctx.authz.grant(...)`, which is logged.
+
+### The unknown-role window is constructed, not assumed
+
+`ctx.newAppPage({ role: null, offlineFirst: true })` injects `window.__qa.setOffline(true)` **after
+the instrumentation and before any application script**, so the client's very first collaboration
+socket is rewritten to an unreachable port. It never completes a `join-room` — which is the honest
+instance of `getRole() === null` (§17.9 rule 2) and is the state every page is in before its first
+join. `setOffline(page, false)` restores the real socket afterwards, so the same scenario can then
+prove that the text typed while the role was unknown reaches `Y.Text` and the server.
 
 ### The one place a scenario renews a session by hand
 
