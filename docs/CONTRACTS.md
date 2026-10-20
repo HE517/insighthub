@@ -832,7 +832,8 @@ identity is still merely claimed.
 | Durability | **process-scoped** (in memory). A restart invalidates every session and clients must re-bootstrap. This is a stated Phase 2 limitation, **not** a security property |
 | Rotation | each successful bootstrap issues a new token and invalidates the previous one for that client |
 | Carrier | the cookie is the only carrier. Phase 2 has **no** `Authorization` header path — one mechanism, not two |
-| Revocation | `DELETE /api/session` destroys the session server-side and clears the cookie; a destroyed or expired token yields `401` everywhere |
+| Revocation | `DELETE /api/session` destroys the session server-side and clears the cookie; a destroyed or expired token yields `401` on every **subsequent request or upgrade** |
+| Revocation scope (Phase 2 limitation) | Revocation and expiry are **request-scoped, not retroactive**: an **already-established WebSocket keeps the identity it was admitted with** and is not closed by the logout of its session. Authorization is still re-derived per frame from membership, so a *role* change does take effect on the next frame — but a *revoked session* does not by itself stop a live socket. Measured (`writeApplied: true`); recorded in `docs/DECISIONS.md` D-064. Release notes must **not** claim "revocation is immediate" |
 
 ### 17.3 Demo roster and seeded membership (server-side constants)
 
@@ -890,6 +891,7 @@ origin (never `*`), and the web client must send `credentials: 'include'`.
 | BINARY `AWARENESS` | requires `canRead` only; a viewer may publish its cursor |
 | Join reply | `room-joined` carries the caller's `role` (§5.2). It is the **only** channel that tells the client its own role, it is for UI gating only, and it carries no authority |
 | Framing | unchanged. No new frame type; the only payload addition is `room-joined.role`; `PROTOCOL_VERSION` stays **2** |
+| Live socket + revocation | A socket that was admitted before its session was revoked **keeps working until it closes** (§17.2's request-scoped revocation). Role changes are re-derived per frame, so a demotion *does* take effect immediately; a logout does not disconnect peers. Do not describe a logout as disconnecting anyone |
 
 > **Correction (M2 Phase 2, A3 finding — this section was wrong).** The first version of this
 > table said "BINARY `SYNC` requires `canEdit`". That treated the sync plane as one operation

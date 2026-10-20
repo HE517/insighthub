@@ -458,7 +458,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
 | Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
-| 状态     | **A5 已合入 `main`**（`e718568` + `cd18eb1`，D-062）；**A3 代码完成于分支 `0d23af9`，等浏览器证据**——按 D-063 §3，A3 与 A6 一起进入 `main`，避免红窗口；P2 浏览器半场 → **本轮派发 A6** |
+| 状态     | **A7 GO；A5+A3+A6 已合入 `main`（`87c971b`）**——授权闭环成立、44/44 浏览器证据。**M2 仍未 CLOSED**：关闭条件见下「A7 GO 的收口缺口」的 **B3（A3）** 与 **F1（A1+A2）**；发布说明禁令见 D-064 §1 |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -526,7 +526,7 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 | Agent        | 范围                                                                                                    | Owned Files                                                                                                                                                                                                                                                                                                                   | Do Not Touch                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | **A5**       | session/store/角色解析/授权判定核心、HTTP 中间件与 §17.4 端点、`FORBIDDEN` 码、版本 4→5、web 侧权限门控 | `apps/server/src/authz/**`（新建）<br>`apps/server/src/app.ts`<br>`apps/server/src/index.ts`（构造 authz 并注入 HTTP 层）<br>`packages/shared/src/errors.ts`、`packages/shared/src/index.ts`（版本常量）、`packages/shared/src/permission*.ts`（如需新判据）、对应 `*.test.ts`<br>`apps/web/src/features/**`（仅权限门控 UI） | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`、wire framing、`PROTOCOL_VERSION` |
-| **A3**       | WS 侧执行点：升级认证、join 拒绝、BINARY 闸门、`documents` 元数据源                                     | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`（仅新增 documents / membership 只读数据源）                                                                                                                                                                                             | `packages/shared/**`、`apps/web/**`、`apps/server/src/authz/**`、错误码词表                                             |
+| **A3**       | WS 侧执行点：升级认证、join 拒绝、BINARY 闸门、`documents` 元数据源                                     | `apps/server/src/ws.ts`、`apps/server/src/rooms/**`、`apps/server/src/persistence/**`（仅新增 documents / membership 只读数据源）                                                                                                                                                                                             | `packages/shared/**` —— **例外（D-062 §1 已授权，A7 F5 指出本行与之处矛盾）**：`protocol.ts` 的 `room-joined.role`、`index.ts` 的版本 5→6 及其 `*.test.ts`；`apps/web/**`；`apps/server/src/authz/**`；错误码词表 |
 | **A6**       | security / negative-path 证据（P2-1…P2-9）                                                              | `tests/browser/**`                                                                                                                                                                                                                                                                                                            | 生产代码                                                                                                                |
 | **A0**       | 契约定稿、集成、`index.ts` 的一行接线（若 A5/A3 都不该写）、Phase 2 final gate 调度                     | `docs/**`、`AGENTS.md`                                                                                                                                                                                                                                                                                                        | —                                                                                                                       |
 | **A1/A2/A4** | idle                                                                                                    | —                                                                                                                                                                                                                                                                                                                             | —                                                                                                                       |
@@ -535,7 +535,7 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 > authz resolver。A5 不写 `ws.ts`，A3 不改 `authz/**`，因此**这一行接线由 A0 在集成时写入**
 > 并在 commit message 点名。
 
-#### Phase 2 — P1 第一棒（A5）实现现状（分支 `agent/a5-m2-phase2-authz`，等待 A0 集成）
+#### Phase 2 — 实现现状（A7 GO，已合入 `main`；M2 仍未 CLOSED）
 
 | 层                         | 现状                                                                                                                                         | 位置                                                      |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
@@ -543,10 +543,20 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 | 判定核心                   | **已实现**：`roleFor` / `can` 一律复用 `documentCapabilities`；无第二套规则                                                                  | `apps/server/src/authz/authz.ts`                          |
 | session                    | **已实现**：CSPRNG 256-bit opaque token、`httpOnly`/`SameSite=Lax`/`Path=/`、12 h、吊销/轮换；**process-scoped**（limitation，不是安全属性） | `apps/server/src/authz/{tokens,session-store,cookies}.ts` |
 | 成员关系                   | **已实现**：A5 自有表 `authz.db`（`documentId/userId/role`），demo fixture 种子，重启后仍在                                                  | `apps/server/src/authz/membership-store.ts`               |
-| WS 执行点                  | **未接线**（A3 下一棒）：升级认证、join 拒绝、BINARY `SYNC` 闸门                                                                             | `ws.ts`、`rooms/**` **未改动**                            |
+| WS 执行点                  | **已实现**：升级期 401 且**不建立 socket**、join 拒绝（与"文档不存在"同码）且不驱逐既有房间、BINARY 逐帧闸门、backlog 回放重新授权           | `ws.ts`、`rooms/{registry,room,context}.ts`               |
 | 客户端身份                 | **已接线**：bootstrap 取 `userId/displayName`；token 只存在于 httpOnly cookie，JS 不可达                                                     | `apps/web/src/session/**`、`user.ts`、`App.tsx`           |
-| 客户端权限门控             | 只经 `documentCapabilities`；但**角色当前没有传输通道**（§17.4 的响应体不含 `role`），故门控不生效                                           | `apps/web/src/features/permissions/**`                    |
-| `FORBIDDEN` / 版本         | **已实现**：`SHARED_CONTRACT_VERSION` 5；`PROTOCOL_VERSION` 保持 2                                                                           | `packages/shared/src/errors.ts`、`index.ts`               |
+| 客户端权限门控             | **通道已通、消费侧未接**：`room-joined.role` 已由服务端发送并被浏览器实测收到，但全仓 **0 次 dispatch**（A7 F1）⇒ **UI 门控当前不生效**；服务端仍然拒绝，安全承诺未变弱 | `apps/web/src/features/permissions/**`（未被消费）        |
+| `FORBIDDEN` / 版本         | **已实现**：`FORBIDDEN` 非致命；`SHARED_CONTRACT_VERSION` **6**；`PROTOCOL_VERSION` 保持 2                                                   | `packages/shared/src/{errors,protocol,index}.ts`          |
+
+#### Phase 2 — A7 GO 的收口缺口（不阻断合入 `main`，阻断 **M2 关闭与发布说明**）
+
+| # | 项 | 归属 | 状态 |
+| --- | --- | --- | --- |
+| **B3 / F4** | `rooms/authz-enforcement.test.ts`（640 行，全文注释与部分 `it` 标题乱码）与 `persistence/restart.test.ts`（10 处）：是 **UTF-8→GBK→UTF-8 的有损转码**，不是控制台显示问题；`§` 后的数字被吃掉（如 `鎼?7.5` 应为 `§17.5`），部分换行被吞。另有两处过期注释：`index.ts` 头仍写"WS 未接线"、`authz-enforcement.test.ts` L321 仍写"§17.5 表格要求 canEdit" | **A3** | **未完成**。修法：按语义重写注释，**不改任何断言与 `it` 标题以外的代码**；验收 `grep '[一-龥]'` 在这两个文件的注释区为 0 + `pnpm test` 仍 180/180 |
+| **F1** | `room-joined.role` 无消费者：viewer 可在 UI 里打字、本地看得见、服务端拒绝、他人看不到（"看起来保存了"）。**不得**表述为"viewer 能改文档" | **A1 + A2** | **未派发**。A1 把角色接进 leader/state，A2 用 `capabilityGate` 门控输入区 |
+| **F2** | 吊销/过期**不追溯已建 socket**：`DELETE /api/session` 后同一 socket 仍可写入（`writeApplied:true`）。契约已在 D-064 澄清为"请求级"，实现（断连或每帧重解）进 backlog | **A0**（契约，已完成）→ **A3**（实现，backlog） | 契约 **已澄清**；实现 **未做** |
+| **F3** | 夹具在 `role: null` 时仍会补写 membership（意图被 `setDocumentId` 覆盖）；今天无影响 | **A6** | 记录在案 |
+| **F5 / B2** | TASKS 的 A3 ownership 行与 D-062 §1 矛盾 | **A0** | **已修**（本行上方 ownership 表） |
 | A3 的 public surface       | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定）                                      | 同上                                                      |
 
 #### Phase 2 — Branch / worktree plan
