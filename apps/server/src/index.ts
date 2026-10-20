@@ -20,10 +20,10 @@
  *
  * ## M2 Phase 2 seam
  *
- * `createAuthz` is constructed here and handed to the HTTP layer. The WebSocket server is **not**
- * wired to it in this change: the WS enforcement points (`ws.ts`, `rooms/**`) belong to A3, and
- * `authz/public.ts` is the surface they consume. The `authz` value is deliberately kept in scope
- * below so that wiring is a one-line change in the integration commit, with no re-plumbing.
+ * `createAuthz` is constructed here and handed to **both** layers: `createApp` for the HTTP API
+ * and `attachWebSocketServer` for the socket. The wiring is real, not provisional: the WS
+ * enforcement points (`ws.ts`, `rooms/**`) consume it through `authz/public.ts`, so the upgrade,
+ * the join decision and every BINARY frame get the same answer the HTTP API gets.
  */
 import { createServer } from 'node:http';
 
