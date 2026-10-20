@@ -38,6 +38,7 @@ import {
   type CollaborativeSessionOptions,
   type CollaboratorInfo,
   type ConnectionStatus,
+  type DocumentRole,
   type PresencePatch,
   type SessionState,
   type TransactionOrigin,
@@ -148,6 +149,13 @@ export class FakeCollaborativeSession implements CollaborativeSession {
 
   private sessionState: SessionState = 'active';
   private transport: ConnectionStatus = 'offline';
+  /**
+   * The role `getRole()` reports. **Unknown (`null`) by default**, and deliberately not
+   * seeded with `editor`/`viewer`: §17.9 makes `null` the honest default, and a double that
+   * guessed would let a UI test pass in a state production can really be in (before the
+   * first `room-joined`) while behaving differently there.
+   */
+  private role: DocumentRole | null = null;
   /** Invalidated on every awareness mutation; see `getCollaborators`. */
   private collaboratorsCache: CollaboratorInfo[] | null = null;
 
@@ -249,6 +257,18 @@ export class FakeCollaborativeSession implements CollaborativeSession {
   }
 
   /**
+   * The role this double reports — UNKNOWN (`null`) until a test calls `setRole()`
+   * (`docs/CONTRACTS.md` §17.9).
+   *
+   * The double has no socket and therefore never receives a real `room-joined`, so `null`
+   * is its only truthful answer by default. `destroy()` makes the answer unknown again,
+   * mirroring the real session's lifecycle rule.
+   */
+  getRole(): DocumentRole | null {
+    return this.sessionState === 'destroyed' ? null : this.role;
+  }
+
+  /**
    * Publish presence through the M2-P0-2 seam.
    *
    * This double reuses `parsePresencePatch` from `@insighthub/shared` instead of deriving its
@@ -319,6 +339,7 @@ export class FakeCollaborativeSession implements CollaborativeSession {
   destroy(): void {
     if (this.sessionState === 'destroyed') return;
     this.sessionState = 'destroyed';
+    this.role = null;
     this.listeners.clear();
     this.fakeAwareness.setLocalState(null);
     this.invalidateCollaborators();
@@ -331,6 +352,18 @@ export class FakeCollaborativeSession implements CollaborativeSession {
   /** Pretend the transport moved. Purely presentational for the UI. */
   setConnectionStatus(status: ConnectionStatus): void {
     this.transport = status;
+    this.emit();
+  }
+
+  /**
+   * Set the role `getRole()` reports (test control, not part of the seam).
+   *
+   * A role change is a session change, so it is announced through the **existing**
+   * `subscribe()` channel (§17.9 rule 4) — the double must not invent a second one, or an
+   * A2 test could pass against a notification path production does not have.
+   */
+  setRole(role: DocumentRole | null): void {
+    this.role = role;
     this.emit();
   }
 
