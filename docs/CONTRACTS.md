@@ -926,4 +926,42 @@ or space role**. Space authorization is deferred until a real space domain exist
 | --- | --- | --- |
 | `SHARED_CONTRACT_VERSION` | 4 → **5** | `WS_ERROR_CODES` gained `FORBIDDEN` (a closed vocabulary grew) — implemented by A5 |
 | `SHARED_CONTRACT_VERSION` | 5 → **6** | `RoomJoinedPayload` gained the required `role` field (§5.2) — implemented by A3 |
+| `SHARED_CONTRACT_VERSION` | 6 → **7** | `CollaborativeSession` gained `getRole()` (§17.9) — implemented by A1 |
 | `PROTOCOL_VERSION` | **unchanged (2)** | framing, message types and every other payload shape are untouched |
+
+### 17.9 Client role exposure: `getRole()` (A1 implements, A2 consumes — closes A7's F1)
+
+The role reaches the client in `room-joined.role` (§5.2) but, as of the Phase 2 gate, **nothing consumed
+it** (A7 F1): `capabilityGate` exists and no code dispatches a role into it. Without a frozen seam the fix
+would be invented in whichever file the next agent happens to open, so the seam is fixed here first.
+
+`CollaborativeSession` gains exactly one new member:
+
+```ts
+/**
+ * This client's role in the current document, taken from the most recent
+ * successful `room-joined.role`. `null` means UNKNOWN — never a guess.
+ */
+getRole(): DocumentRole | null;
+```
+
+Normative rules:
+
+| # | Rule |
+| --- | --- |
+| 1 | Source is `room-joined.role` of the most recent **successful** join, validated with `isDocumentRole`. An unparseable value yields `null`; a missing one never defaults to `editor`/`viewer` |
+| 2 | `null` means unknown, and covers: before the first successful join, while `state` is not `active`, while offline or reconnecting, after a failed/denied join, and after `destroy()` |
+| 3 | It is a **getter**, in the same shape as `getCollaborators()` (R14): not a Redux field, not mirrored into React state, not persisted, not written into awareness |
+| 4 | Changes are announced through the **existing** session subscription. Phase 2 adds no second subscription mechanism |
+| 5 | It carries **no authority**: the server re-derives the role from membership at every enforcement point (§17.5). A client that lies to itself only changes which controls it shows |
+| 6 | Consumers: **A2 only**, for UI gating via `documentCapabilities`. A1 must not import editor code (`AGENTS.md` §6.1) |
+
+Gating consequence for A2: when `getRole()` is `null` the editor stays **fully usable** — an unknown role must
+never lock a local user out of their own unsent text (R10). When it is a known role, the editor may be
+read-only for a role without `canEdit`, and the copy must say so ("read-only for your role"), never imply the
+save happened.
+
+| Constant | Change |
+| --- | --- |
+| `SHARED_CONTRACT_VERSION` | 6 → **7** (a frozen seam grew a member) |
+| `PROTOCOL_VERSION` | **unchanged (2)** — the wire already carries the field |
