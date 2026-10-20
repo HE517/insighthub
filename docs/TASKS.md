@@ -498,14 +498,29 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE（e718568 / cd18eb1）
    → A0 integrate                                       ← DONE（D-062）
    → A3 接线（ws.ts / registry.ts：升级 401、join 拒绝、BINARY 闸门、`room-joined.role`、documents 源）
-     ← 代码 DONE（分支 0d23af9，180/180 Node 证据），未合 main（D-063 §3）
-   → A6 浏览器 / 负向路径证据（本轮派发；分支由 A0 先 merge A3）
-     ← 目标：门禁回到 36/36 且 P2-1/P2-2/P2-4/P2-5 有浏览器证据
-   → A0 合并 A6（连带 A3）→ A7 Phase 2 final review
+     ← DONE（0d23af9），随 A6 一起合入 main
+   → A6 浏览器 / 负向路径证据                            ← DONE（fee4f64，44/44）
+   → A0 integrate（87c971b）→ A7 Phase 2 final review    ← DONE，GO（D-064）
+```
+
+**Phase 2 之后的收口顺序（D-065 §6，覆盖 D-064 §4 的顺序）**：
+
+```text
+A3(B3 注释) ∥ A1(getRole)          ← 本轮并行，base a3ff4a9
+  → A0 integrate（integrated HEAD 上 typecheck / test / build）
+  → A2(F1 UI，只消费 session.getRole())
+  → A0 integrate
+  → A6 integrated evidence（六点覆盖 + F3 evidence condition）
+  → A0 integrate A6 提交 + 最终 integrated HEAD 重跑四门禁
+  → A7 M2 final review
+  → 项目负责人授权 milestone closure / tag
 ```
 
 理由与 D-057 同构：A5 与 A3 都改 `apps/server`。**先冻结 seam，再由 A3 接线**，否则两人同时改
 `registry.ts` / `ws.ts`，且 A3 会在没有判据的情况下自己发明授权规则。
+
+> **Specialist 交接规则（D-065 §1）**：A1–A7 的 `Next Handoff` 一律写 `A0`；可以说明 downstream
+> consumer 是谁及其约束，但**不得**自行调度下一棒。
 
 #### Phase 2 — Acceptance Criteria（冻结）
 
@@ -552,10 +567,10 @@ A5 authz seam（纯新增模块 + shared 判据 + 表驱动测试）   ← DONE�
 
 | # | 项 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| **B3 / F4** | `rooms/authz-enforcement.test.ts`（640 行，全文注释与部分 `it` 标题乱码）与 `persistence/restart.test.ts`（10 处）：是 **UTF-8→GBK→UTF-8 的有损转码**，不是控制台显示问题；`§` 后的数字被吃掉（如 `鎼?7.5` 应为 `§17.5`），部分换行被吞。另有两处过期注释：`index.ts` 头仍写"WS 未接线"、`authz-enforcement.test.ts` L321 仍写"§17.5 表格要求 canEdit" | **A3** | **未完成**。修法：按语义重写注释，**不改任何断言与 `it` 标题以外的代码**；验收 `grep '[一-龥]'` 在这两个文件的注释区为 0 + `pnpm test` 仍 180/180 |
-| **F1** | `room-joined.role` 无消费者：viewer 可在 UI 里打字、本地看得见、服务端拒绝、他人看不到（"看起来保存了"）。**不得**表述为"viewer 能改文档" | **A1 + A2** | **未派发**。A1 把角色接进 leader/state，A2 用 `capabilityGate` 门控输入区 |
-| **F2** | 吊销/过期**不追溯已建 socket**：`DELETE /api/session` 后同一 socket 仍可写入（`writeApplied:true`）。契约已在 D-064 澄清为"请求级"，实现（断连或每帧重解）进 backlog | **A0**（契约，已完成）→ **A3**（实现，backlog） | 契约 **已澄清**；实现 **未做** |
-| **F3** | 夹具在 `role: null` 时仍会补写 membership（意图被 `setDocumentId` 覆盖）；今天无影响 | **A6** | 记录在案 |
+| **B3 / F4** | `rooms/authz-enforcement.test.ts`（640 行，全文注释与部分 `it` 标题乱码）与 `persistence/restart.test.ts`（10 处）：是 **UTF-8→GBK→UTF-8 的有损转码**；`§` 后的数字被吃掉（如 `鎼?7.5` 应为 `§17.5`），部分换行被吞。另有两处过期注释：`index.ts` 头仍写"WS 未接线"、`authz-enforcement.test.ts` L321 仍写"§17.5 表格要求 canEdit" | **A3** | **本轮执行**。验收**除** tests PASS 外，必须有 **non-functional proof（D-065 §2）**：`git diff --unified=0` 只允许注释 / `describe`·`it` 标题 / `index.ts` 过期头注释三类行变化，**不得**有 assertion / fixture / setup / teardown / expression / import / executable token 变化。**`pnpm test` 180/180 不能替代该检查** |
+| **F1** | `room-joined.role` 无消费者：viewer 可在 UI 里打字、本地看得见、服务端拒绝、他人看不到。**不得**表述为"viewer 能改文档" | **A1 →（A0 集成）→ A2 →（A0 集成）→ A6 证据** | 本轮：A1 实现 `session.getRole()`（§17.9 冻结，v6→7）；A2 只消费该 seam（D-065 §3 七条约束）；A6 在 A2 集成后的 HEAD 上出证据（D-065 §4 六点） |
+| **F2** | 吊销/过期**不追溯已建 socket**（`writeApplied:true`）。契约已澄清为"请求级"（§17.2/§17.5、D-064），实现（断连或每帧重解）进 backlog | **A0**（契约，已完成）→ **A3**（实现，backlog） | 契约 **已澄清**；实现 **未做**。发布说明不得声称"吊销立即生效" |
+| **F3** | 夹具在 `role: null` 时仍会补写 membership（意图被 `setDocumentId` 覆盖） | **A6** | **证据前置条件（D-065 §5）**：F1 的 browser evidence 不得让该行为制造 false success。A6 要么修 F3，要么证明 null 场景不走该污染路径并使用不隐式建 membership 的 setup；**无法证明 ⇒ F1 browser evidence 判 FAIL** |
 | **F5 / B2** | TASKS 的 A3 ownership 行与 D-062 §1 矛盾 | **A0** | **已修**（本行上方 ownership 表） |
 | A3 的 public surface       | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定）                                      | 同上                                                      |
 

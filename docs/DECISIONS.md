@@ -2231,3 +2231,95 @@ main (green)
 **后果。** Phase 2 的授权闭环成为 `main` 上可引用的基线，同时"UI 门控未生效""吊销不追溯""重启不自愈"
 三句话被写进决策记录，后续任何发布说明都无法合法地把它们说成已完成。代价是 M2 仍需一轮
 A1+A2（F1）与 A3（B3）才能关闭，而 `SHARED_CONTRACT_VERSION` 停在 6。
+
+---
+
+## D-065 · 2026-10-18 · accepted · M2 收口规则修正（项目负责人）：交接权、non-functional proof、A6 重新进入 DAG (M2 Phase 2 closure)
+
+**背景。** 项目负责人在 A3(B3)/A1(getRole) 两棒运行期间修正了调度与验收规则。本条是这些规则本身，
+它**覆盖** D-064 §4 的收口顺序。已运行中的两棒不做实现返工，只在最终报告的 `Next Handoff` 按 §1 修正。
+
+### 1. Specialist 的 `Next Handoff` 只能是 A0
+
+A0 在派发 A3(B3)/A1(getRole) 时把末项写成了"A2"，这是**调度越界**——而且与 `agent-prompts/COMMON.md`
+§8 早已写明的规则冲突（"正式跨 Agent 调度权属于 A0"）。规则：
+
+- A1–A7 报告末项一律 `Recommended Next Agent: A0`；
+- 可以写 **downstream consumer** 是谁、它必须/不得做什么，但**不得**写成"下一棒是 X"；
+- 由 A0 在复核、集成、门禁之后决定并派发下一棒。
+
+### 2. B3 的 non-functional proof（`tests PASS` 不能替代）
+
+A0 集成 B3 之前**必须**检查 `git diff --unified=0`。允许变化的行**只有**：
+
+1. 注释（`//`、`/* */`、`/** */`）；
+2. `describe` / `it` 的**标题字符串**；
+3. `apps/server/src/index.ts` 指定的过期头注释。
+
+**不允许**任何 assertion、fixture、setup/teardown、expression、import/export 或 production
+executable token 发生变化。理由：B3 的全部价值在于"这是一次纯注释修复"。`pnpm test` 180/180 只能
+证明**行为**没坏，不能证明 diff 里没有顺手改掉别的东西——**绿的门禁不是 diff 审查的替代品**。
+
+### 3. A2 只能消费冻结 seam，语义不得漂移
+
+A2 只允许消费 `session.getRole(): DocumentRole | null`（`docs/CONTRACTS.md` §17.9），并且：
+
+| # | 约束 |
+| --- | --- |
+| 1 | `owner` / `editor`：按冻结的 `documentCapabilities` 做 UI gate |
+| 2 | `viewer`：UI **不提供**本地编辑能力 |
+| 3 | `null`：**不得**锁死编辑器，必须保持可用；server authorization 仍是唯一的 security boundary |
+| 4 | **不**把 role 镜像进 Redux |
+| 5 | **不**写 awareness |
+| 6 | **不**新增第二套 role subscription |
+| 7 | **不**宣称 role revocation 会即时更新既有客户端 UI |
+
+### 4. A6 重新进入 closure DAG（A2 集成后不得直接交 A7）
+
+A2 合入后，A6 必须在**集成后的 HEAD**上验证 F1，至少覆盖六点：
+
+1. viewer 在真实浏览器里的 UI gate；
+2. owner / editor 正常编辑无 regression；
+3. `getRole() === null` 时编辑器**不会**被错误锁死；
+4. UI gate **不构成**安全边界：绕过 / 构造客户端操作时，server enforcement 仍拒绝未授权 mutation；
+5. **不得**把请求级吊销语义误证明成"existing socket 的即时 identity revocation"；
+6. 真实 Chrome + 真实 backend。
+
+### 5. F3 升级为 evidence condition（不是 backlog 备注）
+
+已知 A6 的 fixture 在 `role: null` 时仍可能补写 membership。在 F1 的 browser evidence 中，**不得**
+让这个行为制造 false success。A6 必须**二选一**：
+
+- 修掉 F3；**或**
+- 在报告中**证明** F1/null 场景没有经过该污染路径，并使用**不会隐式创建 membership** 的 setup。
+
+**无法证明 ⇒ F1 browser evidence 判 FAIL。** 这一条把"已知小瑕疵"变成了"证据可信度"的前置条件：
+一个会悄悄给自己发权限的夹具，产出的绿色证据不算证据。
+
+### 6. 最终 DAG（替换 D-064 §4 的收口顺序）
+
+```text
+A3(B3) ∥ A1(getRole)
+  → A0 integrate（integrated HEAD 上跑 typecheck / test / build）
+  → A2(F1 UI)
+  → A0 integrate
+  → A6 integrated evidence（六点 + F3 evidence condition）
+  → A0 integrate A6 的 tests/docs 提交 + 在最终 integrated HEAD 上重跑四门禁
+  → A7 M2 final review
+  → 项目负责人一次性授权 milestone closure / tag
+```
+
+**A6 若产生 tests/docs 提交，必须由 A0 合入后在最终 integrated HEAD 上重跑四门禁**，不得直接引用
+A6 feature branch 上的结果——分支上的绿不等于合入后的绿。
+
+### 7. Tag / 里程碑
+
+- **不创建** `m2-p2-gate`；
+- `m2-closed` **不存在**，且不得创建；
+- 既有 milestone tags（`m1-closed`、`m1-p0-baseline`、`m2-p0-gate`）**不动**；
+- no push / no remote mutation；
+- A7 最终 review 之后，由项目负责人对 milestone closure / tag 做**一次明确授权**。
+
+**后果。** 收口路径从"两棒之后就可能关闭"变成"两棒 → A2 → A6 → A7 → 授权"，多了 A6 这一环；
+代价是一轮时间，收益是"UI 门控生效"这句话会有一条**不依赖夹具自证**的浏览器证据，且 B3 这类
+"看起来只是注释"的改动必须交出 diff 级证明。
