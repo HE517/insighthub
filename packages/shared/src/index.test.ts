@@ -13,13 +13,14 @@ import * as shared from './index.js';
  * it proves the number moved, which is what makes the record checkable.
  */
 describe('shared contract version', () => {
-  it('is 6 after M2 Phase 2 added RoomJoinedPayload.role', () => {
+  it('is 7 after CollaborativeSession gained getRole()', () => {
     // 2: M1-A0 (binary data plane, awareness, CollaborativeSession, error vocabulary)
     // 3: M2-P0-2 step 1 (presence write seam)
     // 4: M2-P0-2 step 3 (awareness narrowed to AwarenessBinding)
     // 5: M2 Phase 2 (FORBIDDEN — a closed vocabulary grew, CONTRACTS §17.6)
     // 6: M2 Phase 2 (RoomJoinedPayload.role — a payload gained a required field, §5.2/§17.8)
-    expect(shared.SHARED_CONTRACT_VERSION).toBe(6);
+    // 7: M2 Phase 2 (CollaborativeSession.getRole — a frozen seam grew a member, §17.9)
+    expect(shared.SHARED_CONTRACT_VERSION).toBe(7);
   });
 
   it('keeps PROTOCOL_VERSION at 2: no framing or payload change', () => {

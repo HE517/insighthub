@@ -9,6 +9,7 @@ import {
 } from './awareness-state.js';
 import type { ConnectionStatus } from './connection.js';
 import type { TransactionOrigin } from './binary-frame.js';
+import type { DocumentRole } from './permission.js';
 
 /**
  * A1 ↔ A2 public seam (frozen by M1-A0).
@@ -322,6 +323,32 @@ export interface CollaborativeSession {
   getCollaborators(): readonly CollaboratorInfo[];
   /** The session's own awareness state as published. */
   getLocalAwarenessState(): AwarenessState | null;
+
+  /**
+   * This client's role in the current document, taken from the most recent
+   * **successful** `room-joined.role` (`docs/CONTRACTS.md` §5.2, §17.9).
+   *
+   * `null` means **UNKNOWN — never a guess**. It is the answer:
+   *
+   * - before the first successful join;
+   * - while `state` is not `active`;
+   * - while offline or reconnecting;
+   * - after a denied/failed join;
+   * - after `destroy()`.
+   *
+   * An absent or unparseable value yields `null` as well: this never falls back to
+   * `editor` or `viewer`, because a guessed role is a silently wrong UI gate.
+   *
+   * Same shape as `getCollaborators()` (R14): a getter over live session state. It is
+   * **not** persisted, **not** mirrored into Redux or React state, and **never** written
+   * into Yjs awareness. Changes are announced through the existing `subscribe()` — Phase 2
+   * adds no second subscription channel (§17.9 rules 3–4).
+   *
+   * It carries **no authority**: the server re-derives the role from membership at every
+   * enforcement point (§17.5). A client that lies to itself only changes which controls it
+   * shows.
+   */
+  getRole(): DocumentRole | null;
 
   /**
    * Publish this client's presence (M2-P0-2).

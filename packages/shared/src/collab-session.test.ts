@@ -144,7 +144,9 @@ describe('presence seam shape', () => {
     // **wire** did not move with it.
     // v6 (M2 Phase 2): `RoomJoinedPayload` gained a required `role` (§5.2/§17.8). Still not a
     // wire-format change — one existing payload grew one field — so `PROTOCOL_VERSION` holds.
-    expect(SHARED_CONTRACT_VERSION).toBe(6);
+    // v7 (M2 Phase 2): `CollaborativeSession` gained `getRole()` (§17.9) — a frozen seam grew
+    // a member. The wire already carried the role, so `PROTOCOL_VERSION` holds again.
+    expect(SHARED_CONTRACT_VERSION).toBe(7);
     // The wire is untouched: awareness already carried cursor and selection.
     expect(PROTOCOL_VERSION).toBe(2);
   });
@@ -227,5 +229,53 @@ describe('awareness is a binding input only (M2-P0-2 step 3)', () => {
     type BindingKeys = keyof CollaborativeSession['awareness'];
     const keys: readonly BindingKeys[] = ['clientID', 'getStates', 'on', 'off'];
     expect(keys).toEqual(['clientID', 'getStates', 'on', 'off']);
+  });
+});
+
+/**
+ * M2 Phase 2 — `getRole()` on the frozen seam (`docs/CONTRACTS.md` §17.9).
+ *
+ * These are type-level assertions: the *behaviour* (what the getter answers in each
+ * lifecycle state) belongs to the implementation and is pinned in
+ * `apps/web/src/collab/tests/session-role.test.ts`. What must be true in
+ * `packages/shared` is that the member exists, is required, returns the role vocabulary
+ * or `null`, and is a getter rather than a stored field — because that is the shape A2
+ * codes against and the shape every implementer must satisfy.
+ */
+describe('role getter seam (M2 Phase 2, §17.9)', () => {
+  it('exposes getRole() returning DocumentRole | null', () => {
+    // Compile-time: the member exists with the frozen signature. A `string` return would
+    // not accept the literal below, and a non-null return would reject `null`.
+    const getRole: CollaborativeSession['getRole'] = () => null;
+    expect(typeof getRole).toBe('function');
+
+    const known: ReturnType<CollaborativeSession['getRole']> = 'owner';
+    const unknown: ReturnType<CollaborativeSession['getRole']> = null;
+    expect(known).toBe('owner');
+    expect(unknown).toBeNull();
+  });
+
+  it('requires the member: a session without getRole is not a CollaborativeSession', () => {
+    // Negative shape test. `WithoutRole` is structurally a session *minus* the getter.
+    // If the member were ever made optional — the tempting shortcut when a test double
+    // cannot implement it — this assignment would compile and the unused
+    // `@ts-expect-error` directive would fail `pnpm typecheck`, instead of the role
+    // silently disappearing from the seam while every consumer still compiles.
+    type WithoutRole = Omit<CollaborativeSession, 'getRole'>;
+    // @ts-expect-error getRole is a required member of the frozen seam.
+    const broken: CollaborativeSession = null as unknown as WithoutRole;
+    void broken;
+    expect(true).toBe(true);
+  });
+
+  it('is a getter, not a writable role field on the session object', () => {
+    const session = null as unknown as CollaborativeSession;
+    void (() => {
+      // @ts-expect-error the seam has no writable `role` field; the getter is the only read.
+      session.role = 'editor';
+      // @ts-expect-error no role value is mirrored onto the session object (§17.9 rule 3).
+      void session.role;
+    });
+    expect(typeof session).toBe('object');
   });
 });
