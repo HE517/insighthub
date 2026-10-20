@@ -10,7 +10,7 @@
  *
  * 1. spawns `apps/server/src/index.ts` as a **separate OS process**;
  * 2. writes through a real WebSocket;
- * 3. kills it abruptly (`child.kill()`, i.e. `TerminateProcess` 闂?no SIGTERM handler, no
+ * 3. kills it abruptly (`child.kill()`, i.e. `TerminateProcess` — no SIGTERM handler, no
  *    graceful `store.close()`, which is the harsher and more interesting failure);
  * 4. reads the database **from this process**, with nothing else holding it open;
  * 5. spawns a second server process on the same data directory and port;
@@ -53,14 +53,14 @@ import { openDocumentStore } from './open-store.js';
  *
  * `node --import tsx src/index.ts` rather than the `tsx` CLI on purpose: the CLI runs the
  * script in a **grandchild** process, so `child.kill()` would terminate only the wrapper and
- * leave the actual server 閳?port bound, database open 閳?alive. That would make the "process
+ * leave the actual server — port bound, database open — alive. That would make the "process
  * died" half of these scenarios a lie, and would leave stray servers behind.
  */
 const SERVER_ARGS = ['--import', 'tsx', 'src/index.ts'];
 /**
  * The server package root, used as the child's working directory.
  *
- * Derived from this file's own URL (`apps/server/src/persistence/` 閳?`apps/server`) rather than
+ * Derived from this file's own URL (`apps/server/src/persistence/` — `apps/server`) rather than
  * from where pnpm placed `tsx`: that is a content-addressed store path, and walking up from it
  * lands in `.pnpm`, not in the package.
  */
@@ -68,9 +68,9 @@ const SERVER_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 /**
  * The one demo document the seeded membership fixture grants every role on
- * (pps/server/src/authz/demo-fixture.ts, §17.3). The restart scenarios need a document the
+ * (apps/server/src/authz/demo-fixture.ts, §17.3). The restart scenarios need a document the
  * authenticated socket is actually allowed to join, and its id is a fixture constant rather than
- * something exported from uthz/public.ts.
+ * something exported from authz/public.ts.
  */
 const DEMO_DOCUMENT_ID = 'demo-document';
 
@@ -83,7 +83,7 @@ const tempRoots: string[] = [];
 /**
  * Cleanup that is allowed to **fail**, but never allowed to hang.
  *
- * `pnpm --filter @insighthub/server test` is a Definition-of-Done gate (`AGENTS.md` 搂5), and a
+ * `pnpm --filter @insighthub/server test` is a Definition-of-Done gate (`AGENTS.md` §5), and a
  * gate that never returns cannot distinguish "passed" from "stuck" (`docs/TASKS.md`
  * TOOLING-P2). So every step here is bounded, every failure is collected, and the hook ends by
  * failing loudly with the diagnostics instead of awaiting a process that may never die.
@@ -101,7 +101,7 @@ after(async () => {
 
   for (const root of tempRoots) {
     // A surviving child still holds its database open, and Windows refuses to remove a locked
-    // file 鈥?so a failed cleanup here is evidence of a leaked process, not just of a dirty
+    // file — so a failed cleanup here is evidence of a leaked process, not just of a dirty
     // temp directory.
     try {
       rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -182,7 +182,7 @@ class ChildServer {
     });
     // A child handle counts as a live handle for this process. Without `unref`, a child that
     // somehow survives teardown keeps the test *process* alive, and `node:test` waits for the
-    // event loop to drain before exiting 鈥?which is exactly the "gate never returns" shape this
+    // event loop to drain before exiting — which is exactly the "gate never returns" shape this
     // file must not have. Output streaming is unaffected: `unref` only changes the ref count.
     child.unref();
   }
@@ -279,7 +279,7 @@ class ChildServer {
         // `taskkill` missing is not fatal: the direct kill below is the fallback.
         killer.once('error', () => resolve());
         // Deliberately **not** unref'd: this await is the only thing keeping the loop alive while
-        // `taskkill` runs, and an unref'd handle would let the loop drain mid-await 鈥?which
+        // `taskkill` runs, and an unref'd handle would let the loop drain mid-await — which
         // `node:test` reports as "promise resolution is still pending but the event loop has
         // already resolved".
       });
@@ -298,7 +298,7 @@ class ChildServer {
     return await new Promise<boolean>((resolve) => {
       // This timer is ref'd on purpose. The child handle is unref'd (see the constructor), so
       // without a ref'd timer a bounded wait would be cancelled the moment the loop had nothing
-      // else to do 鈥?turning "wait up to 10 s for the exit" into "give up immediately".
+      // else to do — turning "wait up to 10 s for the exit" into "give up immediately".
       const timer = setTimeout(() => resolve(false), timeoutMs);
       void this.#exitPromise.then(() => {
         clearTimeout(timer);
@@ -312,7 +312,7 @@ class ChildServer {
    *
    * Destroying the pipes matters on the failure path: they are handles this process owns, and
    * leaving them open would keep the event loop non-empty even after the test has already
-   * failed 鈥?trading a loud failure for a silent hang.
+   * failed — trading a loud failure for a silent hang.
    */
   #release(): void {
     if (this.#released) return;
@@ -323,7 +323,7 @@ class ChildServer {
     children.delete(this);
   }
 
-  /** Kill the process without any chance to shut down gracefully 鈥?a real crash. */
+  /** Kill the process without any chance to shut down gracefully — a real crash. */
   async kill(): Promise<void> {
     if (this.#exited) {
       this.#release();
@@ -349,7 +349,7 @@ class ChildServer {
     const exited = await this.#awaitExit(timeoutMs);
     if (!exited) {
       // The caller asserts an *exit*, so failing to get one must be that assertion failing with
-      // the child's own output attached 鈥?not a hang, and not a silent `null`.
+      // the child's own output attached — not a hang, and not a silent `null`.
       await this.#terminateTree();
       await this.#awaitExit(TERMINATION_TIMEOUT_MS);
       this.#release();
@@ -461,10 +461,10 @@ async function readDurableDocument(dataPath: string, documentId: string): Promis
 }
 
 /* ------------------------------------------------------------------ *
- * Scenario B 闂?process restart recovery
+ * Scenario B — process restart recovery
  * ------------------------------------------------------------------ */
 
-describe('Scenario B 闂?the document survives the server process being killed', () => {
+describe('Scenario B — the document survives the server process being killed', () => {
   it('a new process and a brand-new client see the full content', async () => {
     const dataPath = tempRoot();
     const port = await freePort();
@@ -532,10 +532,10 @@ describe('Scenario B 闂?the document survives the server process being killed',
 });
 
 /* ------------------------------------------------------------------ *
- * Scenario C 闂?offline edits across a restart
+ * Scenario C — offline edits across a restart
  * ------------------------------------------------------------------ */
 
-describe('Scenario C 闂?an offline client reconciles with a restarted server', () => {
+describe('Scenario C — an offline client reconciles with a restarted server', () => {
   it('merges the offline edit by state vector and a fresh client sees the whole document', async () => {
     const dataPath = tempRoot();
     const port = await freePort();

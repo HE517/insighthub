@@ -1,5 +1,5 @@
 /**
- * M2 Phase 2 P1 閳?the **WebSocket enforcement points** (`docs/CONTRACTS.md` 鎼?7.5, 鎼?7.7;
+ * M2 Phase 2 P1 — the **WebSocket enforcement points** (`docs/CONTRACTS.md` §17.5, §17.7;
  * `docs/TASKS.md` M2 Phase 2).
  *
  * ## What this file proves, and at which layer
@@ -11,22 +11,23 @@
  * | P2-1 | a `viewer` cannot change the document | the SYNC frame is refused with `FORBIDDEN`, nothing is applied/persisted/broadcast, the socket stays open and a peer receives nothing |
  * | P2-2 | identity cannot be self-declared | payload / header / query `userId` and `mode: readwrite` all change nothing; the role still comes from the session |
  * | P2-4 | one answer per role | table-driven: shared judge, `authz.can`, WS join, WS frame, and `room-joined.role` agree for every role |
- * | P2-5 | revocation is immediate (Node half) | `DELETE /api/session` 閳?the same token is refused at the upgrade |
- * | 鎼?.2 | `room-joined.role` is transmitted | a join reports exactly `authz.roleFor(...)` |
- * | 鎼?7.4/鎼?7.5 | non-disclosure | unknown document and no-membership produce the **same** `ROOM_NOT_FOUND` |
- * | 鎼?7.5 | a denied join keeps the current room | the socket still owns, and can still write, the room it had |
+ * | P2-5 | revocation is immediate (Node half) | `DELETE /api/session` — the same token is refused at the upgrade |
+ * | §5.2 | `room-joined.role` is transmitted | a join reports exactly `authz.roleFor(...)` |
+ * | §17.4/§17.5 | non-disclosure | unknown document and no-membership produce the **same** `ROOM_NOT_FOUND` |
+ * | §17.5 | a denied join keeps the current room | the socket still owns, and can still write, the room it had |
  * | Task 5 | document metadata has a real source | the durable store, surfaced through `GET /api/documents*` |
  *
  * ## What it deliberately does not do
  *
  * It does **not** treat a Node test as browser evidence (`AGENTS.md` R5): the browser-level
- * pass for P2-1/P2-5 belongs to A6. It also does not invent a membership-mutation endpoint 閳? * Phase 2 has none (鎼?7.3), so "the role changed and was re-evaluated" cannot be exercised
+ * pass for P2-1/P2-5 belongs to A6. It also does not invent a membership-mutation endpoint —
+ * Phase 2 has none (§17.3), so "the role changed and was re-evaluated" cannot be exercised
  * through the public surface here; the frame gate is instead re-asked on every frame, which the
  * fresh-answer assertions below cover.
  *
  * Every server here runs with `authorization: 'enforced'`, i.e. the real `AuthzService` and the
  * real `authz.db`, on a temporary data directory (the two databases are separate by design,
- * `docs/DECISIONS.md` D-062 鎼?).
+ * `docs/DECISIONS.md` D-062 §4).
  */
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
@@ -134,15 +135,15 @@ async function apiFetch(
 }
 
 /* ------------------------------------------------------------------ *
- * 鎼?7.5 閳?the upgrade requires a session
+ * §17.5 — the upgrade requires a session
  * ------------------------------------------------------------------ */
 
-describe('upgrade authentication (鎼?7.5)', () => {
+describe('upgrade authentication (§17.5)', () => {
   it('refuses an unauthenticated upgrade with HTTP 401 and establishes no socket', async () => {
     const server = await enforcedServer();
 
     // The refusal is the HTTP status the contract names, not a socket that opens and is then
-    // closed: 搂17.5 says the upgrade is refused with 401.
+    // closed: §17.5 says the upgrade is refused with 401.
     assert.equal(
       await TestClient.expectRefused(server.url),
       401,
@@ -160,7 +161,7 @@ describe('upgrade authentication (鎼?7.5)', () => {
     const server = await enforcedServer();
 
     // No cookie: an asserted identity is worthless, because identity is resolved from the
-    // session and from nowhere else (鎼?7.1, 鎼?7.5).
+    // session and from nowhere else (§17.1, §17.5).
     const withQuery = `${server.url}?userId=demo-ada`;
     assert.equal(
       await TestClient.expectRefused(withQuery),
@@ -179,11 +180,11 @@ describe('upgrade authentication (鎼?7.5)', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * 鎼?7.5 閳?join authorization and non-disclosure
+ * §17.5 — join authorization and non-disclosure
  * ------------------------------------------------------------------ */
 
-describe('join authorization (鎼?7.5)', () => {
-  it('transmits the caller閳ユ獨 own role in room-joined (鎼?.2)', async () => {
+describe('join authorization (§17.5)', () => {
+  it('transmits the caller’s own role in room-joined (§5.2)', async () => {
     const server = await enforcedServer();
 
     const owner = await connectAs(server, 'demo-ada');
@@ -199,7 +200,7 @@ describe('join authorization (鎼?7.5)', () => {
     assert.equal((await commenter.joinAndWait('demo-team-notes')).role, 'commenter');
   });
 
-  it('answers no-membership and unknown-document with the same code (鎼?7.4/鎼?7.5)', async () => {
+  it('answers no-membership and unknown-document with the same code (§17.4/§17.5)', async () => {
     const server = await enforcedServer();
 
     // `linus` has no membership on `demo-private-notes`; `no-such-document` exists for nobody.
@@ -219,7 +220,7 @@ describe('join authorization (鎼?7.5)', () => {
     assert.equal(outsider.closed, false);
   });
 
-  it('keeps the room a socket already holds when a second join is denied (鎼?7.5)', async () => {
+  it('keeps the room a socket already holds when a second join is denied (§17.5)', async () => {
     const server = await enforcedServer();
 
     // `grace` owns `demo-team-notes` and has no membership on `demo-private-notes`.
@@ -242,12 +243,12 @@ describe('join authorization (鎼?7.5)', () => {
     );
   });
 
-  it('does not read join-room.mode as an authorization input (鎼?7.5, 鎼?.3)', async () => {
+  it('does not read join-room.mode as an authorization input (CONTRACTS §17.5, ARCHITECTURE §8.3)', async () => {
     const server = await enforcedServer();
     const viewer = await connectAs(server, 'demo-linus');
 
     // Ask for `readwrite` explicitly. The server derives the capability from membership, so the
-    // claim changes nothing 閳?asserted through the role it reports and the write it still refuses.
+    // claim changes nothing — asserted through the role it reports and the write it still refuses.
     viewer.send({
       type: 'join-room',
       payload: { documentId: 'demo-document', protocolVersion: 2, mode: 'readwrite' },
@@ -263,11 +264,11 @@ describe('join authorization (鎼?7.5)', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * P2-1 閳?a viewer cannot change the document
+ * P2-1 — a viewer cannot change the document
  * ------------------------------------------------------------------ */
 
-describe('P2-1 閳?the SYNC gate keeps a viewer read-only', () => {
-  it('refuses a viewer閳ユ獨 update: not applied, not persisted, not broadcast, socket open', async () => {
+describe('P2-1 — the SYNC gate keeps a viewer read-only', () => {
+  it('refuses a viewer’s update: not applied, not persisted, not broadcast, socket open', async () => {
     const server = await enforcedServer();
 
     const owner = await connectAs(server, 'demo-ada');
@@ -318,10 +319,10 @@ describe('P2-1 閳?the SYNC gate keeps a viewer read-only', () => {
   it('lets a viewer read content that already existed before it joined', async () => {
     // The test that pins why `SyncStep1` needs `canRead` and not `canEdit`.
     //
-    // `docs/CONTRACTS.md` 搂17.5's table says "BINARY SYNC requires canEdit", but the handshake is
-    // only ever client-initiated (搂10.2): a client that cannot send `SyncStep1` can never receive
+    // `docs/CONTRACTS.md` §17.5's table says "BINARY SYNC requires canEdit", but the handshake is
+    // only ever client-initiated (§10.2): a client that cannot send `SyncStep1` can never receive
     // the document, because the server never pushes state unprompted. Gating the *read* half on
-    // `canEdit` would make the `viewer` role unable to read 鈥?the one thing it exists for, and a
+    // `canEdit` would make the `viewer` role unable to read — the one thing it exists for, and a
     // direct contradiction of P2-1's "the socket still receives others' updates".
     const server = await enforcedServer();
 
@@ -358,7 +359,7 @@ describe('P2-1 閳?the SYNC gate keeps a viewer read-only', () => {
     assert.deepEqual(errors, [], `reading must not be refused, saw ${errors.join(', ')}`);
   });
 
-  it('lets a viewer publish awareness, which needs canRead only (鎼?7.5)', async () => {
+  it('lets a viewer publish awareness, which needs canRead only (§17.5)', async () => {
     const server = await enforcedServer();
 
     const owner = await connectAs(server, 'demo-ada');
@@ -399,7 +400,7 @@ describe('P2-1 閳?the SYNC gate keeps a viewer read-only', () => {
     assert.deepEqual(errors, [], `awareness must not be refused, saw ${errors.join(', ')}`);
   });
 
-  it('allows a commenter to read but not to edit (鎼?7.5 + documentCapabilities)', async () => {
+  it('allows a commenter to read but not to edit (§17.5 + documentCapabilities)', async () => {
     const server = await enforcedServer();
     const commenter = await connectAs(server, 'demo-ada');
     await commenter.joinAndWait('demo-team-notes');
@@ -423,15 +424,15 @@ describe('P2-1 閳?the SYNC gate keeps a viewer read-only', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * P2-2 閳?identity is not self-declarable
+ * P2-2 — identity is not self-declarable
  * ------------------------------------------------------------------ */
 
-describe('P2-2 閳?a client cannot declare who it is', () => {
+describe('P2-2 — a client cannot declare who it is', () => {
   it('ignores a userId smuggled into the join payload', async () => {
     const server = await enforcedServer();
     const viewer = await connectAs(server, 'demo-linus');
 
-    // The parser strips unknown keys, so this field never reaches the server's logic 閳?and even
+    // The parser strips unknown keys, so this field never reaches the server's logic — and even
     // if it did, nothing reads it. Asserted by outcome: the role is still `viewer` and the write
     // is still refused.
     viewer.send({
@@ -477,10 +478,10 @@ describe('P2-2 閳?a client cannot declare who it is', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * P2-4 閳?one answer per role, four entry points
+ * P2-4 — one answer per role, four entry points
  * ------------------------------------------------------------------ */
 
-describe('P2-4 閳?shared judge, authz, WS join and WS frame agree', () => {
+describe('P2-4 — shared judge, authz, WS join and WS frame agree', () => {
   const cases: readonly { documentId: string; userId: string }[] = [
     { documentId: 'demo-document', userId: 'demo-ada' }, // owner
     { documentId: 'demo-document', userId: 'demo-grace' }, // editor
@@ -503,7 +504,7 @@ describe('P2-4 閳?shared judge, authz, WS join and WS frame agree', () => {
     for (const { documentId, userId } of cases) {
       const role: DocumentRole | null = server.authz.roleFor(documentId, userId);
 
-      // (1) the shared judge and (2) `authz.can` must agree on all four capabilities 閳?the decision
+      // (1) the shared judge and (2) `authz.can` must agree on all four capabilities — the decision
       // core reuses `documentCapabilities`, so a disagreement would mean a second rule table.
       for (const capability of capabilities) {
         const expected = role === null ? false : documentCapabilities[capability](role);
@@ -526,7 +527,7 @@ describe('P2-4 閳?shared judge, authz, WS join and WS frame agree', () => {
       }
 
       const joined = await client.waitForText('room-joined');
-      // (4a) the role the payload reports is the role the decision core resolved 閳?this is the
+      // (4a) the role the payload reports is the role the decision core resolved — this is the
       // `room-joined.role` row of the matrix, and the only channel the client has.
       assert.equal(joined.payload.role, role, `${documentId}/${userId}: room-joined.role`);
 
@@ -548,10 +549,10 @@ describe('P2-4 閳?shared judge, authz, WS join and WS frame agree', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * P2-5 (Node half) 閳?revocation is immediate
+ * P2-5 (Node half) — revocation is immediate
  * ------------------------------------------------------------------ */
 
-describe('P2-5 閳?a destroyed session is refused everywhere at once', () => {
+describe('P2-5 — a destroyed session is refused everywhere at once', () => {
   it('refuses the same token at the upgrade after DELETE /api/session', async () => {
     const server = await enforcedServer();
     const cookie = await bootstrapSessionCookie(server.httpUrl, 'demo-ada');
@@ -578,7 +579,7 @@ describe('P2-5 閳?a destroyed session is refused everywhere at once', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Task 5 閳?document metadata comes from the durable store
+ * Task 5 — document metadata comes from the durable store
  * ------------------------------------------------------------------ */
 
 describe('document metadata source (M2 Phase 2 P1, task 5)', () => {
