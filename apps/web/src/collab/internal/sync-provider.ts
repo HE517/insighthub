@@ -93,8 +93,16 @@ export interface SyncSocketFactory {
 export interface SyncProviderCallbacks {
   /** Network path state — informational for the UI, never a gate on editing. */
   onStatusChange(status: ConnectionStatus): void;
-  /** `room-joined` accepted: the room is now this socket's only room. */
-  onRoomJoined(documentId: string): void;
+  /**
+   * `room-joined` accepted: the room is now this socket's only room.
+   *
+   * `role` is the payload member added in M2 Phase 2 (`docs/CONTRACTS.md` §5.2) and is
+   * forwarded as `unknown` on purpose: whether a value is a `DocumentRole` is the
+   * session seam's rule (`CollaborativeSession.getRole()`, §17.9), not the transport's.
+   * Validating here as well would put the same rule in two layers and make the seam's
+   * own guarantee untestable.
+   */
+  onRoomJoined(documentId: string, role: unknown): void;
   /** The room was left (explicit disconnect or socket close). */
   onRoomLeft(): void;
   /** Typed server error from the frozen vocabulary. */
@@ -337,7 +345,7 @@ export class SyncProvider {
       this.joinAttempts = 0;
       this.clearJoinTimer();
       this.options.callbacks.onStatusChange('connected');
-      this.options.callbacks.onRoomJoined(message.payload.documentId);
+      this.options.callbacks.onRoomJoined(message.payload.documentId, message.payload.role);
       // Client-initiated handshake (§10.2) and presence announcement. Both are
       // sent only now, because no data-plane frame may precede `room-joined`.
       this.sendSyncStep1();

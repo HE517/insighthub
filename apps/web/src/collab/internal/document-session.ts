@@ -4,12 +4,14 @@ import * as Y from 'yjs';
 import {
   DOCUMENT_TEXT_KEY,
   UNDO_TRACKED_ORIGINS,
+  isDocumentRole,
   parsePresencePatch,
   type AwarenessBinding,
   type AwarenessState,
   type CollaborativeSession,
   type CollaboratorInfo,
   type ConnectionStatus,
+  type DocumentRole,
   type PresencePatch,
   type SessionState,
   type TransactionOrigin,
@@ -59,6 +61,14 @@ import type { SessionOptions } from './session-options.js';
  * and the undo history untouched. Reconnecting re-runs only the network half: the
  * same document re-joins and re-advertises its state vector, so offline edits are
  * merged rather than replaced, and a reconnect never builds a second document.
+ *
+ * ## Role
+ *
+ * The role reported by `getRole()` is the `room-joined.role` of the most recent
+ * **successful** join (`docs/CONTRACTS.md` §17.9). It lives in one private field and is
+ * cleared when the room ends, so a reconnect reports `null` until the new join arrives;
+ * it is never persisted, never mirrored into Redux/React and never written into
+ * awareness. Changes ride the existing `subscribe()` notification.
  */
 
 /** Test seams. Production passes none of these. */
@@ -123,6 +133,15 @@ export class DocumentSession implements CollaborativeSession {
   private sessionState: SessionState = 'initializing';
 
   private networkStatus: ConnectionStatus = 'idle';
+
+  /**
+   * Role from the most recent **successful** `room-joined`, or `null` while unknown.
+   *
+   * Only ever written from the join acknowledgement, through `parseRoomJoinedRole`; cleared
+   * when the room ends (`onRoomLeft`) and on `destroy()`. This is intentionally not a
+   * `readonly` field: a reconnect establishes a new room, and the role belongs to the room.
+   */
+  private roomRole: DocumentRole | null = null;
 
   /**
    * Whether this session has already processed a `room-joined`.
@@ -217,6 +236,35 @@ export class DocumentSession implements CollaborativeSession {
     return this.awarenessManager.getLocalState();
   }
 
+  /**
+   * This client's role in the current room — the M2 Phase 2 seam
+   * (`docs/CONTRACTS.md` §17.9).
+   *
+   * The answer is `null` — **unknown**, never a guess — in every state where no live,
+   * successful join backs a role:
+   *
+   * | Situation | Why `null` |
+   * | --- | --- |
+   * | before the first join / socket not started | no `room-joined` has been processed |
+   * | `state !== 'active'` (including after `destroy()`) | the session itself is not usable |
+   * | offline / reconnecting / error | the room ended with the socket; the role belonged to it |
+   * | after a denied or failed join | no `room-joined` was ever accepted |
+   * | unparseable or absent `role` | the value is not a `DocumentRole` |
+   *
+   * The last row is why there is no fallback. A client that guessed `editor` would enable
+   * controls the server will reject, and one that guessed `viewer` would lock a user out of
+   * their own unsent text (§17.9 gating consequence, R10). The server re-derives the real
+   * role at every enforcement point, so `null` costs nothing but honesty.
+   */
+  getRole(): DocumentRole | null {
+    // The gate is derived, not stored: a stored role can outlive the room it came from,
+    // and a stale role is worse than an unknown one. `roomRole` is additionally cleared
+    // when the room ends, so the two rules cover both "left the room" and "state changed".
+    if (this.sessionState !== 'active') return null;
+    if (this.networkStatus !== 'connected') return null;
+    return this.roomRole;
+  }
+
   transact(fn: (text: Y.Text) => void, origin: TransactionOrigin = this.defaultOrigin): void {
     this.doc.transact(() => {
       fn(this.text);
@@ -258,6 +306,8 @@ export class DocumentSession implements CollaborativeSession {
   destroy(): void {
     if (this.sessionState === 'destroyed') return;
     this.sessionState = 'destroyed';
+    // The room is gone, so the role is unknown again from here on (§17.9 rule 2).
+    this.roomRole = null;
 
     // 1. Remove the local awareness entry and broadcast the removal while the
     //    socket is still writable, so peers drop this cursor now rather than after
@@ -316,7 +366,7 @@ export class DocumentSession implements CollaborativeSession {
           this.networkStatus = status;
           this.notify();
         },
-        onRoomJoined: () => {
+        onRoomJoined: (_documentId, role) => {
           // Awareness is room-scoped: a fresh join must not inherit peer entries from a
           // previous room. Skipped on the first join for this session, where nothing can
           // be stale and the server's roster of existing collaborators must survive.
@@ -324,9 +374,18 @@ export class DocumentSession implements CollaborativeSession {
             this.awarenessManager.clearRemoteStates();
           }
           this.#hasJoinedOnce = true;
+          // The role is stored ONLY here, from a successful join, and only if it parses as
+          // a `DocumentRole` (docs/CONTRACTS.md §17.9 rule 1). A malformed value must not
+          // be remembered as "the last thing we heard".
+          this.roomRole = parseRoomJoinedRole(role);
+          // Existing channel: a role change is a session change (`§17.9 rule 4`).
           this.notify();
         },
         onRoomLeft: () => {
+          // The room this role described has ended (socket close, explicit disconnect).
+          // Reporting the old role until the next join would be exactly the stale-role
+          // guess §17.9 forbids, so it becomes unknown here rather than at reconnect time.
+          this.roomRole = null;
           this.notify();
         },
         onServerError: () => {
@@ -371,6 +430,25 @@ export class DocumentSession implements CollaborativeSession {
 
 /** The origin set a local undo may revert, taken from the frozen contract (R13). */
 export const SESSION_UNDO_ORIGINS: readonly TransactionOrigin[] = UNDO_TRACKED_ORIGINS;
+
+/**
+ * Validate the role carried by a successful `room-joined` (`docs/CONTRACTS.md` §17.9 rule 1).
+ *
+ * The wire parser (`parseServerMessage`) already enforces `documentRoleSchema`, so today an
+ * invalid or missing role never reaches this function — the whole `room-joined` message is
+ * rejected before the session sees it. This is deliberately not just a comment, though: the
+ * seam's own guarantee is "`getRole()` is a real `DocumentRole` taken from `room-joined`, or
+ * `null`". Leaving the transport's word unchecked would move that guarantee into
+ * `sync-provider.ts`, and any future path that hands the session a role from somewhere else
+ * (a test double, a replay, a second parser) would bypass it silently.
+ *
+ * Every non-`DocumentRole` — an unknown string such as `'admin'`, `null`, `undefined`, a
+ * number, an object — becomes `null` (unknown). It must never default to `editor`/`viewer`:
+ * a guessed role is a wrong UI gate, and §17.9 bans exactly that fallback.
+ */
+export function parseRoomJoinedRole(value: unknown): DocumentRole | null {
+  return isDocumentRole(value) ? value : null;
+}
 
 /**
  * Create a session for one document.

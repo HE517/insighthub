@@ -50,7 +50,16 @@ export * from './collab-session.js';
  * bump. `PROTOCOL_VERSION` stays **2**: no frame type, message type, framing rule or error
  * code changed — one payload grew one field, inside the existing `room-joined` message.
  *
+ * v7 (M2 Phase 2, A1): `CollaborativeSession` gained `getRole(): DocumentRole | null`
+ * (`docs/CONTRACTS.md` §17.9) — the client half that consumes `room-joined.role`, so UI gating
+ * has one frozen seam instead of being invented in whichever file the next agent opens. This
+ * is **breaking to implementers**: a `CollaborativeSession` implementation or test double
+ * without `getRole` no longer typechecks (the same class of break as v4, and for the same
+ * reason — the seam is implemented by A2's double as well as by A1). It is additive to
+ * runtime callers: no member was removed, retyped or narrowed. `PROTOCOL_VERSION` stays **2**:
+ * the wire already carries the role in `room-joined`, so no frame, message or payload changed.
+ *
  * See `docs/CONTRACTS.md` §15, §17 and `docs/DECISIONS.md` D-045 (design), D-057 (3 steps),
  * D-061 (M2 Phase 2 freeze) and D-062 (A3 owns `room-joined.role`).
  */
-export const SHARED_CONTRACT_VERSION = 6;
+export const SHARED_CONTRACT_VERSION = 7;
