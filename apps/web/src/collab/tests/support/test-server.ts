@@ -87,6 +87,17 @@ export class ContractTestServer {
   /** When set, `join-room` is rejected with this code (join failure paths). */
   rejectJoinWith: WsErrorCode | undefined;
 
+  /**
+   * The `role` reported in every `room-joined` this double sends.
+   *
+   * Typed `unknown` on purpose: the double is a transport stand-in, and a test needs to be
+   * able to make it **violate** the frozen payload contract (an unknown role string, a
+   * missing field) to prove the client answers `null` instead of accepting it. The real
+   * server resolves the role from membership and cannot produce such a value
+   * (`apps/server/src/authz/**`).
+   */
+  joinRole: unknown = 'owner';
+
   /** Every sync exchange observed, in order (used for byte-size assertions). */
   readonly syncExchanges: SyncExchange[] = [];
 
@@ -376,7 +387,8 @@ export class ContractTestServer {
       // authorization layer: it has no memberships and decides nothing, so it reports the
       // most permissive role rather than pretending to know the real one. The real value is
       // resolved server-side from the session + membership (`apps/server/src/authz/**`).
-      role: 'owner',
+      // `joinRole` is overridable (and cast) so a test can send a non-conforming value.
+      role: this.joinRole as RoomJoinedPayload['role'],
     };
   }
 
