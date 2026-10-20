@@ -185,7 +185,9 @@ export interface RoomRegistryOptions {
    * When present, the registry enforces §17.5 at its two decision points:
    *
    * - **join**: `roleFor` + `canRead`, denying with `ROOM_NOT_FOUND`;
-   * - **BINARY `SYNC`**: `canEdit`, denying with `FORBIDDEN`;
+   * - **BINARY `SYNC` `SyncStep1`**: `canRead` only — it is a *read* request; gating it on `canEdit`
+   *   would leave every `viewer` with an empty editor (`docs/CONTRACTS.md` §17.5 correction);
+   * - **BINARY `SYNC` `SyncStep2` / `Update`**: `canEdit`, denying with `FORBIDDEN`;
    * - **BINARY `AWARENESS`**: `canRead` only, so a viewer can still publish a cursor.
    *
    * When absent the registry behaves as M1: every socket may join and edit. Absent is only

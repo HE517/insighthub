@@ -18,6 +18,7 @@
     "pretest": "pnpm --filter @insighthub/shared build",
     "test": "vitest run && pnpm --filter @insighthub/server test",
     "test:unit": "vitest run",
+    "pretest:unit": "pnpm --filter @insighthub/shared build",
     "test:server": "pnpm --filter @insighthub/server test",
     "test:watch": "vitest",
     "format": "prettier --write \"{apps,packages}/**/*.{ts,tsx,json,css,html}\" \"*.{json,yaml,md}\"",

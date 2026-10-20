@@ -6,7 +6,7 @@ implementing. Changing this file requires Supervisor approval (`AGENTS.md` §2).
 
 | Version | Value |
 | --- | --- |
-| Shared contract version | `SHARED_CONTRACT_VERSION = 2` |
+| Shared contract version | `SHARED_CONTRACT_VERSION = 7` |
 | WebSocket protocol version | `PROTOCOL_VERSION = 2` |
 
 Sources of truth:
@@ -785,10 +785,16 @@ concern. It changes no seam, no message and no schema, so it is specified in
 `docs/DECISIONS.md` D-046 and `docs/ARCHITECTURE.md` §7.2 rather than here. Recording that
 explicitly keeps this document about the cross-boundary contract only.
 
-## 17. Identity, session authentication and authorization (M2 Phase 2 — FROZEN, NOT implemented)
+## 17. Identity, session authentication and authorization (M2 Phase 2 — IMPLEMENTED)
 
-Frozen by `docs/DECISIONS.md` **D-061** (Project Owner decision). Nothing in this section is
-implemented yet; it is the contract A5/A3 implement and A6/A7 verify.
+Frozen by `docs/DECISIONS.md` **D-061** (Project Owner decision) and **implemented**: the HTTP surface
+in `apps/server/src/authz/**` + `app.ts`, the WS enforcement points in `ws.ts` / `rooms/**`, and the
+client seam in `packages/shared/src/collab-session.ts` (§17.9). A6's real-browser suite exercises it
+(`tests/browser/suite/20-m2-phase2-authz.mjs`, `21-m2-f1-role-ui.mjs`) and A7 reviewed it.
+
+**What is verified vs. what is only promised** is not decided here — see `docs/DECISIONS.md` D-064 §1
+and D-068 for the release-note bans (UI gating *is* in effect since A2+A6; "revocation is immediate"
+and "the client heals after a restart" are still false).
 
 ### 17.0 Three terms that must not be collapsed
 

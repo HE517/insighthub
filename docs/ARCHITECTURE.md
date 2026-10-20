@@ -604,7 +604,7 @@ not change the contract; they pin what the first implementation is allowed to be
 | No-store server path | accepted as an internal/test compatibility seam, bounded by three obligations: production `index.ts` always opens the durable store; a durable-init failure refuses to start; isolated tests may run the no-store path but production cannot reach it |
 | Fail-closed wiring | `attachWebSocketServer` throws when `config.dataPath` is set but no store was supplied, so "forgot to open the store" is a startup failure rather than a silent memory-only server |
 
-## 8. Identity, session and authorization (M2 Phase 2 — FROZEN, NOT implemented)
+## 8. Identity, session and authorization (M2 Phase 2 — IMPLEMENTED, enforced at HTTP and WS)
 
 Frozen by `docs/DECISIONS.md` **D-061**. The normative interface (endpoints, cookie rules,
 status codes, WS behaviour, version impact) lives in `docs/CONTRACTS.md` **§17**; this section
@@ -631,7 +631,7 @@ never the authority.
 | --- | --- | --- |
 | HTTP | `apps/server/src/authz/**` middleware + route handlers | the web app |
 | WebSocket join | the room registry's join path, using a resolver supplied by the authz module | frame parsing, the client |
-| WebSocket frame | the room's mutation gate (BINARY `SYNC` requires `canEdit`) | awareness relay path (presence only needs `canRead`) |
+| WebSocket frame | the room's per-frame gate: `SYNC` `SyncStep1` requires **`canRead`** (it is a read request), `SYNC` `SyncStep2`/`Update` require **`canEdit`** | awareness relay path (presence only needs `canRead`); treating the whole SYNC plane as one write operation |
 | Document | `documentCapabilities` + the durable membership row | UI-only checks, duplicated rule tables |
 | Space | **does not exist in Phase 2** | a new entity invented to complete a table |
 

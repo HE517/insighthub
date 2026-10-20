@@ -2534,3 +2534,62 @@ A6 踩到：干净树上直接 `pnpm test` 必红（21/34 文件 `Failed to reso
 
 **后果。** F1 从"实现完成"变成"实现 + 可复核的真实浏览器证据"，并且这份证据是在**夹具不再能给自己
 发权限**的前提下取得的；同类场景从此有统一的双断言模板，`pnpm test` 也不再依赖执行顺序。
+
+---
+
+## D-069 · 2026-10-18 · accepted · A7 终审的文档条件：取代 D-064 禁令 1、修掉四处"功能不存在"记载 (M2 final)
+
+**背景。** A7 在 `06ecf14` 上独立重跑四门禁（typecheck 0 / vitest 34 files·378 tests + server 180/180
+自行退出 / build 0 / 浏览器 **48/48**）并给出 **GO WITH CONDITIONS**：**没有代码级阻塞**，条件全部
+是**文档事实错误与内部矛盾**。A7 把这一类定为 P1——理由与 D-059 同：milestone 一旦关闭，这批文档就是
+该 milestone 的说明，让它们断言"功能不存在"比留一段没写更糟。
+
+### 1. 四处"Phase 2 不存在"的记载（P1，已修）
+
+| 位置 | 原状 | 修正 |
+| --- | --- | --- |
+| `CONTRACTS.md` 版本表 | `SHARED_CONTRACT_VERSION = 2`（实际 **7**） | 改为 **7** |
+| `CONTRACTS.md` §17 标题与首段 | `FROZEN, NOT implemented` / "Nothing in this section is implemented yet" | **IMPLEMENTED** + 指向实现位置与浏览器证据 |
+| `ARCHITECTURE.md` §8 标题 | `FROZEN, NOT implemented` | **IMPLEMENTED, enforced at HTTP and WS** |
+| `PROJECT.md` M2 行 | `M2 Phase 2 / 权限认证（NOT STARTED）` | **已实现并合入 `main`**（HTTP/WS/UI 三层、48/48），仍 **未 CLOSED**，等 A7 终审与负责人授权 |
+
+这与 D-059 修的 P1 是**同一类**：功能做完了，权威文档还在说它没做。**它不是笔误，是会让下一位读者
+（尤其 M3 的 AI 工作）误判 seam 可用性的错误。**
+
+### 2. `ARCHITECTURE` §8.2 仍在教一条已被撤回的规则（P2，已修）
+
+§8.2 的框架表写着 "BINARY `SYNC` requires `canEdit`"，而 §17.5 早已勘误为
+`SyncStep1`→`canRead`、`SyncStep2/Update`→`canEdit`。**按 §8.2 实现会让每个 viewer 看到空编辑器**——
+这正是 D-063 §2c 记下的那个缺陷，在另一份权威文档里活着。已改。
+
+同一错误还在 `rooms/registry.ts` 的模块头摘要（L188）里：那里说 `SYNC`→`canEdit`，而同文件 L700 的
+逐帧表是正确的。**同一个文件里两处规则相反**，读者会信摘要。已改（注释级，A0 具名例外，无代码变更）。
+
+### 3. D-064 §1 的禁令 1 已被事实推翻，必须显式取代（P2）
+
+D-064 §1 禁令 1 是"**不得**声称 UI 权限门控已生效"。在 A2+A6 落地之后，这句话**从"保护诚实"变成了
+"与事实相反"**：UI 门控现在真的生效，并有 `f1/1…f1/4` 与重瞄后的 `p2/1·p2/2·p2/4` 证据。
+
+**取代规则**：禁令 1 **作废**；以下三条**继续有效**，任何人不得违反：
+
+| # | 仍有效的禁令 |
+| --- | --- |
+| 2 | 不得声称"吊销立即生效 / 登出即断开"——吊销是**请求级**的，已建 socket 保留准入身份 |
+| 3 | 不得声称"服务端重启后客户端自愈 / 会话自动恢复"——session 是进程内的 |
+| 4 | 不得声称"角色变更即时反映到 UI"——服务端每帧重判，客户端只在 `room-joined` 时更新（`f1/1` 实测降级后 3 秒仍是 editor） |
+
+**可以说、且有证据的**：viewer 在真实浏览器里无法从 UI 写入（DOM 不可编辑 + 只读 facet + 可见诚实文案
++ 无出站 SYNC 帧），且绕过 UI 的写入仍被服务端以 `FORBIDDEN` 拒绝、不持久化、不广播；未知角色不锁死
+编辑器。
+
+### 4. P3：记录但不阻塞（A6 的 latent 项）
+
+| 项 | 处置 |
+| --- | --- |
+| `tests/browser/lib/app.mjs#openApp` 仍以隐式 `arrangeAccess` 打开文档（当前未被使用） | **记录**为 latent F3 入口，A6 下次动该文件时关掉 |
+| `p2/5-role-change` 仍用较弱的 `waitForServerErrorCode`（"曾经出现过"） | **记录**：该场景测的是服务端拒绝，不涉及"自己主动发起的拒绝"，风险低于已修的三处；改用 `waitForNewServerErrorCode` 是 A6 的清理项 |
+| `pnpm test:unit` 在无 `packages/shared/dist` 的树上失败 | **已修**：新增 `pretest:unit`（D-068 §4 已为 `pnpm test` 加过 `pretest`，这里是同一缺陷的第二个入口） |
+
+**后果。** M2 的"代码可关闭"与"文档可关闭"重新对齐：权威文档不再描述一个不存在的 Phase 2，不再教一条
+会让 viewer 看空白的规则，也不再禁止一句现在为真的事实。剩下的都是记录在案的 latent 清理项，不足以
+阻断关闭。

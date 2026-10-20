@@ -458,7 +458,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
 | Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
-| 状态     | **A7 GO；A5+A3+A6 已合入 `main`（`87c971b`）**——授权闭环成立、44/44 浏览器证据。**M2 仍未 CLOSED**：关闭条件见下「A7 GO 的收口缺口」的 **B3（A3）** 与 **F1（A1+A2）**；发布说明禁令见 D-064 §1 |
+| 状态     | **Phase 2 已实现并合入 `main`（`06ecf14`），48/48 浏览器证据；A7 final review 进行中（interim: GO WITH CONDITIONS，条件均为文档一致性）。** **M2 仍未 CLOSED** —— 关闭需 A7 终审通过 + 项目负责人一次明确授权。发布说明禁令见 D-064 §1（禁令 1 已被 D-069 取代）与 D-066 §5 |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -560,8 +560,8 @@ A3(B3 注释) ∥ A1(getRole)          ← 本轮并行，base a3ff4a9
 | 成员关系                   | **已实现**：A5 自有表 `authz.db`（`documentId/userId/role`），demo fixture 种子，重启后仍在                                                  | `apps/server/src/authz/membership-store.ts`               |
 | WS 执行点                  | **已实现**：升级期 401 且**不建立 socket**、join 拒绝（与"文档不存在"同码）且不驱逐既有房间、BINARY 逐帧闸门、backlog 回放重新授权           | `ws.ts`、`rooms/{registry,room,context}.ts`               |
 | 客户端身份                 | **已接线**：bootstrap 取 `userId/displayName`；token 只存在于 httpOnly cookie，JS 不可达                                                     | `apps/web/src/session/**`、`user.ts`、`App.tsx`           |
-| 客户端权限门控             | **通道已通、消费侧未接**：`room-joined.role` 已由服务端发送并被浏览器实测收到，但全仓 **0 次 dispatch**（A7 F1）⇒ **UI 门控当前不生效**；服务端仍然拒绝，安全承诺未变弱 | `apps/web/src/features/permissions/**`（未被消费）        |
-| `FORBIDDEN` / 版本         | **已实现**：`FORBIDDEN` 非致命；`SHARED_CONTRACT_VERSION` **6**；`PROTOCOL_VERSION` 保持 2                                                   | `packages/shared/src/{errors,protocol,index}.ts`          |
+| 客户端权限门控             | **已生效**（A2 + A6）：`room-joined.role` → `session.getRole()` → `capabilityGate` → `EditorState.readOnly` + `EditorView.editable=false` + 可见诚实文案；三条本地写路径（facet / 交付 / `session.undo()`）全部挡住；**未知角色仍完全可编辑**。浏览器证据 `f1/1…f1/4` 与重瞄后的 `p2/1`、`p2/2`、`p2/4` | `apps/web/src/features/permissions/**`、`apps/web/src/features/editor/**` |
+| `FORBIDDEN` / 版本         | **已实现**：`FORBIDDEN` 非致命；`SHARED_CONTRACT_VERSION` **7**（`getRole()` 加入 seam）；`PROTOCOL_VERSION` 保持 2                                                   | `packages/shared/src/{errors,protocol,index,collab-session}.ts` |
 
 #### Phase 2 — A7 GO 的收口缺口（不阻断合入 `main`，阻断 **M2 关闭与发布说明**）
 
@@ -571,7 +571,7 @@ A3(B3 注释) ∥ A1(getRole)          ← 本轮并行，base a3ff4a9
 | **B3-residual** | 6 处 mojibake 落在**诊断字符串实参**内（`waitFor` 描述 4 处、`assert.equal`/`assert.deepEqual` 第 3 实参 2 处），应为 `’`/`—` | **待项目负责人一次性放宽 diff 规则** → 之后 A3 以**仅字符串字面量**的独立提交关闭 | **不修**（A0 决定）。理由：B3 的验收是 **diff 形状**规则；一旦 diff 里出现 `assert(...)` 行，审查就必须区分"assert 内的消息串"与"assert 被改了"，而这正是规则要消除的歧义。**B3 的 grep 验收因此是作用域的**：注释与标题 = 0，全文件 ≠ 0。**任何人不得声称"mojibake 已全库清零"** |
 | **F1** | `room-joined.role` 无消费者：viewer 可在 UI 里打字、本地看得见、服务端拒绝、他人看不到。**不得**表述为"viewer 能改文档" | **A1 → A2 → A6 → A0** | **CLOSED**：A1 半边（`0f63fdc`，v7）+ A2 半边（`5afdab9`，三条写路径全挡）+ A6 浏览器证据（`7ae4974`，**48/48**，含 `f1/1…f1/4`），A2+A6 一起进 `main`（`91bcf77`，D-068）。双断言模式（UI 只读 + 非 UI 路径仍 `FORBIDDEN` 且要求**新**帧）已成为同类场景标准。**禁令仍有效**：不得声称"角色变更即时反映到 UI"——`f1/1` 实测降级后 3 秒 UI 仍是 editor |
 | **F2** | 吊销/过期**不追溯已建 socket**（`writeApplied:true`）。契约已澄清为"请求级"（§17.2/§17.5、D-064），实现（断连或每帧重解）进 backlog | **A0**（契约，已完成）→ **A3**（实现，backlog） | 契约 **已澄清**；实现 **未做**。发布说明不得声称"吊销立即生效" |
-| **F3** | 夹具在 `role: null` 时仍会补写 membership（意图被 `setDocumentId` 覆盖） | **A6** | **证据前置条件（D-065 §5）**：F1 的 browser evidence 不得让该行为制造 false success。A6 要么修 F3，要么证明 null 场景不走该污染路径并使用不隐式建 membership 的 setup；**无法证明 ⇒ F1 browser evidence 判 FAIL** |
+| **F3** | 夹具在 `role: null` 时仍会补写 membership（意图被 `setDocumentId` 覆盖） | **A6** | **CLOSED**（D-068 §3）：两处写入点同时关闭（`newAppPage` 的 `role: null` 分支 + `setDocumentId(..., { arrangeAccess: false })`，默认 `true` 使遗留调用点行为不变），并有数据库级证明（窗口期 `membershipRow: null` → 之后才 `inserted`）。**残留风险**：`lib/app.mjs#openApp` 仍会以隐式 `arrangeAccess` 打开文档（当前未被使用），属 A6 的 latent 项 |
 | **F5 / B2** | TASKS 的 A3 ownership 行与 D-062 §1 矛盾 | **A0** | **已修**（本行上方 ownership 表） |
 | A3 的 public surface       | **已冻结**：`apps/server/src/authz/public.ts`（cookie→userId、documentId+userId→role、capability 判定）                                      | 同上                                                      |
 
