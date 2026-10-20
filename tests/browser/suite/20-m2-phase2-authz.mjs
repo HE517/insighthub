@@ -6,12 +6,25 @@
  *
  * | Scenario | What the browser actually produces |
  * | --- | --- |
- * | P2-1 | real `Input.insertText` into a viewer's editor, the `FORBIDDEN` frame the browser received, the socket that stayed open, the durable bytes that did not change, and the owner's later edit arriving on the *same* socket |
- * | P2-2 | `room-joined.role === 'viewer'` as the browser received it, with `userId` injected into the join payload/query/header and `mode: 'readwrite'` claimed — plus the still-denied write |
+ * | P2-1 | a viewer page whose editor is read-only in the DOM *and* in `EditorState`, a real `Input.insertText` that changes nothing and emits no SYNC frame, then a genuine SYNC update on the page's own socket answered with `FORBIDDEN` — the socket stays open, nothing is persisted, no peer sees it, and the owner's later edit still arrives on the *same* socket |
+ * | P2-2 | `room-joined.role === 'viewer'` as the browser received it, with `userId` injected into the join payload/query/header and `mode: 'readwrite'` claimed — plus the UI gate, and a write sent on that very socket still refused |
  * | P2-3 | byte comparison of the two `404`s as the browser's own `fetch` saw them, next to the `401` for no session |
- * | P2-4 | one table where `documentCapabilities`, HTTP, WS join, WS frame and `room-joined.role` are compared **per role**, and the browser is the one that performed the write |
+ * | P2-4 | one table where `documentCapabilities`, HTTP, WS join, WS frame, `room-joined.role` and the browser's own editable/read-only state are compared **per role**, and the browser is the one that performed the write (or was refused it) |
  * | P2-5 | a role change taking effect on an already-connected socket; `DELETE /api/session` turning the same token into `401` on HTTP **and** on the WS upgrade |
  * | P2-9 | `Network.getCookies` (what the browser holds) against `document.cookie`, `localStorage`, `sessionStorage`, `/api/session`, the bootstrap body and the server log |
+ *
+ * ## Why P2-1 / P2-2 / P2-4 no longer type into a viewer's editor
+ *
+ * A2's role gate (`docs/DECISIONS.md` D-067) makes a viewer's editor `EditorState.readOnly` +
+ * `EditorView.editable = false`, and refuses the local write in the delivery layer as well. The
+ * previous form of these three scenarios typed into that editor and waited for the `FORBIDDEN`
+ * frame the write used to provoke — a write the UI no longer produces, so they timed out.
+ *
+ * A0's decision (D-067 §4) is to answer **both** questions rather than drop one: the UI is
+ * asserted to be read-only, and the server's refusal is measured again through a **non-UI path**
+ * (a real SYNC update built with the frozen codec and sent over the page's own authenticated
+ * socket). Nothing was weakened: the `FORBIDDEN` assertion still runs, and it is still the
+ * browser that receives it.
  *
  * The membership rows these scenarios depend on are written by
  * `lib/authz-fixture.mjs` into the run's own `authz.db` and appear in each scenario's evidence
@@ -25,6 +38,7 @@ import {
   pageCloseCodes,
   qaSummary,
   readConnectionStatus,
+  readEditorGate,
   setOffline,
   sleep,
   typeInEditor,
@@ -37,12 +51,25 @@ import { loadShared, loadYjs } from '../lib/deps.mjs';
 import { reconstructDurableDocument } from '../lib/durable-store.mjs';
 import { assert, assertDeepEqual, assertEqual, assertIncludes } from '../lib/harness.mjs';
 import { WireOracle } from '../lib/oracle.mjs';
+import {
+  assertKeystrokeProducesNoWrite,
+  assertUiEditable,
+  assertUiReadOnly,
+  sendBypassWrite,
+  waitForBypassDenial,
+} from '../lib/role-gate.mjs';
 import { openWireSocket } from '../lib/wire-socket.mjs';
 
 /** A per-run marker, so stale content from an earlier scenario can never satisfy an assertion. */
 function marker(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * The UI-gate and non-UI-write assertions live in `lib/role-gate.mjs`, because the F1 evidence
+ * suite (`21-m2-f1-role-ui.mjs`) asks the same three questions. One wording, one place — a second
+ * copy is how two scenarios end up proving slightly different things while both look green.
+ */
 
 /** The document text reconstructed from the durable bytes (the server's own truth). */
 async function durableText(ctx, documentId) {
@@ -120,11 +147,12 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'p2/1-viewer-cannot-write',
-    'a viewer types in the real editor: FORBIDDEN in the browser, nothing persisted, no peer sees it, and the socket keeps receiving',
+    'a viewer page is read-only (real keystrokes write nothing) — and a SYNC update that bypasses the UI is still refused with FORBIDDEN, unpersisted and unbroadcast, while the socket keeps reading',
     async (ctx) => {
       // `demo-document` is the seeded fixture: ada=owner, grace=editor, linus=viewer
       // (`apps/server/src/authz/demo-fixture.ts`). Using it means this scenario proves the
-      // *seeded* roles, not a role the harness arranged for itself.
+      // *seeded* roles, not a role the harness arranged for itself — and `role: null` means the
+      // page-opening path writes no membership row at all (D-065 §5 / A6 F3).
       const documentId = 'demo-document';
       const existing = marker('VIEWER-READ');
       const attempted = marker('VIEWER-WRITE');
@@ -167,9 +195,32 @@ export function register(runner) {
 
         const socketsBefore = await qaSummary(viewer);
 
-        // The real path: click into the editor and type.
-        await typeInEditor(viewer, attempted);
-        const denial = await waitForServerErrorCode(viewer, 'FORBIDDEN', { documentId });
+        /* ---------- (a) the UI half: a viewer page cannot produce a write ---------- */
+        // Re-aimed by A0 (D-067 §4). Before A2's gate this scenario typed into the viewer's
+        // editor and asserted the FORBIDDEN frame that resulted. The gate now makes that write
+        // impossible, so the same keystroke is used to prove the *opposite* fact — the UI
+        // produces nothing — and the server's refusal is proven separately, over the wire.
+        await assertUiReadOnly(ctx, viewer, { documentId, role: 'viewer' });
+        await assertKeystrokeProducesNoWrite(ctx, viewer, {
+          documentId,
+          label: 'viewer',
+          attempt: attempted,
+        });
+
+        /* ---------- (b) the server half: bypass the UI, over the page's own socket ---------- */
+        // A genuine SYNC update on the browser's authenticated socket. Nothing in the UI is
+        // involved: this is what a client that ignores its own role gate would send.
+        const bypass = await sendBypassWrite(ctx, viewer, {
+          documentId,
+          text: attempted,
+          label: 'viewer',
+        });
+
+        const denial = await waitForBypassDenial(ctx, viewer, {
+          documentId,
+          label: 'viewer',
+          afterCount: bypass.forbiddenBefore,
+        });
         ctx.note('error frame the browser received', denial);
 
         // The denial is non-fatal: the socket is still there and no fatal close happened.
@@ -225,9 +276,24 @@ export function register(runner) {
           label: "the owner's edit to be durable",
         });
         const editorAfter = (await waitForEditorText(viewer, () => true)).text;
-        ctx.note('viewer local text still holds its own refused edit', {
+        ctx.note('viewer local text after the refused bypass', {
           containsRefusedText: editorAfter.includes(attempted),
+          note:
+            'the refused frame was built from a throwaway Y.Doc, so the client never integrated ' +
+            'it and its own text is intact: the divergence D-064 §2 item 3 records comes from a ' +
+            'client writing its OWN Y.Text, which A2’s gate now prevents',
         });
+        assert(
+          !editorAfter.includes(attempted),
+          'the refused bypassed update must never appear in the client’s document either',
+        );
+        // The gate must survive all of it: the viewer's editor is still read-only.
+        const gateAfter = await readEditorGate(viewer);
+        assertEqual(
+          gateAfter.contentEditable,
+          'false',
+          'the viewer’s editor must still be read-only after being refused a write',
+        );
       } finally {
         owner.close();
       }
@@ -239,7 +305,7 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'p2/2-identity-cannot-be-self-declared',
-    "userId in the join payload / query / header and mode=readwrite change nothing: the browser is still role=viewer and still cannot write",
+    "userId in the join payload / query / header and mode=readwrite change nothing: the page's UI is read-only, its socket is still role=viewer, and a write sent on it is still refused",
     async (ctx) => {
       const documentId = `p2-identity-${marker('doc')}`;
       const base = marker('IDENTITY-BASE');
@@ -342,15 +408,39 @@ export function register(runner) {
           'a userId in the join payload must not change the resolved role',
         );
 
-        // And the write is still refused.
-        await typeInEditor(viewer, attempted);
-        const denial = await waitForServerErrorCode(viewer, 'FORBIDDEN', { documentId });
+        /* ---------- the UI half: the page cannot produce the write at all ---------- */
+        await assertUiReadOnly(ctx, viewer, { documentId, role: 'viewer' });
+        await assertKeystrokeProducesNoWrite(ctx, viewer, {
+          documentId,
+          label: 'viewer after the identity injection',
+          attempt: attempted,
+        });
+
+        /* ---------- the server half: send it over the socket that made the claims ---------- */
+        // This is the socket that carried `userId: 'demo-ada'` and `mode: 'readwrite'`. If any of
+        // that were trusted, this frame would be applied. It is refused instead, which is the
+        // claim this scenario has always made — now measured where it is actually decided.
+        const bypass = await sendBypassWrite(ctx, viewer, {
+          documentId,
+          text: attempted,
+          label: 'viewer after the identity injection',
+        });
+
+        const denial = await waitForBypassDenial(ctx, viewer, {
+          documentId,
+          label: 'viewer after the identity injection',
+          afterCount: bypass.forbiddenBefore,
+        });
         ctx.note('browser denial after the identity injection', denial);
         await sleep(2_000);
         const stored = await durableText(ctx, documentId);
         assert(
           !(stored ?? '').includes(attempted),
           'a mode=readwrite + userId claim must not buy a write (nothing may be persisted)',
+        );
+        assert(
+          !owner.text.includes(attempted),
+          'a mode=readwrite + userId claim must not buy a broadcast to the other peer',
         );
 
         // Query string + request header, which a browser cannot forge: the oracle is still a
@@ -549,7 +639,7 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'p2/4-role-capability-consistency',
-    'owner, editor and viewer get the same answer from documentCapabilities, HTTP, the WS join, the WS frame and room-joined.role',
+    'owner, editor and viewer get the same answer from documentCapabilities, HTTP, the WS join, the WS frame, room-joined.role and the browser’s own UI gate',
     async (ctx) => {
       const documentId = `p2-matrix-${marker('doc')}`;
       const shared = await loadShared();
@@ -622,23 +712,44 @@ export function register(runner) {
           const persisted = (durableAfter ?? '').includes(text);
           const broadcast = witness.text.includes(text);
 
-          // 3. The browser must agree with all of that: its own `room-joined.role`, and a real
-          //    keystroke through the real editor.
+          // 3. The browser must agree with all of that: its own `room-joined.role`, the UI gate
+          //    that role produces, and an actual write attempt.
           const page = await ctx.newAppPage({ documentId, as: userId, role: null });
           const browserRole = await lastRoomJoinedRole(page, documentId);
           const browserText = marker(`BROWSER-${role.toUpperCase()}`);
-          await typeInEditor(page, browserText);
+          const gate = expected.canEdit
+            ? await assertUiEditable(ctx, page, { role })
+            : await assertUiReadOnly(ctx, page, { documentId, role });
           if (expected.canEdit) {
+            await typeInEditor(page, browserText);
             await waitForDurableText(ctx, documentId, (value) => value.includes(browserText), {
               timeoutMs: 25_000,
               label: `the ${role}'s browser keystroke to persist`,
             });
           } else {
-            await waitForServerErrorCode(page, 'FORBIDDEN', { documentId });
+            // The UI can no longer generate this write (that is the point of A2's gate), so the
+            // refusal is measured with a real SYNC frame on the page's own socket instead of
+            // being dropped (D-067 §4). Nothing about the server-side assertion is weakened.
+            await assertKeystrokeProducesNoWrite(ctx, page, {
+              documentId,
+              label: `${role} browser`,
+              attempt: browserText,
+            });
+            const bypass = await sendBypassWrite(ctx, page, {
+              documentId,
+              text: browserText,
+              label: `${role} browser`,
+            });
+            assertEqual(bypass.ok, true, `${role}: the bypassed write must reach the socket`);
+            await waitForBypassDenial(ctx, page, {
+              documentId,
+              label: `${role} browser`,
+              afterCount: bypass.forbiddenBefore,
+            });
             await sleep(2_000);
             assert(
               !(await durableText(ctx, documentId)).includes(browserText),
-              `a ${role}'s browser keystroke must not persist`,
+              `a ${role}'s browser-originated update must not persist`,
             );
           }
           const browserPersisted = (await durableText(ctx, documentId)).includes(browserText);
@@ -653,6 +764,13 @@ export function register(runner) {
             browser: {
               roomJoinedRole: browserRole,
               keystrokePersisted: browserPersisted,
+              ui: {
+                contentEditable: gate.contentEditable,
+                viewReadOnly: gate.viewReadOnly,
+                noticePresent: gate.notice.present,
+                noticeVisible: gate.notice.visible,
+                noticeText: gate.notice.text,
+              },
             },
           });
         }
@@ -698,6 +816,24 @@ export function register(runner) {
             row.browser.keystrokePersisted,
             row.expected.canEdit,
             `${row.role}: the browser keystroke must agree with canEdit`,
+          );
+          // The UI gate is the fifth column of the same table (D-065 §4 point 1): what the
+          // editor allows locally must be the same `documentCapabilities.canEdit` answer the
+          // server enforces, and a non-editing role must be told why.
+          assertEqual(
+            row.browser.ui.contentEditable,
+            row.expected.canEdit ? 'true' : 'false',
+            `${row.role}: the editor's editability must agree with canEdit`,
+          );
+          assertEqual(
+            row.browser.ui.viewReadOnly,
+            !row.expected.canEdit,
+            `${row.role}: EditorState.readOnly must equal !canEdit`,
+          );
+          assertEqual(
+            row.browser.ui.noticePresent,
+            !row.expected.canEdit,
+            `${row.role}: the read-only notice must appear exactly when the role may not edit`,
           );
         }
         ctx.note(

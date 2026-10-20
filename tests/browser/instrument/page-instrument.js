@@ -551,6 +551,33 @@
   };
 
   /**
+   * Send one **BINARY** frame (base64) on the newest socket for a document.
+   *
+   * This is the harness's "bypass the UI" instrument for the M2 Phase 2 F1 evidence
+   * (`docs/DECISIONS.md` D-065 §4 point 4). The bytes are built outside the page with the frozen
+   * codec, but they travel over the browser's **own authenticated socket**, so the server's
+   * answer (`FORBIDDEN`) is received by the real client and recorded in `inboundControl`.
+   *
+   * Deliberately routed through the wrapper's own `send`, so the frame appears in `qa.frames` as
+   * an outbound binary frame: a scenario can then prove that a write really did go out on the
+   * wire, instead of asserting against a socket it never observed.
+   */
+  qa.sendBinary = function sendBinary(documentId, base64) {
+    const sockets = qa.sockets.filter((socket) => socket.documentId === documentId);
+    const target = sockets[sockets.length - 1];
+    if (target === undefined) return { ok: false, reason: 'no socket for that document' };
+    try {
+      const bytes = fromBase64(base64);
+      target.native.send(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      );
+      return { ok: true, byteLength: bytes.byteLength };
+    } catch (error) {
+      return { ok: false, reason: String(error) };
+    }
+  };
+
+  /**
    * TEXT control frames recorded for a document, optionally one direction.
    *
    * NOTE the one wrinkle: a socket learns `record.documentId` **from** its `join-room`, so the
