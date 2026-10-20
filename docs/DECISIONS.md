@@ -2457,3 +2457,80 @@ A6 的 worktree 由 A0 先 merge `agent/a2-m2-p2-ui-role`，在集成后的树�
 **后果。** F1 的两半都实现完毕且经 A0 复核；UI 现在真的会挡住 viewer 的本地写入（含一条容易被忽略的
 撤销通道），而"服务端才是边界"这件事因为三个场景失效反而获得了更明确的验证计划——只是需要 A6 用
 非 UI 路径把它重新证明一遍。
+
+---
+
+## D-068 · 2026-10-18 · accepted · A6 证据闭环：双断言成为标准、F3 修掉、门禁顺序修掉 (M2 Phase 2 closure)
+
+**背景。** A6 在 `agent/a6-m2-p2-ui-evidence`（基座 `387f69d` = main + A2）完成 F1 浏览器证据与 F3，
+浏览器场景 **44 → 48**，四门禁全绿。A6 结束时**未提交**，改动只在工作树；A0 核验范围后以其名义提交
+（`7ae4974`：5 改 + 2 新，**全部在 `tests/browser/**`**），再 `--no-ff` 合入 `main`（`91bcf77`，
+A2 + A6 一次性进入，`main` 未出现红窗口）。
+
+### 1. 双断言成为同类场景的标准（回答 A6 的问题 ①）
+
+**采纳并冻结为模式**：任何"UI 门控 + 服务端仍是边界"的场景，必须写成**两条独立断言**：
+
+1. **UI 侧**：`contenteditable=false`、live `EditorState.readOnly === true`、提示**可见**且文案诚实
+   （`[data-testid="read-only-notice"]`，不得含 `saved`/`saving`/`immediately`/`instant`）、
+   真实击键后编辑器长度不变、**出站 SYNC 帧计数不变**、本地副本 update 数不变；
+2. **服务端侧**：用冻结 codec 构造一个**不经过 UI** 的写入，走页面自己已认证的 socket，
+   要求**新**的 `FORBIDDEN`（基线计数 +1），并断言不持久化、不广播、socket 数与 close 数不变。
+
+**为什么必须两条**：旧的单条形式（"打字 → 服务端拒绝"）把两个问题压成一个观察；门控一生效，该观察
+就消失——这恰好证明它们相互独立。UI 门控被击败时（伪造 `room-joined(role:"owner")`），第 2 条仍然
+成立，这正是"UI 不是安全边界"的**唯一**可信证据。
+
+### 2. 一处测试质量缺陷：`waitForServerErrorCode` 太弱
+
+旧辅助函数只要求"曾经出现过 `FORBIDDEN`"——任何更早的同码帧都能让它通过。对于"由测试自己主动发起的
+拒绝"这类断言，这是**假阳性通道**。已改为 `waitForNewServerErrorCode(afterCount)`：发送前记录计数，
+要求之后出现**新**帧（实测 `forbiddenFramesBefore: 0 → now: 1`）。
+
+这不是产品 bug，但它污染的是**证据本身**，比产品 bug 更危险——一个只在"某处曾经出现过"意义上成立的
+断言，会在回归时继续为绿。
+
+### 3. F3 修掉，并附数据库级证明
+
+两处隐式写 membership 的路径同时关闭：`run.mjs#newAppPage` 在 `role: null` 时既不写也不让
+`setDocumentId` 写；`lib/app.mjs#setDocumentId(page, documentId, { arrangeAccess = true })` 新增开关
+（默认 `true`，**遗留调用点行为不变**）。
+
+证明（`f1/3` 的真实输出，不是论证）：窗口期 `{"fixtureWritesSoFar":0,"membershipRow":null}` →
+页面打开并打字后仍有 `{"fixtureWrites":0,"membershipRow":null}` → 之后才 `{"role":"editor","action":"inserted"}`。
+且该场景用 `offlineFirst`（在任何应用脚本之前置离线）保证**从未尝试 join**，因此没有经过任何可隐式
+造权限的路径。**这满足了 D-065 §5 的 evidence condition**：不是"证明它不伤害结论"，而是"把可能伤害
+结论的路径关掉"。
+
+### 4. 门禁顺序：修掉，而不是写进文档（回答 A6 的问题 ②）
+
+A6 踩到：干净树上直接 `pnpm test` 必红（21/34 文件 `Failed to resolve entry for package
+"@insighthub/shared"`，vitest 需要 `packages/shared/dist`），先 `build` 才绿。
+
+**决定**：在根 `package.json` 增加 `"pretest": "pnpm --filter @insighthub/shared build"`。
+理由：把"先 build 再 test"写成文档，等于把门禁的可用性交给读者记忆；而 `pretest` 让
+`pnpm test` **单独就是完整的**。一个需要先执行另一条命令才算数的门禁，本身就是缺陷。
+
+### 5. 提交如何落（回答 A6 的问题 ③）
+
+计划不变：**A2 + A6 一次性进入 `main`**（`91bcf77`）。A6 未提交是流程缺口，不是内容问题；A0 以 A6 名义
+提交并在 commit message 里写明，范围经核验（只有 `tests/browser/**`）。**规则补记**：Agent 交付前必须
+把自己的改动提交到分支；未提交的工作树不算交付物，A0 代提交只在"内容已核验且范围单一"时进行。
+
+### 6. 带入 A7 的未验证清单（A6 自述，A0 未扩大其可信度）
+
+- `getRole()` 是模块级对象，harness 不能直接调用；`null` 的证据是"两个消费者 + 页面从未收到
+  `room-joined`"的**合成**证据（场景内已如此标注）；
+- `null` 只覆盖"首帧之前（offline-first）"与"reconnecting"两种，§17.9 列的"被拒 join 之后"未单独覆盖；
+- `commenter` 没有浏览器行（门控对任何非 `canEdit` 角色一致，但未在浏览器跑过）；
+- 未测"被篡改的客户端构建"整体，只测其关键等价物；
+- `react StrictMode` 使启动期 mount/unmount 为 4/3，**"不重挂载"必须读增量**，看绝对值会误判。
+
+### 7. 一条要正确引用的实测
+
+`f1/1` 记录：把 linus 降级为 viewer 后 **3 秒**，UI 仍是 `role: editor / contentEditable: true`，
+直到下一次成功 join 才变 viewer。**这是 D-066 §5（角色滞后）的实证，不是缺陷报告**；
+它同时是"不得声称角色变更即时反映到 UI"这条禁令的**正面证据**。
+
+**后果。** F1 从"实现完成"变成"实现 + 可复核的真实浏览器证据"，并且这份证据是在**夹具不再能给自己
+发权限**的前提下取得的；同类场景从此有统一的双断言模板，`pnpm test` 也不再依赖执行顺序。

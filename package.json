@@ -15,6 +15,7 @@
     "build": "pnpm --filter @insighthub/shared build && pnpm --filter @insighthub/server build && pnpm --filter @insighthub/web build",
     "start": "pnpm --filter @insighthub/server start",
     "typecheck": "pnpm -r typecheck",
+    "pretest": "pnpm --filter @insighthub/shared build",
     "test": "vitest run && pnpm --filter @insighthub/server test",
     "test:unit": "vitest run",
     "test:server": "pnpm --filter @insighthub/server test",
