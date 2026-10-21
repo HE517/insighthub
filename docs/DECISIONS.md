@@ -2737,3 +2737,68 @@ clear 旧的，并在回调里校验"自己仍是最新 timer"；配一个 `time
 
 **后果。** M2 关闭的唯一 blocker 从"门禁会不可预测地卡住"变成"门禁可解释、可复现地退出，且红的那样会
 红得看得见"。代价是一轮诊断与一批测试 helper 的收口；收益是 milestone 关闭时"门禁绿"重新有定义。
+
+---
+
+## D-072 · 2026-10-21 · accepted · M2 CLOSED：closure commit、tag 顺序与 R1–R8 的移交 (M2 closure)
+
+**背景。** 项目负责人在收到 A7 closure review（GO WITH CONDITIONS，唯一 P2 条件 `C-A7-M2-1` 已由 A0
+关闭）与 `344b83a` 上的四门禁结果后，**明确授权关闭 M2**，并调整了动作顺序：**先做一个 docs-only
+closure commit 标 CLOSED，确认 diff 严格 docs-only，在该最终 HEAD 上重跑四门禁，然后才创建
+annotated tag**。本条记录这次关闭本身。
+
+### 1. 关闭依据（技术 closure，已由负责人接受）
+
+| 项 | 结果 |
+| --- | --- |
+| 技术证据基线 | `344b83a`：`pnpm typecheck` 0、`pnpm test` 0（vitest **378** + server **181/181**，聚合汇总打印）、`pnpm build` 0、`node tests/browser/run.mjs` **48/48**（端口释放、无遗留句柄） |
+| TOOLING-P2 | **闭环**：A7 独立复现"失败测试 → exit 1 + `# fail 1`"，对照组（旧写法）60 s 仍不退出；重复运行 server 5/5、root 3/3 无挂起 |
+| A7 审查 | Phase 2 final review（`A7-m2-final-review.md`）与 M2 closure review（`A7-m2-closure-review.md`）均 GO WITH CONDITIONS，**条件均已关闭** |
+| 仓库事实 | `m1-closed` / `m1-p0-baseline` / `m2-p0-gate` 未动；remote 仍为 none |
+
+### 2. tag 顺序（本条的实际约束）
+
+```text
+344b83a（技术证据基线，四门禁已绿）
+  → docs-only closure commit（本记录 + PROJECT/TASKS 标 CLOSED）
+  → 确认 diff 严格 docs-only（只允许 docs/**）
+  → 在该 closure HEAD 上重跑四门禁
+  → 全绿后才创建 annotated tag m2-closed（指向 closure HEAD）
+```
+
+**为什么先文档后 tag**：tag 一旦打出，它指向的那棵树就是 M2 的最终说明。如果文档仍写 "NOT CLOSED"，
+tag 就在自我否定（D-059 P1 / D-069 已两次踩过同类）。而如果先打 tag 再改文档，tag 指向的就不再是
+最终状态。所以顺序是"文档先闭合 → 门禁在最终树复跑 → tag 最后"。
+
+### 3. M2 CLOSED 意味着什么
+
+- M1 的"没有服务端持久化"限制已移除（`M2-P0-1`，D-060）；
+- "没有任何权限"的状态已移除：session authentication + document authorization 在 HTTP / WebSocket /
+  UI 三层执行，服务端是唯一权威（§17、§8）；
+- 门禁重新可信：失败的测试现在**红着退出并打印 `# fail`**，不再以挂起掩盖红色（D-071）。
+
+### 4. M2 CLOSED **不**意味着什么（R1–R8 必须带进 M3 kickoff）
+
+| # | 残留 | 归属建议 |
+| --- | --- | --- |
+| R1 | 吊销/过期是**请求级**的：已建 socket 不会因登出断开 | A3 |
+| R2 | session 进程内；服务端重启后客户端**不会**自动重新 bootstrap | A1 + A2 |
+| R3 | 角色变更**不推送**：UI 门控可能滞后到下次 join（需新控制面消息 + `PROTOCOL_VERSION` bump） | A0 → A1/A2 |
+| R4 | 6 处诊断字符串仍含 mojibake（注释与标题已清零，全文件不是 0） | A3 |
+| R5 | `commenter` 无浏览器行；"被拒 join 之后"的 null 窗口未单独覆盖 | A6 |
+| R6 | `openApp` 仍带隐式 `arrangeAccess` 默认（当前无调用方） | A6 |
+| R7 | 主 bundle 1.41 MB 未拆分 | A2 |
+| R8 | `heartbeat.ts` 的 stale reap timer（生产参数不可达） | A3 |
+
+发布说明禁令继续有效：D-064 §1 的禁令 2/3/4 与 D-066 §5（禁令 1 已由 D-069 §3 取代）。
+
+### 5. 本次关闭**没有**做什么
+
+- 没有修改任何代码、测试、契约或 `packages/shared/**`（closure commit 严格 docs-only，见 §2 的 diff 检查）；
+- 没有移动、删除或重建既有 tag；
+- 没有 push、没有创建 remote；
+- 没有进入 M3：R1–R8 只被**移交**，不被解决。
+
+**后果。** M2 从"技术已完成、记录未闭合"变为一个**可引用、可复现、文档与代码一致**的基线（`m2-closed`）。
+代价是关闭前多了一轮文档修正与重跑；收益是下一个里程碑接手时，"M2 已经做完什么、明确没做什么"这两件事
+都在仓库里，而不是在对话里。

@@ -369,18 +369,42 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 ---
 
-## M2 — Durable persistence & permission/auth consistency (M2-P0 Gate: PASS; Phase 2 COMPLETE — closure pending owner authorization)
+## M2 — Durable persistence & permission/auth consistency (CLOSED — `m2-closed`)
 
-状态：**三项 P0 全部 IMPLEMENTED；M2-P0 Gate 已发布到 `main`。** M2-P0 Exit Gate 由 A7 独立评审判为
-**APPROVE**（判据与证据见下「M2-P0 Exit Gate vs M2 Milestone」）。基线：从 immutable tag
-`m1-closed`（`f3c353e`）分出，经 `m2-stabilization`（`ec762ef`）以 `--no-ff` merge 合入 `main`，
-annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck / test / build / browser 全绿
-（记录见 `docs/DECISIONS.md` D-060）。
-**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）**已实现并有真实浏览器证据**（状态口径见
-`docs/DECISIONS.md` D-070 §2：feature / evidence / A7 review 均 **COMPLETE**），TOOLING-P2 亦已关闭（D-071）。
-**M2 仍未 CLOSED**：唯一剩余动作是项目负责人对 `m2-closed` 的**一次明确授权**（D-070 §1）。
-`m2-closed` **当前不存在**；授权前不得创建。
-决策：`docs/DECISIONS.md` **D-040…D-071**。
+状态：**M2 CLOSED。** 两段式全部完成：`M2-P0 Exit Gate`（A7 **APPROVE**，发布为 `m2-p0-gate`，
+基线 `m1-closed` → `m2-stabilization` → `main`，D-060）+ `M2 Phase 2 / 权限认证`（session authentication
++ document authorization，HTTP / WS / UI 三层，D-061…D-068）+ **TOOLING-P2 门禁修复**（D-070 / D-071）。
+最终 annotated tag **`m2-closed`** 指向本文档所在的 closure commit；两条 review 链见
+`docs/agent-governance/A7-m2-final-review.md`（Phase 2，GO WITH CONDITIONS，条件已关闭）与
+`docs/agent-governance/A7-m2-closure-review.md`（milestone closure，GO WITH CONDITIONS，唯一 P2 条件
+`C-A7-M2-1` 已关闭）。
+**M2 关闭不等于功能完备**：R1–R8 作为具名 residual/backlog 带入 M3（见下「M2 closure record」），
+发布说明禁令（D-064 §1 中仍有效的三条 + D-066 §5）继续适用。
+决策：`docs/DECISIONS.md` **D-040…D-072**。
+
+### M2 closure record
+
+| 项 | 值 |
+| --- | --- |
+| 关闭授权 | 项目负责人，明确授权（先 docs-only closure commit → 四门禁 → 才打 tag） |
+| 技术证据基线 | `344b83a`：typecheck 0 / test 0（vitest **378** + server **181/181**，聚合汇总打印）/ build 0 / browser **48/48** |
+| 最终 tag | `m2-closed`（annotated）→ closure commit；closure commit 上四门禁在打 tag 前**重跑**，结果写入 tag message |
+| A7 审查 | 两轮独立审查，均 GO WITH CONDITIONS，条件均已关闭（D-069 / `C-A7-M2-1`） |
+| 门禁可信度 | TOOLING-P2 关闭：失败测试现在 **exit 非零并打印 `# fail`**，不再以"全绿后挂起"掩盖红色（D-071） |
+| 未动的 refs | `m1-closed`（`f3c353e`）、`m1-p0-baseline`（`f031063`）、`m2-p0-gate`（tag object `edfa886` → `dfc5389`）；remote 仍为 none |
+
+**R1–R8（具名 residual / backlog，不阻断 M2，带入 M3 kickoff）**
+
+| # | 残留 |
+| --- | --- |
+| R1 | 吊销/过期是**请求级**的：已建 socket 不会因登出断开（契约 §17.2/§17.5 已写明） |
+| R2 | session 进程内；服务端重启后客户端**不会**自动重新 bootstrap |
+| R3 | 角色变更**不推送**：UI 门控可能滞后到下次 join（需新控制面消息 + `PROTOCOL_VERSION` bump） |
+| R4 | 6 处诊断字符串仍含 mojibake（注释与标题已清零，**全文件不是 0**；B3-residual） |
+| R5 | `commenter` 无浏览器行；"被拒 join 之后"的 null 窗口未单独覆盖 |
+| R6 | `tests/browser/lib/app.mjs#openApp` 仍带隐式 `arrangeAccess` 默认（当前无调用方） |
+| R7 | 主 bundle 1.41 MB 未拆分 |
+| R8 | `heartbeat.ts` 的 stale reap timer（`timeoutMs > intervalMs` 才可触发，生产 30s/10s 不可达） |
 
 ### M2 范围
 
@@ -461,7 +485,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
 | Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
-| 状态     | **M2 Phase 2 feature / evidence / A7 两轮 review 均 COMPLETE；TOOLING-P2 已 CLOSED（D-071）；M2 milestone NOT CLOSED**（D-070）。关闭链已完成到「A7 M2 closure review」（GO WITH CONDITIONS；其唯一 P2 条件 `C-A7-M2-1` 已由 A0 修正）。**唯一剩余动作：项目负责人对 `m2-closed` 的一次明确授权**。授权前**不创建** `m2-closed`、**不进入** M3 kickoff |
+| 状态     | **M2 已 CLOSED**（annotated tag `m2-closed`，记录见上「M2 closure record」）。Phase 2：feature / evidence / A7 两轮 review 均 COMPLETE；TOOLING-P2 已 CLOSED（D-071）。本表此后仅描述 Phase 2 的实现与证据，不再承载 milestone 状态 |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
