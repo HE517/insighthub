@@ -26,6 +26,7 @@ import {
   FRAME,
   FakeSocket,
   TestClient,
+  createTestAwareness,
   makePeerDocument,
   startTestServer,
   syncUpdateFrame,
@@ -333,9 +334,9 @@ describe('M1-A3 invalid input', () => {
 
       // A conforming update from the same socket still works: the drop is per-frame.
       const { encodeAwarenessFrame } = await import('@insighthub/shared');
-      const { Awareness, encodeAwarenessUpdate } = await import('y-protocols/awareness');
+      const { encodeAwarenessUpdate } = await import('y-protocols/awareness');
       const doc = new Y.Doc();
-      const awareness = new Awareness(doc);
+      const awareness = createTestAwareness(doc);
       awareness.setLocalState({
         user: { id: 'u1', name: 'OK', color: '#112233' },
         cursor: null,
@@ -361,10 +362,13 @@ describe('M1-A3 invalid input', () => {
 
 describe('M1-A3 heartbeat', () => {
   it('reaps a socket that stops answering pings, cleaning room and awareness', async () => {
-    // A heartbeat window measured in milliseconds, so the test drives the real reaper
-    // instead of sleeping for the production 40 s budget.
+    // The sweep is driven synchronously by `markPeerUnresponsive`, so no automatic tick is
+    // needed to produce the reap. The interval is kept long on purpose: at the previous
+    // 40 ms/60 ms the next automatic sweep could fire before a live peer's pong came back,
+    // terminate the *surviving* socket, and turn this liveness test into a scheduler-latency
+    // test (observed as a 4 s `waitUntil` timeout under load — TOOLING-P2, D-070).
     const fast = await startTestServer({
-      heartbeat: { intervalMs: 40, timeoutMs: 60 },
+      heartbeat: { intervalMs: 5_000, timeoutMs: 15_000 },
       logger: { warn: () => undefined },
     });
 
@@ -378,9 +382,9 @@ describe('M1-A3 heartbeat', () => {
       // The dead client publishes presence so the test can prove the entry is removed,
       // not merely detached from the room.
       const { encodeAwarenessFrame } = await import('@insighthub/shared');
-      const { Awareness, encodeAwarenessUpdate } = await import('y-protocols/awareness');
+      const { encodeAwarenessUpdate } = await import('y-protocols/awareness');
       const doc = new Y.Doc();
-      const awareness = new Awareness(doc);
+      const awareness = createTestAwareness(doc);
       awareness.setLocalState({
         user: { id: 'ghost', name: 'Ghost', color: '#ff0000' },
         cursor: { anchor: 0, head: 0 },

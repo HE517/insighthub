@@ -11,12 +11,13 @@ import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 
 import { WS_ERROR_CODES, decodeBinaryFrame } from '@insighthub/shared';
-import { Awareness, encodeAwarenessUpdate } from 'y-protocols/awareness';
+import { encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
 import {
   TestClient,
   awarenessFrame,
+  createTestAwareness,
   makeAwarenessState,
   makePeerDocument,
   startTestServer,
@@ -60,7 +61,7 @@ afterEach(async () => {
 /** Build an awareness frame for a brand-new client id. */
 function awarenessFor(name: string): { frame: Uint8Array; clientId: number } {
   const doc = new Y.Doc();
-  const awareness = new Awareness(doc);
+  const awareness = createTestAwareness(doc);
   awareness.setLocalState(makeAwarenessState(name));
   const update = encodeAwarenessUpdate(awareness, [awareness.clientID]);
   const clientId = awareness.clientID;

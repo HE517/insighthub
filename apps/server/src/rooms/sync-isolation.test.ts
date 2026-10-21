@@ -21,7 +21,7 @@ import {
   encodeSyncUpdate,
   readSyncMessageType,
 } from '@insighthub/shared';
-import { Awareness, encodeAwarenessUpdate } from 'y-protocols/awareness';
+import { encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { readSyncMessage } from 'y-protocols/sync';
 import * as Y from 'yjs';
 
@@ -29,6 +29,7 @@ import {
   FRAME,
   TestClient,
   TestDecoder,
+  createTestAwareness,
   fillDocument,
   makeAwarenessState,
   makePeerDocument,
@@ -307,7 +308,7 @@ describe('M1-A3 sync handshake', () => {
       await observer.joinAndWait('doc-awareness-relay');
 
       const localDoc = new Y.Doc();
-      const localAwareness = new Awareness(localDoc);
+      const localAwareness = createTestAwareness(localDoc);
       localAwareness.setLocalState(makeAwarenessState('Publisher'));
       publisher.sendBinary(
         encodeAwarenessFrame(encodeAwarenessUpdate(localAwareness, [localAwareness.clientID])),
@@ -321,7 +322,7 @@ describe('M1-A3 sync handshake', () => {
 
       // The observer can apply it to its own Awareness and see the publisher.
       const observerDoc = new Y.Doc();
-      const observerAwareness = new Awareness(observerDoc);
+      const observerAwareness = createTestAwareness(observerDoc);
       if (relayed.kind === 'binary') {
         const decoded = decodeBinaryFrame(relayed.bytes);
         assert.ok(decoded.success);
@@ -394,7 +395,7 @@ describe('M1-A3 room isolation', () => {
       await inB.joinAndWait('doc-awareness-b');
 
       const doc = new Y.Doc();
-      const awareness = new Awareness(doc);
+      const awareness = createTestAwareness(doc);
       awareness.setLocalState(makeAwarenessState('OnlyInA'));
       inA.sendBinary(encodeAwarenessFrame(encodeAwarenessUpdate(awareness, [awareness.clientID])));
 

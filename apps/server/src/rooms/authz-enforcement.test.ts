@@ -46,6 +46,7 @@ import * as Y from 'yjs';
 
 import {
   bootstrapSessionCookie,
+  createTestAwareness,
   startTestServer,
   TestClient,
   type TestServer,
@@ -370,10 +371,10 @@ describe('P2-1 — the SYNC gate keeps a viewer read-only', () => {
 
     // An awareness frame built by hand from a real Awareness instance: presence is the one thing
     // a viewer must be able to send, otherwise a cursor is impossible for the role.
-    const { Awareness, encodeAwarenessUpdate } = await import('y-protocols/awareness');
+    const { encodeAwarenessUpdate } = await import('y-protocols/awareness');
     const { encodeAwarenessFrame } = await import('@insighthub/shared');
     const doc = new Y.Doc();
-    const awareness = new Awareness(doc);
+    const awareness = createTestAwareness(doc);
     awareness.setLocalState({
       user: { id: 'demo-linus', name: 'Viewer', color: '#3366ff' },
       cursor: { anchor: 0, head: 0 },
