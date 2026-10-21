@@ -458,7 +458,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
 | Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
-| 状态     | **Phase 2 已实现并合入 `main`（`06ecf14`），48/48 浏览器证据；A7 final review 进行中（interim: GO WITH CONDITIONS，条件均为文档一致性）。** **M2 仍未 CLOSED** —— 关闭需 A7 终审通过 + 项目负责人一次明确授权。发布说明禁令见 D-064 §1（禁令 1 已被 D-069 取代）与 D-066 §5 |
+| 状态     | **M2 Phase 2 feature / evidence / A7 review 均 COMPLETE；M2 milestone NOT CLOSED**（负责人裁定 Option B，D-070）。**唯一 blocker：TOOLING-P2 test-runner liveness** —— `pnpm test` 偶发"全部 PASS 后进程不退出"。关闭顺序：TOOLING-P2 closure → A0 集成 → A7 M2 closure review → 负责人授权 `m2-closed`。**不创建 `m2-closed`、不进入 M3 kickoff** |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -594,9 +594,21 @@ main @ <freeze commit>
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。
 
-**TOOLING-P2（A3 的第一项工作，不是 backlog）**：`pnpm --filter @insighthub/server test`
-＝ `tsx --test src/**/*.test.ts` 的**默认并行运行在本机不退出**（A0 集成期观测到 2 次，
-每次 >10 分钟无进展后手动终止）。实测分层证据：
+### TOOLING-P2 — test-runner liveness（M2 关闭的唯一 blocker；D-070）
+
+**状态：OPEN，已派发 A3。** 这是 M2 关闭前的最后一件事，**scope 只有一条**：让
+`pnpm test` 与 `pnpm --filter @insighthub/server test` 在**所有测试 PASS 之后**稳定自行退出。
+
+| 项 | 内容 |
+| --- | --- |
+| Owner | **A3**（`ws.ts` / `rooms/**` / 测试 harness）+ **A0**（`package.json` 脚本、若需改门禁命令） |
+| Branch / Worktree | `agent/a3-tooling-p2` / `Insighthub-wt-a3-tooling-p2` |
+| Do Not Touch | 产品语义、断言、`docs/**`、`tests/browser/**`、`packages/shared/**`；**不得**用 `--test-force-exit`、timeout 或 force kill 制造 false success |
+| 现象（重复观测） | 全测试 PASS 已打印，进程不退出（两次 >10 分钟）；随后同命令 34 s 正常；server 套件单独 2/2 通过（29 s / 27 s） |
+| 必须覆盖的诊断面 | open handles、`child_process` / `tsx` 生命周期、`server.close()`、`WebSocketServer.close()`、timers、SQLite 句柄、worker/subprocess、teardown 竞态 |
+| Acceptance | 见 D-070 §3 八条：可解释 root cause；不靠 timeout/force kill；两个命令都稳定退出；**重复运行**（连续 N 次记录）；最终 integrated HEAD 上四门禁；clean tree；A7 复核；之后才请求 `m2-closed` 授权 |
+
+历史证据（上一轮，`--test-concurrency=1` 已加入但**未能**消除）：
 
 | 运行方式                                 | 结果                             |
 | ---------------------------------------- | -------------------------------- |
@@ -604,16 +616,14 @@ main @ <freeze commit>
 | 并行但排除 `persistence/restart.test.ts` | **160/160 pass，8 s，exit 0**    |
 | 并行 + `--test-force-exit`（15 文件）    | **163/163 pass，9 s，exit 0**    |
 | 并行，默认（15 文件）                    | **不退出**（测试结果已全部打印） |
+| 之后：`pnpm test`（`692a420`）           | **卡住 >10 min**（`# pass` 已打印） |
+| 之后：`pnpm test`（`74da34c`）           | **卡住 >10 min**（同形态）       |
+| 之后：server 套件单独 ×2                 | **180/180，29 s / 27 s，均退出** |
+| 之后：`pnpm test` 再一次                 | **378 + 180，34 s，exit 0**      |
 
-结论：**测试全绿，是进程不退出**，不是测试失败；可疑点是 `restart.test.ts` 的
-`kill()` → `waitForExit()` 竞态（超时返回 `null` 后子进程可能仍存活，node:test 等事件循环排空
-→ 永不退出），并行 16 worker 时更容易触发。M1 期 D-054 §4 记过的 `TOOLING-P1` 间歇挂起很可能是
-同一机制。
+**结论**：测试内容全绿，**退出的可靠性不稳**（约 1/3 观测到卡住）。先前"串行即解决"的结论
+（D-063 §2b）**已被证伪**，必须重查机制。
 
-**为什么它不算"已知无害"**：`pnpm test` 是 AGENTS §5 的门禁命令之一。一个**永不返回**的门禁
-无法区分"通过"与"卡住"，A6/A7 会为此付出不可预期的等待。因此它被列为 A3 本轮的第一项工作，
-而不是 backlog：必须让默认命令**自己退出**（不得用 `--test-force-exit` 掩盖，那会让将来真正的
-句柄泄漏也无声无息）。
 
 ### M2-P0-1 — 服务端 durable persistence
 

@@ -2593,3 +2593,78 @@ D-064 §1 禁令 1 是"**不得**声称 UI 权限门控已生效"。在 A2+A6 �
 **后果。** M2 的"代码可关闭"与"文档可关闭"重新对齐：权威文档不再描述一个不存在的 Phase 2，不再教一条
 会让 viewer 看空白的规则，也不再禁止一句现在为真的事实。剩下的都是记录在案的 latent 清理项，不足以
 阻断关闭。
+
+---
+
+## D-070 · 2026-10-21 · accepted · 项目负责人裁定：先修 TOOLING-P2 再关闭 M2（Option B） (M2 closure)
+
+**背景。** A7 终审给出 GO WITH CONDITIONS（实现可关闭，仓库记录不可关闭），A0 关闭了 C-1…C-4/C-6 并在
+`74da34c` 上跑通四门禁。但 A0 在收口过程中**重复观测到** `pnpm test` 偶发"全部测试 PASS 后进程不退出"
+（两次连续卡住 >10 分钟；随后一次 34 s 正常退出；server 套件单独 2/2 通过 29 s/27 s）。项目负责人据此裁定
+**不关闭 M2**。
+
+### 1. 裁定：Option B —— 先修 TOOLING-P2，再关闭
+
+**理由（负责人原话的要点）**：本项目的验收标准一直包含"测试通过 **+ 进程自行退出** + 无 orphan/残留
+句柄"。在 milestone 最后一刻把它降级成"只要有一次 exit 0 就算完成"，等于**改判据来适配观测**，
+而这正是整个流程一直在防的事。
+
+因此：
+
+- **不创建** `m2-closed`；**M2 保持 NOT CLOSED**；
+- **不进入 M3 正式 kickoff**；
+- 先开一个**非常窄**的 TOOLING-P2 closure task（见 §3）。
+
+### 2. 当前状态口径（统一表述，任何报告/发布说明都用这套词）
+
+| 项 | 状态 |
+| --- | --- |
+| M2 Phase 2 **feature** | **COMPLETE** |
+| M2 Phase 2 **evidence** | **COMPLETE** |
+| A7 **functional / security review** | **COMPLETE** |
+| **M2 milestone** | **NOT CLOSED** |
+| 唯一 blocker | **TOOLING-P2 test-runner liveness**（普通工程 blocker，不需要负责人再选方案） |
+
+### 3. TOOLING-P2 closure task（唯一目标，不得扩张）
+
+**只解决一件事**：`pnpm test` / `pnpm --filter @insighthub/server test` 为什么在**所有测试 PASS 后**
+仍会偶发不退出。
+
+**优先诊断，不得先改 production semantics。** 必须先给出机制解释，再谈修复。诊断面至少覆盖：
+open handles、`child_process` / `tsx` 生命周期、`server.close()`、`WebSocketServer.close()`、
+timers、SQLite 句柄、worker/subprocess、test teardown 竞态。
+
+**Acceptance（八条，缺一不可）**：
+
+1. 找到**可解释的 root cause**（机制级，不是"重跑就好了"）；
+2. 修复后不得依赖 timeout / force kill / `--test-force-exit` 制造 false success；
+3. **server suite 与 root `pnpm test` 都能稳定自行退出**；
+4. **重复运行验证**，不能只跑 1 次（必须给出连续 N 次的记录）；
+5. 修复后在**最终 integrated HEAD** 上重跑 `pnpm typecheck` / `pnpm test` / `pnpm build` /
+   `node tests/browser/run.mjs`；
+6. working tree clean；
+7. 再交 **A7** 做 M2 closure review；
+8. A7 通过后，A0 再向项目负责人**请求一次 `m2-closed` tag 授权**（本裁定不授权）。
+
+**为什么这是一条独立任务而不是"顺手修一下"**：它要交付的是**判据的可信度**。一个偶尔永不返回的门禁，
+无法区分"通过"与"卡住"——这种不确定性不能靠"多数时候是绿的"来消化。
+
+### 4. Q2（已确认）：D-069 §3 的取代有效
+
+负责人确认废止旧禁令 1（"不得声称 UI 门控已生效"），因为它已与代码事实冲突。以下四条**继续冻结**，
+不得放宽：
+
+1. **UI gate 不是 security boundary**；
+2. authorization 仍由 **server enforcement** 保证；
+3. revocation **不是** existing socket 的即时身份撤销；
+4. role change **没有**实时 push 到已有客户端。
+
+定性：属**事实更正**，不属安全承诺降级。
+
+### 5. Q3（已确认）：不放宽 B3 的 diff 规则
+
+6 处 `B3-residual` 保持为 **R4**（M3 kickoff 的具名风险），**不**为清 residual 反向修改已冻结的 B3
+acceptance。若将来要处理，单独开一个 scope 明确的 task。
+
+**后果。** M2 的关闭权从"实现完成"重新交回到"门禁可信"；代价是一轮诊断与复验，收益是 milestone 关闭时
+"门禁绿"这句话重新具备可验证的含义，而不是一次侥幸的 exit 0。
