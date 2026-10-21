@@ -369,16 +369,18 @@ for a frame before `join-room`; `INVALID_BINARY_FRAME` / `FRAME_TOO_LARGE` fatal
 
 ---
 
-## M2 — Durable persistence & the two M1 gaps (M2-P0 Gate: PASS — reviewed by A7)
+## M2 — Durable persistence & permission/auth consistency (M2-P0 Gate: PASS; Phase 2 COMPLETE — closure pending owner authorization)
 
 状态：**三项 P0 全部 IMPLEMENTED；M2-P0 Gate 已发布到 `main`。** M2-P0 Exit Gate 由 A7 独立评审判为
 **APPROVE**（判据与证据见下「M2-P0 Exit Gate vs M2 Milestone」）。基线：从 immutable tag
 `m1-closed`（`f3c353e`）分出，经 `m2-stabilization`（`ec762ef`）以 `--no-ff` merge 合入 `main`，
 annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck / test / build / browser 全绿
 （记录见 `docs/DECISIONS.md` D-060）。
-**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）尚未开始，M2 不得标 CLOSED；
-`m2-closed` **不存在，也不得创建**。
-决策：`docs/DECISIONS.md` **D-040…D-060**。
+**注意：Gate 通过 ≠ M2 关闭** —— M2 Phase 2（权限/认证）**已实现并有真实浏览器证据**（状态口径见
+`docs/DECISIONS.md` D-070 §2：feature / evidence / A7 review 均 **COMPLETE**），TOOLING-P2 亦已关闭（D-071）。
+**M2 仍未 CLOSED**：唯一剩余动作是项目负责人对 `m2-closed` 的**一次明确授权**（D-070 §1）。
+`m2-closed` **当前不存在**；授权前不得创建。
+决策：`docs/DECISIONS.md` **D-040…D-071**。
 
 ### M2 范围
 
@@ -393,7 +395,8 @@ annotated tag **`m2-p0-gate`**；tag 指向的最终 `main` HEAD 上 typecheck /
 > **范围位移，已由项目负责人确认（M2-P0 release 指令）。** `docs/PROJECT.md` 里 M2 的原蓝图是
 > "Permissions & state（认证 / RBAC / 请求取消 / 竞态）"，而 M2 实际被定义为"三项 P0 + Phase 2 权限/认证"。
 > 负责人已确认 M2 的边界为：**M2-P0（已 PASS，tag `m2-p0-gate`）→ M2 Phase 2 permission/auth
-> （NOT STARTED）→ M2 final gate**。因此权限/认证**已归入 M2 Phase 2，不再是"未排入任何里程碑"的状态**
+> （当时 NOT STARTED；**现已 COMPLETE**，见 D-070 §2）→ M2 final gate**。因此权限/认证**已归入 M2 Phase 2，
+> 不再是"未排入任何里程碑"的状态**
 > （见 `docs/DECISIONS.md` D-060 §1）。本节仅保留位移记录，**不再作为待决问题**。
 
 ### M2-P0 Exit Gate vs M2 Milestone
@@ -458,7 +461,7 @@ final gate。**在 permission/auth 尚未处理时，M2 不得标 CLOSED。**
 | 目的     | 服务端权威的文档级权限与认证一致性；客户端只做 UI 门控                                                            |
 | 触发条件 | **已满足**：M2-P0 Exit Gate PASS 并发布为 `m2-p0-gate`（D-060）                                                   |
 | Owner    | **A5**（身份/会话/成员关系/授权判定核心 + HTTP 层）+ **A3**（WS 判定点接线 + 文档元数据源）；A6 出证据            |
-| 状态     | **M2 Phase 2 feature / evidence / A7 review 均 COMPLETE；M2 milestone NOT CLOSED**（负责人裁定 Option B，D-070）。**唯一 blocker：TOOLING-P2 test-runner liveness** —— `pnpm test` 偶发"全部 PASS 后进程不退出"。关闭顺序：TOOLING-P2 closure → A0 集成 → A7 M2 closure review → 负责人授权 `m2-closed`。**不创建 `m2-closed`、不进入 M3 kickoff** |
+| 状态     | **M2 Phase 2 feature / evidence / A7 两轮 review 均 COMPLETE；TOOLING-P2 已 CLOSED（D-071）；M2 milestone NOT CLOSED**（D-070）。关闭链已完成到「A7 M2 closure review」（GO WITH CONDITIONS；其唯一 P2 条件 `C-A7-M2-1` 已由 A0 修正）。**唯一剩余动作：项目负责人对 `m2-closed` 的一次明确授权**。授权前**不创建** `m2-closed`、**不进入** M3 kickoff |
 
 #### Phase 2 — 已决策（`docs/DECISIONS.md` D-061，项目负责人）
 
@@ -590,6 +593,8 @@ main @ <freeze commit>
 **idle/background compaction**（M2-P0 只做 eviction-time，D-054）、
 **`synchronous = FULL` 的可配置性**（D-047 决定 2 要求 production 可配置，当前硬编码 `NORMAL`，
 见 D-060 §2 勘误）、
+**R8 `heartbeat.ts` 的 stale reap timer**（`sweep()` 覆盖 `#reapTimers` 未 clear 旧 timer；
+只有 `timeoutMs > intervalMs` 可触发，生产 30s/10s 不可达；D-071 §5 附建议修法与回归测试思路）、
 键击通知扇出优化（D-039 L2）、主 bundle 分块、
 `void persistence.destroy()` 的未处理拒绝（D-039 L5）、跨浏览器（Firefox/Safari）验证、
 真实多机弱网浸泡。

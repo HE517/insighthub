@@ -2188,7 +2188,7 @@ main (green)
 
 | # | 禁止表述 | 事实 |
 | --- | --- | --- |
-| 1 | "UI 权限门控已生效 / viewer 在界面上不能编辑" | **假**。`room-joined.role` 已发送并被浏览器收到，但客户端**从未消费**（全仓 0 次 dispatch，A7 F1）。viewer 可以打字、本地看得见、服务端拒绝、他人看不到 |
+| 1 | "UI 权限门控已生效 / viewer 在界面上不能编辑" | **假**（**该条已被 `docs/DECISIONS.md` D-069 §3 取代**：A2+A6 落地后它反向过期）。当时的理由是 `room-joined.role` 已发送并被浏览器收到，但客户端**从未消费**（全仓 0 次 dispatch，A7 F1）；viewer 可以打字、本地看得见、服务端拒绝、他人看不到 |
 | 2 | "吊销立即生效 / 登出即断开" | **假**。吊销与过期是**请求级**的：已建立的 socket 保留准入时的身份继续工作（实测 `writeApplied: true`，§17.2 已写明） |
 | 3 | "服务端重启后客户端自愈 / 会话自动恢复" | **假**。session 是进程内的；实测 `reBootstrapped=false`，页面停在 `reconnecting`。续签是 harness 行为，不是客户端能力 |
 
@@ -2696,7 +2696,7 @@ acceptance。若将来要处理，单独开一个 scope 明确的 task。
 
 | 改动 | 作用 |
 | --- | --- |
-| `createTestAwareness(doc)` 统一创建客户端 `Awareness` 并 `unref()` 续期定时器（6 处调用点全迁） | 测试结束后即使忘记 `destroy()`，也只能浪费少量 CPU，**不能阻塞进程退出** |
+| `createTestAwareness(doc)` 统一创建客户端 `Awareness` 并 `unref()` 续期定时器（**7** 处调用点全迁：`protocol-robustness` ×2、`sync-isolation` ×3、`authz-enforcement` ×1、`room-lifecycle` ×1） | 测试结束后即使忘记 `destroy()`，也只能浪费少量 CPU，**不能阻塞进程退出** |
 | 心跳测试窗口 40/60 → 5 s/15 s，reap 改由 `markPeerUnresponsive()` 同步驱动 | 去掉与调度延迟的赛跑；`markPeerUnresponsive` 内部调用的是**同一个** `heartbeat.sweep()`，断言逐字未改 |
 
 A0 复核确认：无生产文件改动（`heartbeat.ts` / `ws.ts` / `registry.ts` 均未动）；`protocol-robustness.test.ts`
