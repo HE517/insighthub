@@ -239,6 +239,37 @@ export async function waitForDurableDocument(
 }
 
 /**
+ * Wait until the **text** reconstructed from the durable bytes satisfies `predicate`.
+ *
+ * `waitForDurableDocument` answers a question about the stored row (bytes, sequences). A
+ * scenario that asserts "the server no longer holds this marker" needs the *text*, so this
+ * helper rebuilds the `Y.Doc` on every poll and hands the predicate the text. `null` (the
+ * document has never been stored) never satisfies a predicate — "nothing was persisted" stays
+ * a wait, not a pass.
+ */
+export async function waitForDurableText(
+  dataPath,
+  documentId,
+  predicate,
+  { timeoutMs = 30_000, label = 'the durable text', intervalMs = 150 } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  for (;;) {
+    const durable = await reconstructDurableDocument(dataPath, documentId);
+    last = durable.text;
+    if (last !== null && predicate(last)) return last;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `timed out after ${timeoutMs}ms waiting for ${label}; ` +
+          `the store holds ${last === null ? 'no document row' : `${last.length} chars: ${JSON.stringify(last.slice(-200))}`}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
  * Hold SQLite's write lock on the durable store.
  *
  * While this is held, the server's `BEGIN IMMEDIATE` in `append` cannot proceed. Its
