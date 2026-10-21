@@ -596,8 +596,11 @@ main @ <freeze commit>
 
 ### TOOLING-P2 — test-runner liveness（M2 关闭的唯一 blocker；D-070）
 
-**状态：OPEN，已派发 A3。** 这是 M2 关闭前的最后一件事，**scope 只有一条**：让
-`pnpm test` 与 `pnpm --filter @insighthub/server test` 在**所有测试 PASS 之后**稳定自行退出。
+**状态：CLOSED（代码与测试），浏览器门 + A7 closure review 待完成。** D-071 记录了 root cause 与修复；
+`main` 上 `d8a2a99` 的 `pnpm test` 连续 2 次自行退出并打印聚合汇总（`# pass 181 / # fail 0`）。
+**剩余**：① 在最终 integrated HEAD 上跑 `node tests/browser/run.mjs`（需 5173 空闲）；② A7 M2 closure review；
+③ 之后由负责人授权 `m2-closed`。**新具名风险 R8**（`heartbeat.ts` 的 stale reap timer，生产参数下不可达）
+已记入 D-071 §5，进 backlog。
 
 | 项 | 内容 |
 | --- | --- |

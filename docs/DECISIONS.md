@@ -2668,3 +2668,72 @@ acceptance。若将来要处理，单独开一个 scope 明确的 task。
 
 **后果。** M2 的关闭权从"实现完成"重新交回到"门禁可信"；代价是一轮诊断与复验，收益是 milestone 关闭时
 "门禁绿"这句话重新具备可验证的含义，而不是一次侥幸的 exit 0。
+
+---
+
+## D-071 · 2026-10-21 · accepted · TOOLING-P2 关闭：那不是"卡住"，是一次被吞掉的红色运行 (M2 closure)
+
+**背景。** D-070 把 M2 关闭卡在 TOOLING-P2 上。A3 交付 `agent/a3-tooling-p2 @ 3fe6a54`（6 个文件，
+**全部在 `apps/server/src/rooms/**`，0 生产代码**），A0 复核后以 `--no-ff` 合入（`d8a2a99`）。
+
+### 1. root cause（机制级，已接受）
+
+**"全绿后挂起"从来不是绿色。** 心跳集成测试在机器有负载时偶发失败（`not ok 51 - M1-A3 heartbeat`，
+`waitUntil` 4 s 超时）；失败路径**跳过了** `awareness.destroy()`（它写在测试体成功路径末端），
+`y-protocols` 的 `Awareness` 构造函数留下的 **ref'd** 3 s `setInterval` 因此无人清理 →
+测试文件子进程事件循环永不 drain → `node:test` 协调进程永远等待 → **聚合汇总（`1..` / `# tests` /
+`# pass` / `# fail`）永不打印** → 外部看到"结果都打完了，然后不退出"。
+
+关键事实：挂起日志里**一直有 `not ok`**，只是唯一会给出失败计数的那几行从未打印。
+因此**所有挂起运行都不得被引用为"测试通过"**——包括 A0 之前据其报告过的那些。
+
+心跳测试自身的缺陷是：它注入了 **40 ms / 60 ms** 窗口（`intervalMs < timeoutMs`，与生产相反），
+把活性测试变成了调度延迟测试——`sweep()` 每轮先把存活标记置 false，下一轮若仍未置 true 就 terminate，
+于是活着的 peer 只要 pong 晚于 40 ms 就被误杀。生产是 `interval 30 s > timeout 10 s`
+（`rooms/constants.ts`），不存在该窗口，故**生产语义无需修改**。
+
+### 2. 修复（测试层，两件事）
+
+| 改动 | 作用 |
+| --- | --- |
+| `createTestAwareness(doc)` 统一创建客户端 `Awareness` 并 `unref()` 续期定时器（6 处调用点全迁） | 测试结束后即使忘记 `destroy()`，也只能浪费少量 CPU，**不能阻塞进程退出** |
+| 心跳测试窗口 40/60 → 5 s/15 s，reap 改由 `markPeerUnresponsive()` 同步驱动 | 去掉与调度延迟的赛跑；`markPeerUnresponsive` 内部调用的是**同一个** `heartbeat.sweep()`，断言逐字未改 |
+
+A0 复核确认：无生产文件改动（`heartbeat.ts` / `ws.ts` / `registry.ts` 均未动）；`protocol-robustness.test.ts`
+的 diff 只有 import、helper 调用、窗口值与注释；心跳测试的四条断言（死 peer 被 terminate、活 peer 不被
+reap、awareness 移除被广播、无控制面 presence 消息、最后一人离开后房间销毁）**原文保留**。
+
+### 3. A0 的复核证据
+
+| 项 | 结果 |
+| --- | --- |
+| 集成 HEAD `d8a2a99` 上 `pnpm test` ×2 | 均 **exit 0**，**聚合汇总 4 行全部打印**，`1..64` / `# tests 181` / `# pass 181` / `# fail 0`，95 s（dev server 并行占用机器） |
+| `pnpm typecheck` / `pnpm build` | **exit 0** |
+| `git status` | clean |
+| 失败注入 A/B（A3 交付的证据） | base **挂起**（90 s 上限，无聚合汇总）vs 修复后 **exit 1 + `# fail 1`**，37.9 s |
+| 修复后重复运行（A3 交付的证据） | server 10/10、root 5/5、4 个 CPU 占用进程下 5/5，全部自行退出且打印汇总 |
+
+**红先变绿的可观测性**：故障注入证明"一个失败的测试现在会 exit 1 并打印 `# fail`"。这正是 D-070 要恢复的
+性质——红色重新可见，而不是被挂起吞掉。
+
+### 4. 未改 `package.json`（一个重要结论）
+
+本轮**不需要** `--test-force-exit`，也不需要改门禁命令。D-063 §2b 加 `--test-concurrency=1` 是**基于错误
+归因**（以为并发就是原因）；真实原因是失败测试泄漏 ref'd 定时器。该 flag 保留不动（已证明可用），
+**但不再宣称它修好了 TOOLING-P2**；是否回退到并行以省时间，留作 M3 的性能清理项，不在关闭前动它。
+
+### 5. 新发现的具名风险 R8（未修，进 backlog）
+
+`apps/server/src/rooms/heartbeat.ts:185-192`：每轮 `sweep()` 都 `setTimeout(...)` 并覆盖
+`#reapTimers` 里的旧 timer，**没有 `clearTimeout` 旧的**。只有当 `timeoutMs > intervalMs` 时旧 timer
+才会在下一轮之后触发——生产参数（30 s / 10 s）**不可达**，因此不阻塞 M2。建议修复：设置新 timer 前
+clear 旧的，并在回调里校验"自己仍是最新 timer"；配一个 `timeoutMs > intervalMs` 的回归测试
+（`FakeSocket` 可确定性复现）。**这解释并吞掉了 M1 期 `TOOLING-P1` 的"间歇挂起"猜测**：同一个泄漏类别。
+
+### 6. 对"引用绿色"的约束（本条的真正产出）
+
+从现在起，任何声称 `pnpm test` 通过的陈述，必须能给出 **exit code** 与**聚合汇总行**
+（`# tests` / `# pass` / `# fail`）。只贴"测试都打完了"不算通过——TOOLING-P2 就是这样被误读的。
+
+**后果。** M2 关闭的唯一 blocker 从"门禁会不可预测地卡住"变成"门禁可解释、可复现地退出，且红的那样会
+红得看得见"。代价是一轮诊断与一批测试 helper 的收口；收益是 milestone 关闭时"门禁绿"重新有定义。
