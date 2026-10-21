@@ -34,6 +34,7 @@ import {
 } from '@insighthub/shared';
 import { WebSocket } from 'ws';
 import * as Y from 'yjs';
+import * as awarenessProtocol from 'y-protocols/awareness';
 
 import { createApp } from '../app.js';
 import { createAuthz, type AuthzService } from '../authz/public.js';
@@ -556,6 +557,32 @@ export function makePeerDocument(content: string): { doc: Y.Doc; update: Uint8Ar
   const doc = new Y.Doc();
   doc.getText('content').insert(0, content);
   return { doc, update: Y.encodeStateAsUpdate(doc) };
+}
+
+/**
+ * Create a client-side `Awareness` that can never keep a test process alive.
+ *
+ * `y-protocols`' constructor starts a **ref'd** timer (≈3 s) that renews the local clock.
+ * Every test that uses one cleans it up with `awareness.destroy()`, but that call sits on the
+ * success path: when an assertion fails first, the timer survives. A `node:test` child that
+ * has already printed its own results then never exits, the coordinator waits for it forever,
+ * and the gate prints every test result without ever printing the aggregate summary — which
+ * is also why the red `not ok` stayed hidden (`docs/TASKS.md` TOOLING-P2, `docs/DECISIONS.md`
+ * D-070).
+ *
+ * Unref'ing the handle removes that failure mode without changing awareness behaviour: while
+ * a test is running, its server and sockets keep the event loop alive, so renewal still fires
+ * on schedule; once the test is over, a missed `destroy()` can waste a little CPU but cannot
+ * block process exit.
+ *
+ * Every client-side `Awareness` in this suite must be created here.
+ */
+export function createTestAwareness(doc: Y.Doc): awarenessProtocol.Awareness {
+  const awareness = new awarenessProtocol.Awareness(doc);
+  const timer = (awareness as unknown as { _checkInterval?: { unref?: () => void } | null })
+    ._checkInterval;
+  timer?.unref?.();
+  return awareness;
 }
 
 /** Encode a valid awareness state for a client id. */
