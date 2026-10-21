@@ -27,6 +27,13 @@ Thumbs.db
 npm-debug.log*
 pnpm-debug.log*
 
+# Durable store + authorization database created by running the app or the dev server.
+# The path is `INSIGHTHUB_DATA_PATH` (default `./.insighthub-data`, resolved against the
+# process CWD), so it can appear at the repo root or under `apps/server/`. D-070: tests must
+# use their own temporary directories, so only a *dev server* should ever create this — and a
+# dev server's data directory must never dirty the working tree.
+**/.insighthub-data/
+
 # A6 browser suite evidence (regenerated on every run: see tests/browser/README.md)
 tests/browser/artifacts/
 
