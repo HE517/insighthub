@@ -29,7 +29,22 @@
     sockets: [],
     frames: [],
     idbOpens: [],
-    editor: { mounts: 0, unmounts: 0, live: 0 },
+    editor: { mounts: 0, unmounts: 0, live: 0, mountLog: [], lastMount: null },
+    /**
+     * The bootstrap identity as the shell renders it (`[data-testid="session-identity"]`).
+     *
+     * `pending` renders nothing, `ready` renders the display name, `unavailable` renders the
+     * local placeholder (apps/web/src/App.tsx). The harness waits for this decision before it
+     * starts a scenario, because the collaboration session is keyed on `userId`/`userName`
+     * (apps/web/src/collab/public.ts): when the server identity lands, the session is torn down
+     * and the editor is remounted once. `firstSeenAt` is when the decision became observable;
+     * `editor.mountLog[i].sawIdentity` says whether that mount happened after it.
+     */
+    identity: { present: false, firstSeenAt: null, changes: [] },
+    /** The one `POST /api/session/bootstrap` outcome (see the fetch wrapper below). */
+    bootstrap: { calls: 0, settledAt: null, status: null, hasServerIdentity: null },
+    /** Chaos control: delay the bootstrap request by N ms to widen the identity window. */
+    bootstrapDelayMs: 0,
     intervals: { created: 0, cleared: 0, live: new Map() },
     errors: [],
     notes: [],
@@ -67,8 +82,11 @@
   if (nativeFetch !== null) {
     window.fetch = function qaFetch(input, init) {
       const target = typeof input === 'string' ? input : (input && input.url) || '';
-      if (typeof target === 'string' && target.endsWith('/api/session/bootstrap')) {
+      const isBootstrap =
+        typeof target === 'string' && target.endsWith('/api/session/bootstrap');
+      if (isBootstrap) {
         qa.bootstrapCalls.push({ t: Date.now() - qa.startedAt, claimed: qa.demoIdentity });
+        qa.bootstrap.calls += 1;
         if (qa.demoIdentity !== null && init !== null && typeof init === 'object') {
           if (typeof init.body === 'string') {
             try {
@@ -81,7 +99,62 @@
           }
         }
       }
-      return nativeFetch(input, init);
+
+      const call = () => {
+        const response = nativeFetch(input, init);
+        if (!isBootstrap) return response;
+        // Record the outcome **without consuming the body the application reads**, using the
+        // clone. `hasServerIdentity` mirrors `parseSessionIdentity`
+        // (apps/web/src/session/bootstrap.ts): a 2xx body with a non-empty `userId`/`displayName`
+        // and a parseable `expiresAt` is the only shape that changes the presence user
+        // (`apps/web/src/user.ts#presenceUserFor`) and therefore re-creates the session.
+        // Anything else leaves the local placeholder, so no remount is due at all.
+        response.then(
+          (answer) => {
+            qa.bootstrap.settledAt = Date.now() - qa.startedAt;
+            qa.bootstrap.status = answer.status;
+            answer.clone().json().then(
+              (body) => {
+                const hasIdentity =
+                  answer.ok &&
+                  typeof body?.userId === 'string' &&
+                  body.userId.length > 0 &&
+                  typeof body?.displayName === 'string' &&
+                  body.displayName.length > 0 &&
+                  typeof body?.expiresAt === 'string' &&
+                  Number.isFinite(Date.parse(body.expiresAt));
+                qa.bootstrap.hasServerIdentity = hasIdentity;
+              },
+              () => {
+                qa.bootstrap.hasServerIdentity = false;
+              },
+            );
+          },
+          () => {
+            qa.bootstrap.settledAt = Date.now() - qa.startedAt;
+            qa.bootstrap.status = null;
+            qa.bootstrap.hasServerIdentity = false;
+          },
+        );
+        return response;
+      };
+
+      const delayMs = Number(qa.bootstrapDelayMs) || 0;
+      if (isBootstrap && delayMs > 0) {
+        // Chaos control (does not touch the app): a slow bootstrap is exactly the ordering in
+        // which the editor has already mounted on the placeholder identity when the server
+        // identity lands, so the session is re-created underneath the harness.
+        return new Promise((resolve, reject) => {
+          setTimeout(() => {
+            try {
+              resolve(call());
+            } catch (error) {
+              reject(error);
+            }
+          }, delayMs);
+        });
+      }
+      return call();
     };
   }
 
@@ -680,6 +753,13 @@
       editorMounts: qa.editor.mounts,
       editorUnmounts: qa.editor.unmounts,
       editorLive: qa.editor.live,
+      editorMountLog: qa.editor.mountLog.map((mount) => ({ ...mount })),
+      identity: {
+        present: qa.identity.present,
+        firstSeenAt: qa.identity.firstSeenAt,
+        changes: qa.identity.changes.map((change) => ({ ...change })),
+      },
+      bootstrap: { ...qa.bootstrap },
       liveIntervals: qa.intervals.live.size,
       liveAwarenessIntervals: [...qa.intervals.live.values()].filter(
         (delay) => delay === 3000,
@@ -703,6 +783,12 @@
     qa.editor.mounts = 0;
     qa.editor.unmounts = 0;
     qa.editor.live = 0;
+    qa.editor.mountLog.length = 0;
+    qa.editor.lastMount = null;
+    qa.identity.present = identityRendered();
+    qa.identity.firstSeenAt = qa.identity.present ? Date.now() - qa.startedAt : null;
+    qa.identity.changes.length = 0;
+    qa.bootstrap = { calls: 0, settledAt: null, status: null, hasServerIdentity: null };
     qa.droppedAfterDetach = 0;
     qa.bootstrapCalls.length = 0;
     qa.errors.length = 0;
@@ -711,10 +797,24 @@
   };
 
   /* ------------------------------------------------------------------ *
-   * Editor mount counting
+   * DOM observation: editor mount counting AND the identity decision
    * ------------------------------------------------------------------ */
 
-  function installEditorObserver() {
+  /** True when the shell has rendered the bootstrap-identity decision (ready OR unavailable). */
+  function identityRendered() {
+    return document.querySelector('[data-testid="session-identity"]') !== null;
+  }
+
+  function syncIdentity() {
+    const present = identityRendered();
+    if (present === qa.identity.present) return;
+    qa.identity.present = present;
+    const t = Date.now() - qa.startedAt;
+    qa.identity.changes.push({ t, present });
+    if (present && qa.identity.firstSeenAt === null) qa.identity.firstSeenAt = t;
+  }
+
+  function installDomObserver() {
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
@@ -722,6 +822,15 @@
           if (node.classList?.contains('cm-editor')) {
             qa.editor.mounts += 1;
             qa.editor.live += 1;
+            const mount = {
+              t: Date.now() - qa.startedAt,
+              // Read from the committed DOM, not from a cached flag: "this editor was mounted
+              // after the identity decision was rendered" is what makes the harness's wait
+              // terminal (see `tests/browser/README.md`).
+              sawIdentity: identityRendered(),
+            };
+            qa.editor.mountLog.push(mount);
+            qa.editor.lastMount = mount;
           }
         }
         for (const node of mutation.removedNodes) {
@@ -732,6 +841,10 @@
           }
         }
       }
+      // The identity element is a normal DOM node; the observer sees its add/remove in the same
+      // batch as any editor mount in that commit. Synced after the loop so `sawIdentity` reads
+      // the committed DOM rather than a flag updated too late.
+      syncIdentity();
     });
     const start = () => {
       if (document.body !== null) {
@@ -743,6 +856,7 @@
       }
     };
     start();
+    syncIdentity();
   }
 
   /* ------------------------------------------------------------------ *
@@ -825,7 +939,7 @@
     };
   }
 
-  installEditorObserver();
+  installDomObserver();
   installTimerCounting();
   installIndexedDbCounting();
   installInputTiming();

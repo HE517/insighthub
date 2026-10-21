@@ -44,6 +44,12 @@ export const SELECTORS = {
   /** The read-only notice (`apps/web/src/features/permissions/ReadOnlyNotice.tsx`). */
   readOnlyNotice: '[data-testid="read-only-notice"]',
   sessionIdentity: '[data-testid="session-identity"]',
+  /**
+   * The header history buttons (M3). The accessible name is the contract — A2's brief says not
+   * to add a `data-testid` for them — and `DocumentHeader.tsx` sets `aria-label="Undo"` / `"Redo"`.
+   */
+  undoButton: 'button[aria-label="Undo"]',
+  redoButton: 'button[aria-label="Redo"]',
 };
 
 /**
@@ -83,25 +89,92 @@ export async function openApp(page, { url, documentId, as = DEFAULT_DEMO_USER } 
   return page;
 }
 
-/** Wait until the workspace has an `active` session and a mounted editor. */
+/**
+ * Wait until the workspace has an `active` session, a mounted editor **and** the session is
+ * the one keyed on the settled bootstrap identity.
+ *
+ * ## Why the identity decision is part of "the session is active"
+ *
+ * `apps/web/src/collab/public.ts` re-creates the collaboration session when `userId` /
+ * `userName` change, and `App.tsx` passes `user={presenceUserFor(identity)}`. While
+ * `POST /api/session/bootstrap` is in flight the identity is the per-tab **placeholder**
+ * (`apps/web/src/user.ts`), so with a slow bootstrap this happens:
+ *
+ * ```text
+ * editor mounts on the placeholder session  →  bootstrap resolves  →  identity renders
+ *   →  the effect's dependencies change  →  old session destroyed, editor unmounted
+ *   →  new session created  →  editor remounted
+ * ```
+ *
+ * A wait that only asked for `.cm-editor` returned inside that window. Everything the
+ * scenario did next (a click at `.cm-content`, then a keystroke) could land on the doomed
+ * editor — and `page.click()` throws `no element matches .cm-content` when the click falls
+ * into the unmount gap. This is a **pre-existing, one-time product-level remount**, not a
+ * regression; the harness must wait past it instead of pretending it does not happen.
+ *
+ * ## What makes the condition terminal (not another timeout)
+ *
+ * The page instrumentation records, for every `.cm-editor` mount, whether
+ * `[data-testid="session-identity"]` was already rendered at that moment, plus the
+ * `POST /api/session/bootstrap` outcome:
+ *
+ * | `bootstrap.hasServerIdentity` | presence user after the decision | terminal condition |
+ * | --- | --- | --- |
+ * | `true` | server `userId`/`displayName` — **differs** from the fallback, so the session is re-created | the live editor was mounted **after** the identity rendered (`lastMount.sawIdentity`) |
+ * | `false` | the placeholder (bootstrap failed / body invalid) — `presenceUserFor(null)` returns the same strings, so **no** remount is due | an editor is mounted (a mount before the decision is already final) |
+ *
+ * `session-identity` is rendered by `App.tsx` for both `ready` and `unavailable`, and only
+ * omitted while `pending`, so "identity present + bootstrap outcome known + editor settled"
+ * is a state the application reaches exactly once and then never leaves. It is a *stricter*
+ * wait, not a retry: if the editor is unmounted (or the transition is still pending) the
+ * scenario fails on the timeout below and the error carries the full timeline.
+ */
 export async function waitForSessionActive(page, { timeoutMs = 30_000 } = {}) {
   const started = Date.now();
+  let state = null;
   for (;;) {
-    const state = await page.evaluate(() => {
+    state = await page.evaluate(() => {
+      const qa = window.__qa;
+      const identityElement = document.querySelector('[data-testid="session-identity"]');
+      const mountLog = qa?.editor?.mountLog ?? [];
+      const lastMount = mountLog.length === 0 ? null : mountLog[mountLog.length - 1];
       const failed = document.querySelector('[data-testid="session-failed"]');
       return {
         failed: failed === null ? null : failed.textContent,
         status: document.querySelector('[data-testid="connection-status"]')?.dataset.status ?? null,
         editor: document.querySelector('.cm-editor') !== null,
+        content: document.querySelector('.cm-content') !== null,
         initializing: document.querySelector('[data-testid="session-initializing"]') !== null,
+        identityPresent: identityElement !== null,
+        identityText: (identityElement?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        lastMount,
+        mountLog,
+        bootstrap: qa?.bootstrap === undefined ? null : { ...qa.bootstrap },
       };
     });
+
     if (state.failed !== null) throw new Error(`the session failed to open: ${state.failed}`);
-    if (state.editor && state.status !== null) return state;
+
+    const bootstrapKnown = state.bootstrap !== null && state.bootstrap.hasServerIdentity !== null;
+    // A server identity changes the presence user, so the session MUST be re-created with it.
+    const remountDue = state.bootstrap?.hasServerIdentity === true;
+    const editorMounted =
+      state.editor && state.content && state.status !== null && state.lastMount !== null;
+    // ... and the live editor must be the one mounted after that identity rendered.
+    const editorSettled = editorMounted && state.lastMount.sawIdentity === true;
+
+    if (state.identityPresent && bootstrapKnown && (remountDue ? editorSettled : editorMounted)) {
+      return state;
+    }
+
     if (Date.now() - started > timeoutMs) {
       throw new Error(
         `the editor did not become usable within ${timeoutMs}ms ` +
-          `(initializing=${state.initializing}, status=${state.status})`,
+          `(initializing=${state.initializing}, status=${state.status}, ` +
+          `identity=${state.identityPresent} ${JSON.stringify(state.identityText)}, ` +
+          `bootstrap=${JSON.stringify(state.bootstrap)}, ` +
+          `lastMount=${JSON.stringify(state.lastMount)}, ` +
+          `mounts=${state.mountLog.length})`,
       );
     }
     await sleep(100);
@@ -150,14 +223,44 @@ export async function setDocumentId(page, documentId, { arrangeAccess = true } =
     );
   }
 
+  // Stamped **before** the submit: the remount we are waiting for must happen after it.
+  const switchedAt = await page.evaluate(() => Date.now() - (window.__qa?.startedAt ?? 0));
+  /**
+   * A switch to the document that is **already active** changes nothing in the product:
+   * `DocumentWorkspace key={documentId}` is unchanged, so no session is re-created and no
+   * `.cm-editor` is remounted. Requiring a fresh mount there would wait forever (the old
+   * "id is reflected + an editor exists" condition returned immediately, which is correct for
+   * this case). `demo-document` is the Redux default, so opening a page on it is exactly this.
+   */
+  const activeBefore = await page.evaluate(
+    () => document.querySelector('[data-testid="active-document"]')?.textContent?.trim() ?? null,
+  );
+  const needsRemount = activeBefore !== documentId;
   await page.pressKey('Enter');
-  // The workspace is keyed by documentId, so the new session initialises, syncs
-  // and remounts the editor. Wait for the id to be reflected and the editor back.
+  // The workspace is keyed by documentId, so the new session initialises, syncs and remounts
+  // the editor. The **old** editor is still mounted in the commit where the header already
+  // shows the new id (`DocumentWorkspace key=` remounts, but the new session resolves later),
+  // so waiting for "the id is reflected AND a .cm-editor exists" can return on the doomed
+  // editor — the same one-time transition waitForSessionActive now crosses. The terminal
+  // condition is therefore "an editor was mounted **after** the switch was submitted" (or,
+  // for a no-op switch, "the editor and the identity decision are present").
   await page.waitFor(
-    (expected) =>
-      document.querySelector('[data-testid="active-document"]')?.textContent?.trim() === expected &&
-      document.querySelector('.cm-editor') !== null,
-    { timeoutMs: 30_000, label: `document ${documentId}`, args: [documentId] },
+    (expected, since, requiresNewMount) => {
+      const qa = window.__qa;
+      const lastMount = qa?.editor?.lastMount ?? null;
+      return (
+        document.querySelector('[data-testid="active-document"]')?.textContent?.trim() === expected &&
+        document.querySelector('[data-testid="session-identity"]') !== null &&
+        document.querySelector('.cm-content') !== null &&
+        lastMount !== null &&
+        (!requiresNewMount || lastMount.t >= since)
+      );
+    },
+    {
+      timeoutMs: 30_000,
+      label: `document ${documentId}`,
+      args: [documentId, switchedAt, needsRemount],
+    },
   );
   await installEditorProbe(page);
   await clearEditorTransactions(page);
@@ -176,10 +279,15 @@ export async function activeDocumentId(page) {
  * The device-side instrumentation is injected per document (`Page.
  * addScriptToEvaluateOnNewDocument`), but the probe lives in page memory, so a
  * reload genuinely removes it. Re-installing it is required, not optional.
+ *
+ * A reload re-runs the bootstrap, so the identity transition described on
+ * `waitForSessionActive` happens again (a new placeholder session first, then the server
+ * identity and the one remount). Waiting only for `.cm-editor` had the same race as the
+ * original page open, which is why this goes through `waitForSessionActive`.
  */
 export async function reloadApp(page, { timeoutMs = 30_000 } = {}) {
   await page.reload();
-  await page.waitForSelector('.cm-editor', { timeoutMs });
+  await waitForSessionActive(page, { timeoutMs });
   await installEditorProbe(page);
   await clearEditorTransactions(page);
 }
@@ -480,6 +588,55 @@ export async function readUndoState(page) {
   );
 }
 
+/**
+ * The header Undo/Redo button as the browser renders it.
+ *
+ * `disabled` is the **DOM property** (what the browser enforces), not the attribute alone, so a
+ * button that is enabled through a property setter is read correctly. `title` is recorded because
+ * `DocumentHeader.tsx` swaps it for a viewer ("Read-only for your role") — useful evidence, never
+ * an assertion input.
+ */
+export async function readHistoryButton(page, which) {
+  const selector = which === 'undo' ? SELECTORS.undoButton : SELECTORS.redoButton;
+  return page.evaluate((sel) => {
+    const button = document.querySelector(sel);
+    if (button === null) {
+      return { present: false, disabled: null, ariaLabel: null, title: null, text: null };
+    }
+    return {
+      present: true,
+      disabled: button.disabled === true,
+      ariaLabel: button.getAttribute('aria-label'),
+      title: button.getAttribute('title'),
+      text: (button.textContent ?? '').trim(),
+    };
+  }, selector);
+}
+
+/** Read both history buttons in one round trip. */
+export async function readHistoryButtons(page) {
+  return {
+    undo: await readHistoryButton(page, 'undo'),
+    redo: await readHistoryButton(page, 'redo'),
+  };
+}
+
+/**
+ * Invoke a history button's `click()` **programmatically** (no mouse), as a hostile or mistaken
+ * caller would. Returns whether the button accepted the click: a disabled control swallows it,
+ * which is exactly what the viewer scenario asserts.
+ */
+export async function clickHistoryButtonProgrammatically(page, which) {
+  const selector = which === 'undo' ? SELECTORS.undoButton : SELECTORS.redoButton;
+  return page.evaluate((sel) => {
+    const button = document.querySelector(sel);
+    if (button === null) return { clicked: false, reason: 'missing', wasDisabled: null };
+    const wasDisabled = button.disabled === true;
+    button.click();
+    return { clicked: true, reason: wasDisabled ? 'disabled-control-swallows-click' : 'dispatched', wasDisabled };
+  }, selector);
+}
+
 /* -------------------------------------------------------------------- *
  * The role gate as the browser actually renders it (M2 Phase 2 / A7 F1)
  * -------------------------------------------------------------------- */
@@ -766,20 +923,40 @@ export async function waitForNewServerErrorCode(
  * -------------------------------------------------------------------- */
 
 /**
+ * Focus the editor surface with a real mouse click.
+ *
+ * `page.click()` resolves its target with a single `document.querySelector`, so it throws
+ * `no element matches .cm-content` when called while the editor is unmounted. The session
+ * settle wait above already guarantees the one-time identity remount is behind us; this
+ * precondition exists so that the *only* failure mode left is a real product/harness
+ * breakage, reported as a clear timeout instead of a bare "no element matches".
+ *
+ * Why it cannot mask a regression: it waits for the element to exist and then performs the
+ * same real click. It never retries the click, never ignores its result, and a missing
+ * editor still fails the scenario (after 5 s, with a named selector). Scenarios that care
+ * about remounts assert `window.__qa` mount counters explicitly (`editorState().viewId`,
+ * `markEditorDom`), so a remount is still visible where it matters.
+ */
+async function clickEditorContent(page) {
+  await page.waitForSelector(SELECTORS.editorContent, { timeoutMs: 5_000 });
+  await page.click(SELECTORS.editorContent);
+}
+
+/**
  * Click into the editor and type `text` for real.
  *
  * `atEnd` moves the caret to the end of the document first (Ctrl+End, CodeMirror's
  * own binding), so a scenario never depends on where a click happened to land.
  */
 export async function typeInEditor(page, text, { atEnd = true } = {}) {
-  await page.click(SELECTORS.editorContent);
+  await clickEditorContent(page);
   if (atEnd) await page.pressKey('End', { modifiers: 2 });
   await page.insertText(text);
 }
 
 /** Click the editor, then press `key` (`count` times), with optional modifiers. */
 export async function pressInEditor(page, key, { count = 1, modifiers = 0 } = {}) {
-  await page.click(SELECTORS.editorContent);
+  await clickEditorContent(page);
   for (let index = 0; index < count; index += 1) {
     await page.pressKey(key, { modifiers });
   }

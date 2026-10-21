@@ -147,9 +147,14 @@ async function main() {
    * `role: null` has to silence **both** membership writers on this path — the one here and the
    * one inside `setDocumentId` — because an implicit `owner` row is exactly the false-success
    * hazard `docs/DECISIONS.md` D-065 §5 turned into an evidence condition (A6 F3).
+   *
+   * `bootstrapDelayMs` delays `POST /api/session/bootstrap` through the page instrumentation (no
+   * application change). It exists to make the one-time identity remount deterministic: with a
+   * fast bootstrap the editor can happen to mount after the identity already landed, so a
+   * regression scenario has to widen the window to prove `waitForSessionActive` crosses it.
    */
-  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role, offlineFirst = false } = {}) {
-    const page = await openInstrumentedPage({ target, as, offlineFirst });
+  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role, offlineFirst = false, bootstrapDelayMs = 0 } = {}) {
+    const page = await openInstrumentedPage({ target, as, offlineFirst, bootstrapDelayMs });
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
@@ -177,7 +182,7 @@ async function main() {
    * membership at all. `--keep-open` runs still have a reachable URL; `setOffline(false)`
    * restores the real socket.
    */
-  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER, offlineFirst = false } = {}) {
+  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER, offlineFirst = false, bootstrapDelayMs = 0 } = {}) {
     const connection = (target ?? browser).connection;
     const page = await newPage(connection);
     openPages.push(page);
@@ -187,6 +192,12 @@ async function main() {
       await page.addInitScript(`window.__qaIdentity = ${JSON.stringify(as)};`);
     }
     await page.addInitScript(instrumentSource);
+    if (bootstrapDelayMs > 0) {
+      // A deliberately slow bootstrap: the editor mounts on the placeholder identity first and
+      // the one-time identity remount is then guaranteed to happen while the page is open.
+      // Used by `m3/0-identity-remount-is-waited-for` to prove the wait crosses it.
+      await page.addInitScript(`window.__qa.bootstrapDelayMs = ${Number(bootstrapDelayMs)};`);
+    }
     if (offlineFirst) {
       // Order is load-bearing: `__qa` exists by now, and no application script has run yet.
       await page.addInitScript('window.__qa.setOffline(true);');

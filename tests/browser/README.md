@@ -14,6 +14,7 @@ It covers two milestones:
 | M2 durable persistence | `suite/10-m2-durability.mjs` | the server's document survives room eviction, a hard process kill, compaction, and is never faked on a failed write |
 | M2 Phase 2 authorization | `suite/20-m2-phase2-authz.mjs` | viewer/editor/owner enforcement, identity cannot be self-declared, non-disclosure, session revocation, token never reachable by JS |
 | M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
+| M3 redesign (UI evidence) | `suite/30-m3-ui-evidence.mjs` | the new Undo/Redo buttons (owner/editor reversible through the **durable** store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity-remount wait |
 
 ## Why there is no Playwright
 
@@ -150,6 +151,8 @@ Both `ChangeSpec[]` and `ChangeSet` shapes are handled: `applyDelta` passes a
 | `inboundControl(documentId)` / `outboundControl(documentId)` | the TEXT control frames the page received/sent, including `error.code` and `room-joined.role` — the browser's own view of the authorization answers |
 | `sendControl(documentId, text)` | send a raw control frame on the page's newest socket (used to inject a `userId` into a `join-room` payload from the real connection) |
 | `bootstrapCalls` / `demoIdentity` | every `POST /api/session/bootstrap` the page performed and the identity it claimed |
+| `bootstrapDelayMs = N` | delay the bootstrap request by N ms — the identity-window chaos control (see "The one-time identity remount"); no application change |
+| `identity` / `editor.mountLog` / `bootstrap` | when the identity decision rendered, whether each editor mount happened after it, and the bootstrap's outcome — the evidence the settle wait is built on |
 
 Vite's HMR socket is deliberately **excluded** from the offline simulation: closing it
 makes Vite reload the page, which resets the instrumentation and would silently make an
@@ -189,6 +192,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `10-m2-durability.mjs` | M2-P0-1: room emptied, real process restart, offline client + restart, compaction, persist failure, document isolation, concurrent cold joins, backlog-overflow constructibility |
 | `20-m2-phase2-authz.mjs` | M2 Phase 2: viewer cannot write (P2-1), identity cannot be self-declared (P2-2), non-disclosure 404 (P2-3), role/capability consistency (P2-4), role change + session revocation (P2-5), token invisible to JS (P2-9), what a restart really does to a session |
 | `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
+| `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
 
@@ -344,6 +348,57 @@ a green browser run as covering them.
 | a durable-append failure | `acquireWriteLock(dataPath)` holds SQLite's write lock from a second process, so the server's `BEGIN IMMEDIATE` fails after its 5 s `busy_timeout` |
 | duplicate / reordered / malformed frames | frame-level hold, replay and injection in the page transport |
 | durable-state assertions | `reconstructDurableDocument(dataPath, id)` rebuilds a `Y.Doc` from `snapshot` + `document_update`, the same replay `DocumentHydrator` does |
+
+## The one-time identity remount — a real residual, waited for
+
+`POST /api/session/bootstrap` is deliberately **not** on the editor's critical path
+(`AGENTS.md` R10): while it is in flight the shell renders and the collaboration session opens
+on a per-tab **placeholder** identity (`apps/web/src/user.ts`). But the session is keyed on
+`userId` / `userName` (`apps/web/src/collab/public.ts` `useCollaborativeDocument`), and
+`App.tsx` passes `user={presenceUserFor(identity)}`. So when the server identity lands, the
+product really does this, exactly once:
+
+```text
+editor mounts on the placeholder session
+  → bootstrap resolves, [data-testid="session-identity"] renders
+  → the hook's dependencies change
+  → the placeholder session is destroyed and its editor unmounted
+  → a new session is created for the server identity and the editor is remounted
+```
+
+This is **not** something the suite pretends does not happen. It is a pre-existing product-level
+residual (the same lines exist before the M3 redesign; the redesign's faster first paint only
+made the race likely enough to surface). What the harness owns is not racing it:
+
+- `waitForSessionActive` (used by `newAppPage`, `openApp` and now `reloadApp`) is terminal only
+  when **all** of these hold: `session-identity` is rendered (the bootstrap decision landed),
+  the bootstrap outcome is observable, and `.cm-editor` + `.cm-content` are mounted **after**
+  that decision when the decision changed the presence user (`bootstrap.hasServerIdentity`).
+  A bootstrap that produced **no** server identity leaves the placeholder user unchanged, so no
+  remount is due and a preceding mount is already final — that is the offline branch, measured
+  with the backend stopped.
+- `setDocumentId` uses the same idea for a document switch: it waits for a `.cm-editor` mounted
+  **after** Enter was pressed, not merely for the header text and *some* editor (the old editor
+  is still mounted in the commit that shows the new id).
+- `typeInEditor` / `pressInEditor` additionally wait (5 s, bounded) for `.cm-content` to exist
+  before the real click. This cannot mask a regression: it is a precondition, not a retry —
+  it never repeats the click, never swallows its result, and a missing editor still fails the
+  scenario, now with a named selector instead of `no element matches .cm-content`.
+- `m3/0-identity-remount-is-waited-for` forces the ordering with the `bootstrapDelayMs` chaos
+  control (the page instrumentation delays `POST /api/session/bootstrap`; **no application
+  change**) and asserts that the page really mounted on the placeholder identity first, that
+  the live editor is the post-identity mount, and that a keystroke then reaches the durable
+  document. With the old wait it returned in the placeholder window and typed into the doomed
+  session.
+
+The instrumentation behind all of this, in `instrument/page-instrument.js`:
+
+| Field | Meaning |
+| --- | --- |
+| `identity.present` / `identity.firstSeenAt` / `identity.changes` | when `[data-testid="session-identity"]` was rendered — the bootstrap decision, both `ready` and `unavailable` |
+| `editor.mountLog[]` / `editor.lastMount` | every `.cm-editor` mount with its timestamp and `sawIdentity` (was the decision already rendered?) |
+| `bootstrap.calls` / `bootstrap.settledAt` / `bootstrap.status` / `bootstrap.hasServerIdentity` | the one bootstrap request's outcome, read from a clone so the application still reads the body |
+| `bootstrapDelayMs` | chaos control: delay the bootstrap by N ms, to make the placeholder window deterministic (used only by `m3/0`) |
 
 ## Conventions that keep the results honest
 
