@@ -2802,3 +2802,64 @@ tag 就在自我否定（D-059 P1 / D-069 已两次踩过同类）。而如果�
 **后果。** M2 从"技术已完成、记录未闭合"变为一个**可引用、可复现、文档与代码一致**的基线（`m2-closed`）。
 代价是关闭前多了一轮文档修正与重跑；收益是下一个里程碑接手时，"M2 已经做完什么、明确没做什么"这两件事
 都在仓库里，而不是在对话里。
+
+---
+
+## D-073 · 2026-10-21 · accepted · AUTOPILOT_MODE：A0 的常驻调度授权与边界 (project governance)
+
+**背景。** 项目负责人离席，启用 `AUTOPILOT_MODE`，授权 A0 在不经产品负责人参与的情况下持续推进仓库，
+并把"什么可以自行裁定 / 什么必须停下"写成封闭清单。本条把它落盘——**这类授权如果只存在于聊天里，
+下一次 context rotation 后就不存在了**。
+
+### 1. A0 可自行裁定（不再询问负责人）
+
+按 Gate / Acceptance 推进，而不是按时间。典型包括：typecheck / test / build / browser 失败、fixture 漂移、
+shared 契约升级导致的 fake 编译失败、ownership support exception（最小 + 具名 + 留痕 + Why Required）、
+文档与代码状态不一致、stale verifier、flaky test 诊断、async/concurrency/race 修复、integration 冲突、
+测试覆盖缺口、failure injection、browser harness 问题、小范围 API wiring、已冻结 contract 的**实现细节**、
+已冻结 architecture 内的代码设计选择、CSS/UI presentation engineering choice、依赖的内部使用方式
+（不引入重大新 runtime dependency）、docs/TASKS/DECISIONS 同步、非破坏性 Git 操作。
+
+### 2. 只有以下情形才 `OWNER_DECISION_REQUIRED`
+
+产品 scope 变化 / milestone 边界变化 / 用户可感知的核心 workflow 变化 / permission·security semantics 变化 /
+durability 承诺变化 / 必须推翻 frozen architecture 或 frozen contract / 非预期 wire protocol 改动 /
+新的重大 runtime·framework·database 依赖 / destructive Git（reset 公共历史、rebase 已集成历史、force push、
+删除或移动 milestone tag）/ 两个合理方案造成不同产品行为 / 需要真实 credential·secret·付费服务 /
+数据删除或不可逆 migration。**出现时必须给 A/B/C + 推荐 + 影响；若其它 DAG 能继续，先继续其它工作。**
+
+### 3. Gate 与"不许降标准"
+
+- **Agent 分支绿 ≠ milestone 绿**：最终 Gate 必须在 **integrated HEAD** 上重跑。
+- 默认 Gate：`pnpm typecheck` / `pnpm test` / `pnpm build` / `node tests/browser/run.mjs`；
+  命令真实 exit 0、**test runner 必须自行退出**（D-071 的 `# pass/# fail` 汇总必须打印）、
+  browser 必须真 Chrome + 真 backend、restart 证据必须真进程重启、working tree clean。
+- **禁止**：注释失败测试、放宽 assertion、把必需契约成员改可选、为 fake 改生产语义、timeout 当 PASS、
+  catch 后 false success、用 mock 代替应有的 browser evidence、绕过真实 server、为 UI 绕过权限、
+  为 AI 绕过 Yjs、因为"只剩一点"把 blocker 降级成 backlog。
+
+### 4. Git 与 tag
+
+- 允许：新建 branch / worktree、commit、`--no-ff` merge、删除已完成且确认不再需要的临时 worktree、
+  只读 Git 查询、integration-only 的 support 修复。
+- 禁止：push（当前无 remote）、改写共享历史、移动/删除既有 milestone tag。
+- **新增 milestone tag**：本仓库的 governance（D-053 §5）仍要求负责人明确授权。因此 autopilot 下 A0 只
+  **准备** closure（条件全绿时），在打 tag 这一步**只请求 tag 授权**，并继续其它不依赖 tag 的工作。
+
+### 5. 报告与 context rotation
+
+- 关键决策必须留在仓库（commit / TASKS / DECISIONS / review 报告 / gate 输出），**不能只留在聊天**。
+- 负责人回来后期望看到一份 `AUTOPILOT PROGRESS REPORT`：离开时 SHA / 当前 SHA / 完成阶段 / 各 Agent 产出 /
+  commits 与 merges / 每道 Gate 的数字 / 发现并修掉的 regression / 未解决项 / owner decisions /
+  当前 DAG 位置 / working tree·tags·remote / 下一步是否已在跑。
+- A0 上下文过长、出现"依赖记忆"或 chat 与仓库冲突时，**允许自行 context rotation**：不 reset 仓库、
+  不改 branch/history，新 A0 从 docs + git reconstruction 重建。
+
+### 6. 项目完成定义（不得由某个 Agent 的 "done" 代替）
+
+M1 CLOSED + M2 CLOSED + UI redesign integrated 且有回归证据 + M3 完成 + M3 final A7 review + 全仓四门禁绿 +
+browser 套件绿 + docs 与代码一致 + residuals 具名 + main clean + 无 unresolved P1/P2。只剩 P3/backlog 时
+可关闭项目阶段，但必须诚实列出 residual risk。
+
+**后果。** A0 的调度权与停止条件从"每轮询问"变成"封闭清单 + 自动推进"，代价是 A0 必须自己承担
+更多判断；收益是负责人离席期间仓库仍按 Gate 前进，且回来后能从事务记录而不是聊天记录里恢复状态。
