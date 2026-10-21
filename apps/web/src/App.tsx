@@ -1,9 +1,10 @@
 /**
- * App shell (M1/M2).
+ * App shell (M1/M2; M3 visual redesign).
  *
- * Layout: the collaborative CodeMirror surface in the main column, presence and
- * transport chrome to the side. The document body lives **only** in `Y.Text` —
- * this component holds no text state and dispatches no text.
+ * Layout: one light topbar (brand · document switcher · identity) above a single document
+ * workspace (`DocumentWorkspace` renders the document header and the one editor canvas).
+ * The document body lives **only** in `Y.Text` — this component holds no text state and
+ * dispatches no text.
  *
  * ## Identity (M2 Phase 2)
  *
@@ -28,29 +29,30 @@
  * live session (`ConnectionStatusBadge` in `DocumentWorkspace`), never from a parallel
  * channel.
  *
- * `useServerHealth` remains: it is a plain HTTP `GET /health` poll, opens no socket, and
- * is the backend-liveness indicator.
- *
  * ## Role (M2 Phase 2)
  *
  * This component does **not** hold or pass the document role. The role is read from the
  * collaboration session inside `DocumentWorkspace` (`session.getRole()`, §17.9), and
  * `docs/DECISIONS.md` D-065 §3 forbids mirroring it into Redux or React state here: a copy in
  * the shell would be a second source that can disagree with the seam.
+ *
+ * ## What the M3 redesign removed from the shell
+ *
+ * The right-hand diagnostics column (`StatusPanel` + its 5 s `GET /health` poll) is no longer
+ * rendered: the connection state the user needs is already the document header's badge, read from
+ * the live session. `StatusPanel.tsx`, `MessageLog.tsx` and the Redux slices are deliberately
+ * **kept** (no dead-code cleanup in the same change). The topbar no longer renders Live/Offline
+ * (the status lives in the document header, D1) and has no theme switcher (single Cloud theme,
+ * D2) — both are visual decisions, not protocol changes.
  */
-import { Card, Input, Layout, Space, Tag, Typography } from 'antd';
-
 import { DocumentWorkspace } from './features/editor/DocumentWorkspace.js';
-import { StatusPanel } from './features/status/StatusPanel.js';
-import { useServerHealth } from './hooks/useServerHealth.js';
 import { useServerSession } from './session/useServerSession.js';
 import { documentActions } from './store/documentSlice.js';
 import { useAppDispatch, useAppSelector } from './store/hooks.js';
 import { presenceUserFor } from './user.js';
+import { initialsOf } from './features/collaborators/collaboratorPresentation.js';
 
 export function App() {
-  // HTTP-only backend liveness probe. No WebSocket: the session owns the document socket.
-  const health = useServerHealth();
   // Identity, in parallel with everything else. `pending` behaves like `unavailable`: the editor
   // must never wait for the network.
   const serverSession = useServerSession();
@@ -61,69 +63,56 @@ export function App() {
   const pendingDocumentId = useAppSelector((state) => state.document.pendingDocumentId);
 
   return (
-    <Layout className="app-shell">
-      <Layout.Header className="app-header">
-        <Typography.Title level={4} className="app-title">
-          InsightHub
-        </Typography.Title>
-        <Typography.Text className="app-subtitle">
-          M2 Permissions · session identity · document capabilities
-        </Typography.Text>
-        <SessionIdentityTag state={serverSession} />
-      </Layout.Header>
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand" aria-label="InsightHub">
+          <span className="brand__logo" aria-hidden="true" />
+          <span className="brand__name">InsightHub</span>
+        </div>
 
-      <Layout.Content className="app-content">
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <div className="document-bar">
-            <Space size={8} align="center" wrap>
-              <Typography.Text type="secondary">Document</Typography.Text>
-              <Input
-                size="small"
-                style={{ width: 260 }}
-                value={pendingDocumentId}
-                aria-label="Document id"
-                onChange={(event) =>
-                  dispatch(documentActions.pendingDocumentIdChanged(event.target.value))
-                }
-                onPressEnter={() => dispatch(documentActions.documentSelected(pendingDocumentId))}
-              />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Enter to switch · the previous room is torn down first
-              </Typography.Text>
-            </Space>
-            <Tag color="blue" data-testid="active-document">
-              {activeDocumentId}
-            </Tag>
-          </div>
+        {/*
+          The document switcher keeps the exact M1/M2 semantics: it is a real text input with
+          `aria-label="Document id"`; Enter dispatches `documentSelected`, which rebuilds the
+          session for the new room. No dropdown, no recent-document list, no route: switching a
+          document is still "type the id and press Enter" (`tests/browser/lib/app.mjs`
+          `setDocumentId` depends on this).
+        */}
+        <label className="switcher" title="Switch document by id">
+          <span className="switcher__glyph" aria-hidden="true" />
+          <input
+            className="switcher__input"
+            aria-label="Document id"
+            autoComplete="off"
+            spellCheck={false}
+            value={pendingDocumentId}
+            onChange={(event) =>
+              dispatch(documentActions.pendingDocumentIdChanged(event.target.value))
+            }
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              dispatch(documentActions.documentSelected(pendingDocumentId));
+            }}
+          />
+        </label>
 
-          <div className="app-grid">
-            {/*
-              `key` is load-bearing: a different document must be a different
-              component instance, so the previous session is destroyed before the
-              next one exists. One socket carries at most one room
-              (docs/CONTRACTS.md §5.4).
-            */}
-            <DocumentWorkspace
-              key={activeDocumentId}
-              documentId={activeDocumentId}
-              user={presenceUserFor(identity)}
-            />
+        <SessionIdentity state={serverSession} />
+      </header>
 
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <Card size="small" className="app-card">
-                <StatusPanel health={health} />
-              </Card>
-              {/*
-                The M0 "Server messages" card is intentionally not rendered: it displayed
-                frames from the legacy `useRealtimeChannel` socket, which is no longer
-                mounted. The document socket's traffic belongs to the session and surfaces
-                as connection status inside `DocumentWorkspace`, not as a raw frame log.
-              */}
-            </Space>
-          </div>
-        </Space>
-      </Layout.Content>
-    </Layout>
+      <main className="app-content">
+        {/*
+          `key` is load-bearing: a different document must be a different
+          component instance, so the previous session is destroyed before the
+          next one exists. One socket carries at most one room
+          (docs/CONTRACTS.md §5.4).
+        */}
+        <DocumentWorkspace
+          key={activeDocumentId}
+          documentId={activeDocumentId}
+          user={presenceUserFor(identity)}
+        />
+      </main>
+    </div>
   );
 }
 
@@ -133,20 +122,44 @@ export function App() {
  * Deliberately *not* phrased as "signed in" or "authenticated": §17.0 forbids claiming more for a
  * demo bootstrap than it delivers. It claims an identity from a server-side roster; the session is
  * what later requests cannot forge.
+ *
+ * `data-testid="session-identity"` is a contract surface: the text must contain the current
+ * identity's display name (`tests/browser/suite/20-m2-phase2-authz.mjs` reads it to prove the page
+ * holds the session it claims). The avatar glyph is decorative and `aria-hidden`, so the name and
+ * the "demo session" line are the only text this block contributes.
  */
-function SessionIdentityTag({ state }: { state: ReturnType<typeof useServerSession> }) {
+function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession> }) {
   if (state.status === 'ready') {
     return (
-      <Tag color="green" data-testid="session-identity" title="Server-issued session identity">
-        {state.identity.displayName} · demo session
-      </Tag>
+      <div
+        className="identity"
+        data-testid="session-identity"
+        title="Server-issued session identity"
+      >
+        <span className="identity__avatar" aria-hidden="true">
+          {initialsOf(state.identity.displayName)}
+        </span>
+        <span className="identity__copy">
+          <strong className="identity__name">{state.identity.displayName}</strong>
+          <small className="identity__meta">demo session</small>
+        </span>
+      </div>
     );
   }
   if (state.status === 'unavailable') {
     return (
-      <Tag color="default" data-testid="session-identity" title="No server session; local placeholder">
-        local identity (offline)
-      </Tag>
+      <div
+        className="identity identity--offline"
+        data-testid="session-identity"
+        title="No server session; local placeholder"
+      >
+        <span className="identity__avatar" aria-hidden="true">
+          ?
+        </span>
+        <span className="identity__copy">
+          <strong className="identity__name">local identity (offline)</strong>
+        </span>
+      </div>
     );
   }
   return null;

@@ -1,106 +1,686 @@
+/*
+ * InsightHub — Cloud theme (single theme; D2).
+ *
+ * One `:root` palette, system fonts, no runtime theming, no webfont, no CSS framework
+ * overrides beyond what the components themselves need. The layout is
+ * topbar → document header → one editor canvas, at most 1040px wide and centred.
+ *
+ * The two contract-critical things in this file are *visibility*, not decoration:
+ * `.read-only-notice` must be laid out (the browser suite demands a real box), and
+ * `.sr-only` must stay in the layout tree (it carries `[data-testid="undo-state"]`).
+ */
+
 :root {
-  --ih-bg: #f5f6f8;
+  --app: #f1f5f9;
+  --top: #fbfdff;
+  --paper: #fffefd;
+  --panel: #f7f9fc;
+  --text: #172235;
+  --muted: #8794a7;
+  --border: #dce4ed;
+  --accent: #3977e9;
+  --accentSoft: #eaf2ff;
+  --green: #249765;
+  --greenSoft: #e7f7ef;
+  --role: #edf1f5;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Roboto,
+    sans-serif;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Roboto,
-    sans-serif;
-  background: var(--ih-bg);
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--app);
+  -webkit-font-smoothing: antialiased;
 }
 
-.app-header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  background: #001529;
+/* ------------------------------------------------------------------ *
+ * Shell + topbar
+ * ------------------------------------------------------------------ */
+
+.app-shell {
+  min-height: 100vh;
+  background: var(--app);
 }
 
-.app-title {
-  color: #fff !important;
-  margin: 0 !important;
-}
-
-.app-subtitle {
-  color: rgb(255 255 255 / 65%);
-}
-
-.app-content {
-  padding: 20px;
-}
-
-.app-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-
-@media (width <= 900px) {
-  .app-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.app-card {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
-}
-
-/* Document switcher bar */
-.document-bar {
+.topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 18px;
+  min-height: 60px;
+  padding: 0 18px;
+  background: var(--top);
+  border-bottom: 1px solid var(--border);
 }
 
-/* Offline / reconnecting notice. Offline is a normal state, not an error. */
+/* Brand: the logo is two CSS pseudo-elements, not an image or a webfont glyph. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 760;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+
+.brand__logo {
+  position: relative;
+  width: 29px;
+  height: 29px;
+  border-radius: 9px;
+  background: var(--accent);
+  box-shadow: 0 6px 16px rgb(30 60 120 / 16%);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.brand__logo::before,
+.brand__logo::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.brand__logo::before {
+  left: 7px;
+  bottom: 6px;
+}
+
+.brand__logo::after {
+  top: 6px;
+  right: 6px;
+  opacity: 0.72;
+}
+
+.brand__name {
+  font-size: 15px;
+}
+
+/* Compact document switcher: a real input, Enter commits (§4.1 of the redesign brief). */
+.switcher {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  min-width: 180px;
+  max-width: 410px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.switcher:focus-within {
+  background: var(--paper);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(57 119 233 / 10%);
+}
+
+.switcher__glyph {
+  position: relative;
+  flex: none;
+  width: 15px;
+  height: 18px;
+  border: 1.5px solid var(--muted);
+  border-radius: 3px;
+  transition: border-color 0.18s ease;
+}
+
+.switcher__glyph::after {
+  content: '';
+  position: absolute;
+  top: -1.5px;
+  right: -1.5px;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1.5px solid var(--muted);
+  border-left: 1.5px solid var(--muted);
+  background: var(--panel);
+}
+
+.switcher:focus-within .switcher__glyph {
+  border-color: var(--accent);
+}
+
+.switcher__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+/* Identity: server display name + the "demo session" qualifier (§17.0 wording). */
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  padding-left: 13px;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.identity__avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  border: 2px solid var(--top);
+  border-radius: 50%;
+  background: var(--accentSoft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.identity--offline .identity__avatar {
+  background: var(--role);
+  color: var(--muted);
+}
+
+.identity__copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.identity__name {
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.identity__meta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Workspace, document header
+ * ------------------------------------------------------------------ */
+
+.app-content {
+  padding: 21px 27px 28px;
+}
+
+.workspace {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.doc-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  margin-bottom: 14px;
+}
+
+.doc-head__title {
+  max-width: 440px;
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 770;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-head__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* Connection pill. The state colour is keyed off `data-status`, the contract attribute. */
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--role);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.conn-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.conn-pill[data-status='connected'] {
+  background: var(--greenSoft);
+  color: var(--green);
+}
+
+.conn-pill[data-status='connecting'] {
+  background: var(--accentSoft);
+  color: var(--accent);
+}
+
+.conn-pill[data-status='reconnecting'],
+.conn-pill[data-status='error'] {
+  background: #fff4e6;
+  color: #b25e09;
+}
+
+.conn-pill[data-status='offline'] {
+  background: #fdecec;
+  color: #b3261e;
+}
+
+/* Role chip: its text is exactly `role: <role>`; it is not rendered for an unknown role. */
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 25px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--role);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ *
+ * Collaborator avatar group
+ * ------------------------------------------------------------------ */
+
+.collab-group {
+  display: flex;
+  align-items: center;
+  min-height: 29px;
+  padding-left: 8px;
+}
+
+.collab-group__empty {
+  padding-right: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.collab {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  margin-left: -8px;
+  border: 2px solid var(--app);
+  border-radius: 50%;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.18s ease;
+}
+
+.collab:first-child {
+  margin-left: 0;
+}
+
+.collab__avatar {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 800;
+}
+
+/*
+ * The tooltip text. Kept in the layout tree (opacity, never `display: none`) so the name is a
+ * real text node inside the avatar row: `readCollaborators` reads it, and so does a screen
+ * reader. Hover/focus only changes whether it is painted.
+ */
+.collab__tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 5;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #182235;
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.collab:hover .collab__tip,
+.collab:focus-within .collab__tip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* Undo / redo, separated from presence by 1px. */
+.doc-actions {
+  display: flex;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.doc-action {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.doc-action svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.15s ease;
+}
+
+.doc-action:hover:not(:disabled) {
+  background: var(--accentSoft);
+  color: var(--accent);
+}
+
+.doc-action:hover:not(:disabled) svg {
+  transform: scale(1.08);
+}
+
+.doc-action:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.doc-action:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.doc-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Notices
+ * ------------------------------------------------------------------ */
+
+.doc-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* Offline / reconnecting. Offline is a normal state, not an error. */
 .offline-notice {
-  padding: 6px 10px;
-  border: 1px solid #ffe58f;
-  border-radius: 4px;
-  background: #fffbe6;
+  display: flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid #f0d38b;
+  border-radius: 8px;
+  background: #fff8e6;
+  color: #7a5a12;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
-/* Read-only notice: a *known* role without edit permission (CONTRACTS §17.9).
-   Deliberately distinct from the offline notice: one is "not shared yet", the other
-   is "your role may not edit", and confusing the two would misstate both. */
+/*
+ * Read-only notice: a *known* role without edit permission (CONTRACTS §17.9).
+ * Deliberately distinct from the offline notice: one is "not shared yet", the other
+ * is "your role may not edit", and confusing the two would misstate both.
+ * The two __title/__detail class names are contract (readEditorGate reads them).
+ */
 .read-only-notice {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 10px;
-  border: 1px solid #adc6ff;
-  border-radius: 4px;
-  background: #f0f5ff;
-  font-size: 13px;
+  padding: 8px 12px;
+  border: 1px solid #bcd4fb;
+  border-radius: 8px;
+  background: var(--accentSoft);
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
 .read-only-notice__title {
-  color: #1d39c4;
+  color: #1f4fa8;
+  font-weight: 700;
 }
 
 .read-only-notice__detail {
-  color: #2f54eb;
+  color: #3a63a8;
 }
 
-/* CodeMirror surface */
+/* Session failure / editor resync: one shared notice shape. */
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notice__title {
+  font-size: 13px;
+}
+
+.notice__hint {
+  color: var(--muted);
+}
+
+.notice--error {
+  border: 1px solid #f3b8b5;
+  background: #fdeeee;
+  color: #8c1d18;
+}
+
+.notice--warning {
+  border: 1px solid #f0d38b;
+  background: #fff8e6;
+  color: #7a5a12;
+}
+
+/*
+ * Visually hidden, but still rendered and still in the accessibility tree. Used for
+ * `[data-testid="undo-state"]`, whose text must exist and be a live region while the icon
+ * buttons are the visible affordance. `display: none` would remove it from `textContent`
+ * queries' ancestors and from the a11y tree, so this uses the clip technique.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ *
+ * Editor canvas
+ * ------------------------------------------------------------------ */
+
+.canvas {
+  min-height: 510px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 14px 34px rgb(37 47 62 / 4.5%);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.canvas:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 16px 40px rgb(37 47 62 / 7%);
+}
+
+/* Loading / failure shells share the canvas frame, so a switch never jumps the layout. */
+.canvas--status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px;
+  text-align: center;
+}
+
+.canvas-status__pulse {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--accentSoft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ih-spin 0.9s linear infinite;
+}
+
+.canvas-status__text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.canvas-status__text code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+@keyframes ih-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * The CodeMirror surface. Only skin, never structure: `lineNumbers()` and the real
+ * `.cm-content` stay exactly what `CollaborativeMarkdownEditor` mounts. No second gutter,
+ * no fake `.line` elements (the prototype's are deliberately not copied).
+ */
+.markdown-editor {
+  height: 100%;
+}
+
 .markdown-editor .cm-editor {
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  min-height: 320px;
+  min-height: 510px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
 }
 
 .markdown-editor .cm-editor.cm-focused {
-  outline: 2px solid #1677ff33;
-  border-color: #1677ff;
+  outline: none;
+}
+
+.markdown-editor .cm-scroller {
+  font-family: var(--mono);
+}
+
+/*
+ * Line numbers sit on the paper itself (no coloured gutter column, no vertical rule).
+ *
+ * A gutter background would end where the last line ends, because CodeMirror sizes `.cm-gutters`
+ * to the content, not to the 510px canvas — leaving a visible half-height strip on a short
+ * document. The single-surface treatment avoids that entirely and keeps the canvas the visual
+ * centre; the numbers are still `lineNumbers()`, still 12.5px, still right-aligned.
+ */
+.markdown-editor .cm-gutters {
+  border-right: none !important;
+  background: transparent !important;
+  color: #9aa6b7;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 25.7px;
+}
+
+.markdown-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 14px 0 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.markdown-editor .cm-content {
+  padding: 18px 24px;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 25.7px;
+  caret-color: var(--accent);
+}
+
+.markdown-editor .cm-line {
+  padding: 0;
+}
+
+.markdown-editor .cm-cursor,
+.markdown-editor .cm-dropCursor {
+  border-left-color: var(--accent);
 }
 
 /* Remote collaborator cursors and selections.
@@ -132,18 +712,95 @@ body {
 }
 
 .cm-remote-selection {
-  background: rgb(22 119 255 / 18%);
+  background: rgb(57 119 233 / 18%);
 }
 
+/* Kept for `MessageLog.tsx`, which is deliberately not rendered (no dead-code cleanup). */
 .message-json {
+  max-height: 150px;
   margin: 6px 0 0;
   padding: 8px;
-  background: #f6f6f6;
+  overflow: auto;
   border-radius: 4px;
+  background: #f6f6f6;
   font-size: 12px;
   line-height: 1.5;
-  max-height: 150px;
-  overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ------------------------------------------------------------------ *
+ * Responsive (desktop-first, 1440px baseline)
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 900px) {
+  .app-content {
+    padding: 16px;
+  }
+
+  .doc-head {
+    flex-wrap: wrap;
+  }
+
+  .doc-head__title {
+    max-width: 100%;
+  }
+
+  .doc-head__right {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    min-height: 60px;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 9px;
+    padding: 10px 12px;
+  }
+
+  .switcher {
+    order: 3;
+    flex: 0 0 100%;
+    width: 100%;
+    max-width: none;
+  }
+
+  .identity {
+    margin-left: auto;
+  }
+
+  .app-content {
+    padding: 14px 10px 18px;
+  }
+
+  .doc-head {
+    gap: 8px;
+  }
+
+  .doc-head__right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .canvas,
+  .markdown-editor .cm-editor {
+    min-height: 410px;
+  }
+
+  .markdown-editor .cm-content {
+    padding: 14px;
+  }
+}
+
+/* Respect the OS "reduce motion" setting: no transitions, no spinner animation. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
 }
