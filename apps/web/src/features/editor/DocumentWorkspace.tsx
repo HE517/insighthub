@@ -1,5 +1,5 @@
 /**
- * The document workspace: session lifecycle → editor + presence chrome.
+ * The document workspace: one header, one canvas.
  *
  * ## States
  *
@@ -9,7 +9,7 @@
  * | `result.state` | Rendered |
  * | --- | --- |
  * | `initializing` | a loading shell — no editor, because there is no `Y.Text` yet |
- * | `active` | the editor, bound to `result.session.text` |
+ * | `active` | the header + the editor, bound to `result.session.text` |
  * | `failed` | an error shell with the reason, still no editor (never a fake one) |
  *
  * ## Document switching
@@ -36,8 +36,15 @@
  * A demotion does not destroy the local document: the editor is reconfigured, not remounted,
  * so text already written to `Y.Text` stays there. The gate is advisory, not a security
  * boundary — the server rejects unauthorised mutations at every enforcement point (§17.5).
+ *
+ * ## What this file does NOT change (M3 UI redesign)
+ *
+ * Session lifecycle, role reads, capability gating and the editor binding are untouched. The
+ * redesign moved markup and CSS: the former three debug cards (status, collaborators, document)
+ * became one header row above a single paper canvas. The undo/redo buttons call the same
+ * `runSessionHistory` the `Mod-z` keymap calls, so there is still exactly one undo mechanism
+ * (`AGENTS.md` R13).
  */
-import { Alert, Card, Skeleton, Space, Typography } from 'antd';
 import { useState } from 'react';
 
 import type { CollaborativeSession, CollaborativeSessionOptions } from '@insighthub/shared';
@@ -45,9 +52,10 @@ import type { CollaborativeSession, CollaborativeSessionOptions } from '@insight
 import { useCollaborativeDocument } from '../../collab/public.js';
 import { capabilityGate } from '../permissions/capabilityGate.js';
 import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
-import { CollaboratorList } from '../collaborators/CollaboratorList.js';
-import { ConnectionStatusBadge, OfflineNotice } from '../status/ConnectionStatusBadge.js';
+import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
 import { CollaborativeMarkdownEditor } from './CollaborativeMarkdownEditor.js';
+import { DocumentHeader } from './DocumentHeader.js';
+import { runSessionHistory } from './editorEditability.js';
 import {
   useSessionCollaborators,
   useSessionConnectionStatus,
@@ -69,41 +77,42 @@ export function DocumentWorkspace({ documentId, user }: DocumentWorkspaceProps) 
   }
 
   if (result.state === 'failed') {
-    return (
-      <Card size="small" className="app-card">
-        <Alert
-          type="error"
-          showIcon
-          message="This document could not be opened"
-          description={
-            <Space direction="vertical" size={4}>
-              <Typography.Text>{result.error}</Typography.Text>
-              <Typography.Text type="secondary">
-                Create the collaboration session again to retry. Local data already written by a
-                previous session is kept.
-              </Typography.Text>
-            </Space>
-          }
-          data-testid="session-failed"
-        />
-      </Card>
-    );
+    return <SessionFailed error={result.error} />;
   }
 
   // `result.state === 'active'` — the only branch where `Y.Text` exists.
   return <ActiveDocument session={result.session} documentId={documentId} />;
 }
 
+/** The loading shell. Still no editor: a fake one would be a lie about `Y.Text`. */
 function SessionLoading({ documentId }: { documentId: string }) {
   return (
-    <Card size="small" className="app-card" data-testid="session-initializing">
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        <Typography.Text type="secondary">
-          Opening <Typography.Text code>{documentId}</Typography.Text> from local storage…
-        </Typography.Text>
-        <Skeleton active paragraph={{ rows: 4 }} title={false} />
-      </Space>
-    </Card>
+    <div className="workspace">
+      <div className="canvas canvas--status" data-testid="session-initializing" role="status">
+        <span className="canvas-status__pulse" aria-hidden="true" />
+        <p className="canvas-status__text">
+          Opening <code>{documentId}</code> from local storage…
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** The failure shell. The reason is shown; the editor is never faked. */
+function SessionFailed({ error }: { error: string }) {
+  return (
+    <div className="workspace">
+      <div className="canvas canvas--status">
+        <div className="notice notice--error" data-testid="session-failed" role="alert">
+          <strong className="notice__title">This document could not be opened</strong>
+          <span className="notice__detail">{error}</span>
+          <span className="notice__hint">
+            Create the collaboration session again to retry. Local data already written by a
+            previous session is kept.
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -129,59 +138,57 @@ function ActiveDocument({
   const gate = capabilityGate(role);
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card
-        size="small"
-        className="app-card"
-        title={
-          <Space size={10} wrap>
-            <Typography.Text strong>{documentId}</Typography.Text>
-            <ConnectionStatusBadge status={status} />
-            {gate.role === null ? null : (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                role: {gate.role}
-              </Typography.Text>
-            )}
-          </Space>
-        }
-      >
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <OfflineNotice status={status} />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="undo-state">
-            undo: {undoState.canUndo ? 'available' : 'none'} · redo:{' '}
-            {undoState.canRedo ? 'available' : 'none'}
-          </Typography.Text>
-          {resyncReason === null ? null : (
-            <Alert
-              type="warning"
-              showIcon
-              message="The editor was resynchronised from the document"
-              description={`reason: ${resyncReason}`}
-              data-testid="editor-resync"
-            />
-          )}
-        </Space>
-      </Card>
+    <div className="workspace">
+      <DocumentHeader
+        documentId={documentId}
+        status={status}
+        gate={gate}
+        collaborators={collaborators}
+        localClientId={session.localClientId}
+        undoState={undoState}
+        onUndo={() => runSessionHistory(gate.readOnly, session, 'undo')}
+        onRedo={() => runSessionHistory(gate.readOnly, session, 'redo')}
+      />
 
-      <Card title="Collaborators" size="small" className="app-card">
-        <CollaboratorList collaborators={collaborators} localClientId={session.localClientId} />
-      </Card>
+      {/*
+        Fixed notice order: offline state first (it explains that edits are local), then the
+        permission explanation, then the screen-reader undo state, then a resync alert. Each
+        component decides whether it renders; only the canonical test ids remain in the DOM.
+      */}
+      <div className="doc-notices">
+        <OfflineNotice status={status} />
+        {/*
+          The read-only explanation sits above the surface it describes. It renders nothing
+          unless a **known** role may not edit (`readOnlyNoticeCopy.ts` owns both the decision
+          and the wording), and it never claims that anything was saved.
+        */}
+        <ReadOnlyNotice gate={gate} />
+        {/*
+          Contract surface (`tests/browser/lib/app.mjs` `readUndoState`): the text mirrors
+          `getUndoState()` with the same `undo: … · redo: …` vocabulary. Visually hidden — the
+          icon buttons are the visible affordance — but present for assistive technology and for
+          the browser suite.
+        */}
+        <span className="sr-only" aria-live="polite" data-testid="undo-state">
+          {`undo: ${undoState.canUndo ? 'available' : 'none'} · redo: ${
+            undoState.canRedo ? 'available' : 'none'
+          }`}
+        </span>
+        {resyncReason === null ? null : (
+          <div className="notice notice--warning" data-testid="editor-resync" role="alert">
+            <strong className="notice__title">The editor was resynchronised from the document</strong>
+            <span className="notice__detail">{`reason: ${resyncReason}`}</span>
+          </div>
+        )}
+      </div>
 
-      <Card title="Document" size="small" className="app-card">
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          {/*
-            The read-only explanation sits next to the surface it describes. It renders
-            nothing unless a **known** role may not edit (`readOnlyNoticeCopy.ts` owns both
-            the decision and the wording), and it never claims that anything was saved.
-          */}
-          <ReadOnlyNotice gate={gate} />
-          <CollaborativeMarkdownEditor
-            session={session}
-            readOnly={gate.readOnly}
-            onResync={setResyncReason}
-          />
-        </Space>
-      </Card>
-    </Space>
+      <div className="canvas">
+        <CollaborativeMarkdownEditor
+          session={session}
+          readOnly={gate.readOnly}
+          onResync={setResyncReason}
+        />
+      </div>
+    </div>
   );
 }
