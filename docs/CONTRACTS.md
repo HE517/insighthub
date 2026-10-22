@@ -1120,3 +1120,67 @@ save happened.
 | --- | --- |
 | `SHARED_CONTRACT_VERSION` | 6 → **7** (a frozen seam grew a member) |
 | `PROTOCOL_VERSION` | **unchanged (2)** — the wire already carries the field |
+
+## 18. Authentication with Clerk (M4 — frozen; implementation B1–B2)
+
+Frozen by `docs/DECISIONS.md` **D-082** (owner decision). This section is the contract the implementation
+must satisfy; it does **not** authorize a second session system.
+
+### 18.1 Identity source
+
+Clerk is the **only** production identity source. Sign-in methods for V1: **Email** and **Google**.
+Clerk holds credentials, password reset, MFA and session lifecycle; InsightHub must not store passwords
+or implement password reset.
+
+The server verifies the Clerk session on every protected request (Clerk backend SDK, server-side secret
+only). A verified Clerk user (`sub`) maps to exactly one internal user:
+
+```
+Clerk verified identity (sub, email, name)
+  → app_user (internal id, clerk_user_id UNIQUE, email, display_name, status)
+  → document membership
+  → DocumentRole
+  → documentCapabilities
+  → existing HTTP / WS authorization (§17.5)
+```
+
+`app_user` is **mapping only**: it is not a session store, it carries no token, and it is not a second
+authentication system. Mapping is created lazily on the first authenticated request and is idempotent.
+
+### 18.2 No second session
+
+InsightHub must **not** create a durable login-session table to duplicate Clerk's session. Clerk's session
+is the authentication session; its lifetime, rotation, revocation and (where applicable) restart
+continuity are Clerk's responsibility. B1/B2 must first *verify* that this covers: restart continuity,
+deploy continuity, logout/revocation, HTTP authentication and WebSocket upgrade authentication. Only a
+demonstrated gap may justify local session state, and that gap must be recorded as a decision before it
+is implemented.
+
+### 18.3 HTTP
+
+Every non-public endpoint (`/api/session`, `/api/documents*`, `/api/ai/suggest`, bootstrap when enabled)
+requires a verified Clerk session and returns `401 session_required` otherwise. The session token is
+never returned in a response body, never logged, and never placed where page JavaScript can read it.
+
+### 18.4 WebSocket upgrade
+
+The upgrade is authenticated **before** `handleUpgrade` succeeds: an unauthenticated or expired session
+is rejected with `401` and no socket is established. No anonymous socket may join a room. An
+already-open socket keeps its admission until it is closed (the same request-scoped revocation
+limitation as §17.2; a periodic revalidation policy, if any, is a B2 decision).
+
+### 18.5 Demo bootstrap
+
+`POST /api/session/bootstrap` exists **only** as a development/test fixture. It is enabled only when
+`AUTH_MODE=demo` **and** `NODE_ENV !== 'production'`; in production the route is absent (404) and startup
+must fail if demo auth is enabled. No production deployment may accept a caller-supplied user id.
+
+### 18.6 Configuration
+
+| Variable | Visibility | Purpose |
+| --- | --- | --- |
+| `VITE_CLERK_PUBLISHABLE_KEY` | **public** (browser) | Clerk frontend SDK |
+| `CLERK_SECRET_KEY` | **server only** | session verification / user lookup |
+| `AUTH_MODE` | server | `clerk` (production) or `demo` (development/test only) |
+
+Missing required configuration in production is a **startup failure**, not a warning (§D-082 D2, M4 B3).
