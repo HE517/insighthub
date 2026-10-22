@@ -2916,6 +2916,14 @@ A6 报告里有一句"bootstrap 慢时，用户在身份落地前输入的文字
 因此：**在测量之前，不得把"会丢失"写进文档或发布说明**。已作为 A2 的测量项（用 A6 新增的
 `bootstrapDelayMs` 注入慢 bootstrap，在窗口内输入，再检查 durable 文本与新 session 的文本）。
 
+**【2026-10-22 勘误·测量结果：该推断被否定】** A2 用真实浏览器 + 真实 IndexedDB + 真实 SQLite
+在 `bootstrapDelayMs = 1200` 与 `2500` 下测量：窗口内输入的两段唯一标记，在 identity 落地、编辑器
+remount 之后**同时存在于编辑器与 durable store**；窗口内 `liveDocumentSockets = 0`（文本没有走网络）。
+机制：占位 session 的每次 `Y.Text` update 由 `y-indexeddb` **立即**写入同一个
+`insighthub-doc:<documentId>`（日志写入不 debounce），session 销毁时 `destroy()` 的 `db.close()`
+等待已建事务完成，新 session 以同一 `persistenceKey` 在 `markActive` 前重放本地副本。**没有产品级丢失，
+不需要修复**；此后不得再以"bootstrap 窗口会丢字"作为已知缺陷引用。
+
 ### 5. UI redesign 的定性
 
 这是 **presentation 阶段**，不是新 milestone：没有改任何 frozen architecture / contract / permission /
