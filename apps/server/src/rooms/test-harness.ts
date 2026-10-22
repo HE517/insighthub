@@ -326,11 +326,16 @@ export class TestClient {
    * why there is no `userId` option here: a test must not be able to helpfully self-declare one
    * through the harness.
    */
-  static async connect(url: string, options: { cookie?: string } = {}): Promise<TestClient> {
-    const socket = new WebSocket(
-      url,
-      options.cookie === undefined ? {} : { headers: { cookie: options.cookie } },
-    );
+  static async connect(
+    url: string,
+    options: { cookie?: string; origin?: string } = {},
+  ): Promise<TestClient> {
+    const headers: Record<string, string> = {};
+    if (options.cookie !== undefined) headers['cookie'] = options.cookie;
+    // A real browser always sends `Origin` on a WebSocket handshake (M4 B4). Tests that need to
+    // behave like one set it here; tests that must behave like a non-browser client omit it.
+    if (options.origin !== undefined) headers['origin'] = options.origin;
+    const socket = new WebSocket(url, Object.keys(headers).length === 0 ? {} : { headers });
 
     // The recording listeners must be attached synchronously, before the `open` event
     // can fire: the server writes `connected` as soon as the upgrade completes, so a
@@ -350,8 +355,15 @@ export class TestClient {
    * the observable outcome is a handshake error carrying the HTTP status — not a socket that
    * opens and is then closed for an unexplained reason.
    */
-  static async expectRefused(url: string, cookie?: string): Promise<number | undefined> {
-    const socket = new WebSocket(url, cookie === undefined ? {} : { headers: { cookie } });
+  static async expectRefused(
+    url: string,
+    cookie?: string,
+    origin?: string,
+  ): Promise<number | undefined> {
+    const headers: Record<string, string> = {};
+    if (cookie !== undefined) headers['cookie'] = cookie;
+    if (origin !== undefined) headers['origin'] = origin;
+    const socket = new WebSocket(url, Object.keys(headers).length === 0 ? {} : { headers });
     return await new Promise<number | undefined>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error('upgrade was neither refused nor opened')),
