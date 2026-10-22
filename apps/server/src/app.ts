@@ -54,10 +54,15 @@ import { mountAiRoutes } from './ai/route.js';
 import {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
+  createIdentityDeps,
+  resolveAuthenticatedUser,
   type AuthzService,
+  type AuthenticatedUser,
   type DocumentAccessDecision,
+  type IdentityDeps,
+  type IdentityOptions,
 } from './authz/public.js';
-import { type ServerConfig } from './config.js';
+import { type AuthMode, type ServerConfig } from './config.js';
 
 /**
  * The frozen response bodies.
@@ -68,6 +73,12 @@ import { type ServerConfig } from './config.js';
  */
 const RESPONSE_BODIES = {
   unauthenticated: { error: 'unauthenticated' },
+  /**
+   * §18.3's body for an unverified Clerk session. The demo path keeps `unauthenticated`
+   * (§17.4), so existing clients and the M2 tests are unchanged; the mode decides the body
+   * because the two contracts name the same refusal differently.
+   */
+  sessionRequired: { error: 'session_required' },
   notFound: { error: 'not_found' },
   forbidden: { error: 'forbidden' },
   invalidDemoIdentity: { error: 'invalid_demo_identity' },
@@ -113,17 +124,36 @@ interface BootstrapBody {
  * not crash startup, because fail-fast configuration is M4 D3's decision
  * (`docs/DECISIONS.md` D-080 §3). `index.ts` constructs the provider explicitly only so it
  * can log whether AI is enabled.
+ *
+ * ## M4 B1 — `identity` is the injected Clerk seam
+ *
+ * The fourth parameter carries the `SessionVerifier` and `AppUserStore`. It is absent in
+ * demo mode (every existing caller), and required by `createIdentityDeps` when
+ * `config.authMode === 'clerk'` — a clerk app built without them throws at construction
+ * rather than answering `401` to everything and looking like a sign-in problem.
+ *
+ * The demo bootstrap route is mounted only when `AUTH_MODE=demo` **and**
+ * `NODE_ENV !== 'production'` (§18.5). When it is not mounted there is no route at all, so
+ * the request falls through to the M0 `404 not_found` — the same answer as any unknown path,
+ * which is what keeps "this endpoint used to exist" from being observable.
  */
 export function createApp(
   config: ServerConfig,
   authz: AuthzService,
   aiProvider: ServerAiProvider | null = createServerAiProviderFromEnv(process.env),
+  identity: IdentityOptions = {},
 ): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
     // rejects, and "fix it by dropping credentials" would silently turn cookies off.
     throw new Error('CORS_ORIGIN must be an explicit origin: "*" is not allowed with credentials');
   }
+
+  // Resolved once, not per request: the mode and the injected verifier are process-wide, and
+  // constructing this at every request would let a caller observe a different mode mid-flight.
+  const identityDeps = createIdentityDeps(config.authMode ?? 'demo', authz, identity);
+  const demoBootstrapEnabled =
+    identityDeps.mode === 'demo' && config.nodeEnv !== 'production';
 
   const app = express();
 
@@ -144,8 +174,8 @@ export function createApp(
     });
   });
 
-  mountAuthorizationRoutes(app, authz);
-  mountAiRoutes(app, authz, aiProvider);
+  mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled);
+  mountAiRoutes(app, authz, aiProvider, identityDeps);
 
   /* ---------------------------------------------------------------- *
    * Fallbacks
@@ -173,41 +203,65 @@ export function createApp(
   return app;
 }
 
-/** Session + document endpoints (§12, §17.4). Mounted only when an authorization seam exists. */
-function mountAuthorizationRoutes(app: Express, authz: AuthzService): void {
+/** Session + document endpoints (§12, §17.4, §18). */
+function mountAuthorizationRoutes(
+  app: Express,
+  authz: AuthzService,
+  identityDeps: IdentityDeps,
+  demoBootstrapEnabled: boolean,
+): void {
   /* ---------------------------------------------------------------- *
-   * Session (§17.2, §17.4)
+   * Session (§17.2, §17.4, §18)
    * ---------------------------------------------------------------- */
 
-  app.post(
-    '/api/session/bootstrap',
-    parseBootstrapBody,
-    (req: Request, res: Response) => {
-      const demoUserId = readDemoUserId(req.body);
-      const outcome = authz.bootstrap(demoUserId, req.headers.cookie);
+  // §18.5: the demo fixture exists only outside production. When the gate is closed the route
+  // is **not mounted at all**, so this path falls through to the unknown-path 404 — identical
+  // to any other absent path, with no body or header that reveals it once existed.
+  if (demoBootstrapEnabled) {
+    app.post(
+      '/api/session/bootstrap',
+      parseBootstrapBody,
+      (req: Request, res: Response) => {
+        const demoUserId = readDemoUserId(req.body);
+        const outcome = authz.bootstrap(demoUserId, req.headers.cookie);
 
-      if (outcome.kind === 'invalid_demo_identity') {
-        res.status(400).json(RESPONSE_BODIES.invalidDemoIdentity);
-        return;
-      }
+        if (outcome.kind === 'invalid_demo_identity') {
+          res.status(400).json(RESPONSE_BODIES.invalidDemoIdentity);
+          return;
+        }
 
-      // The token exists only in this header. It is never put in the body: P2-9 requires that
-      // no JS-reachable place can read it, and a body would be readable by `fetch`.
-      res.cookie(SESSION_COOKIE_NAME, outcome.token, sessionCookieOptions(req));
-      res.status(200).json(outcome.session);
-    },
-  );
+        // The token exists only in this header. It is never put in the body: P2-9 requires that
+        // no JS-reachable place can read it, and a body would be readable by `fetch`.
+        res.cookie(SESSION_COOKIE_NAME, outcome.token, sessionCookieOptions(req));
+        res.status(200).json(outcome.session);
+      },
+    );
+  }
 
-  app.get('/api/session', (req: Request, res: Response) => {
-    const session = authz.resolveSession(req.headers.cookie);
-    if (session === null) {
-      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+  app.get('/api/session', async (req: Request, res: Response) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
       return;
     }
-    res.status(200).json(session);
+    res.status(200).json(sessionBody(user));
   });
 
-  app.delete('/api/session', (req: Request, res: Response) => {
+  app.delete('/api/session', async (req: Request, res: Response) => {
+    if (identityDeps.mode === 'clerk') {
+      // Clerk owns the authentication session (§18.2), so there is no server-side session to
+      // revoke here. The route still requires a verified session — it is not a public path —
+      // and clears any stale demo cookie. Actual sign-out/revocation is B2's client call.
+      const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+      if (user === null) {
+        res.status(401).json(RESPONSE_BODIES.sessionRequired);
+        return;
+      }
+      res.clearCookie(SESSION_COOKIE_NAME, sessionCookieOptions(req));
+      res.status(204).end();
+      return;
+    }
+
     const destroyed = authz.destroySession(req.headers.cookie);
     if (!destroyed) {
       // A destroyed or expired token is `401` everywhere (§17.2) — including here, where a
@@ -224,9 +278,15 @@ function mountAuthorizationRoutes(app: Express, authz: AuthzService): void {
    * ---------------------------------------------------------------- */
 
   app.get('/api/documents', async (req: Request, res: Response) => {
-    const decision = await authz.listReadableDocuments(req.headers.cookie);
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
+      return;
+    }
+    // The same decision core as before; only the identity's origin changed (§18.1).
+    const decision = await authz.listReadableDocuments(user.userId);
     if (decision.kind === 'unauthenticated') {
-      res.status(401).json(RESPONSE_BODIES.unauthenticated);
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
       return;
     }
     res.status(200).json({ documents: decision.documents });
@@ -239,7 +299,10 @@ function mountAuthorizationRoutes(app: Express, authz: AuthzService): void {
    * capability matrix uses with the other three capabilities, so the 403 mapping is exercised
    * through production code rather than through a mock.
    */
-  app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead'));
+  app.get(
+    '/api/documents/:id',
+    createDocumentAccessHandler(authz, 'canRead', identityDeps),
+  );
 }
 
 /**
@@ -250,16 +313,46 @@ function mountAuthorizationRoutes(app: Express, authz: AuthzService): void {
  * (`docs/TASKS.md` P2-6 is a decision-core property, and §17.3 forbids inventing a member
  * management endpoint to make a 403 observable). Mounting this factory with `canEdit` or
  * `canManageMembers` therefore proves the refusal path without inventing a product surface.
+ *
+ * `identityDeps` is required (not defaulted) so a caller cannot accidentally mount the
+ * production handler with demo-only identity resolution after the mode changed.
  */
 export function createDocumentAccessHandler(
   authz: AuthzService,
   capability: DocumentCapability,
+  identityDeps: IdentityDeps,
 ): RequestHandler {
   return async (req: Request, res: Response) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
+      return;
+    }
     const documentId = readDocumentIdParameter(req.params);
-    const decision = await authz.authorizeDocument(documentId, req.headers.cookie, capability);
+    const decision = await authz.authorizeDocument(documentId, user.userId, capability);
     respondToDocumentAccess(res, decision);
   };
+}
+
+/** The 401 body for one mode: §18.3's `session_required` vs §17.4's `unauthenticated`. */
+function unauthorizedBody(mode: AuthMode): { error: string } {
+  return mode === 'clerk' ? RESPONSE_BODIES.sessionRequired : RESPONSE_BODIES.unauthenticated;
+}
+
+/**
+ * The body `GET /api/session` returns for one resolved identity.
+ *
+ * Demo sessions keep exactly the three §17.4 fields (`expiresAt` included). A Clerk identity
+ * has no server-tracked expiry (§18.2), so the field is omitted rather than invented — the
+ * alternative would be a local session lifetime masquerading as Clerk's.
+ */
+function sessionBody(user: AuthenticatedUser): Record<string, string> {
+  const body: Record<string, string> = {
+    userId: user.userId,
+    displayName: user.displayName,
+  };
+  if (user.expiresAt !== undefined) body['expiresAt'] = user.expiresAt;
+  return body;
 }
 
 /** Map one authorization decision to the frozen response (§17.4). */

@@ -14,10 +14,18 @@
  *
  * | # | Need | Call | Semantics |
  * | --- | --- | --- | --- |
- * | 1 | upgrade: who is this? | `authz.resolveSession(request.headers.cookie)` | `AuthzSession \| null`. `null` ⇒ answer the upgrade with **HTTP 401** and establish no socket (§17.5). Never fall back to an identity from the payload/query. |
+ * | 1 | upgrade: who is this? | `authz.resolveSession(request.headers.cookie)` | `AuthzSession \| null`. `null` ⇒ answer the upgrade with **HTTP 401** and establish no socket (§17.5). Never fall back to an identity from the payload/query. **M4 B1:** this is still the demo-session seam; B2 replaces the WS upgrade check with the Clerk `SessionVerifier`. |
  * | 2 | join: may this user read this room? | `authz.roleFor(documentId, userId)` then `authz.can(documentId, userId, 'canRead')` | `null` ⇒ **`ROOM_NOT_FOUND`** — the same code as an unknown document, because the non-disclosure rule needs one answer for both. |
  * | 3 | BINARY `SYNC`: may this user write? | `authz.can(documentId, userId, 'canEdit')` | `false` ⇒ reply **`FORBIDDEN`** (`WS_ERROR_CODES.FORBIDDEN`, non-fatal), do not apply, do not persist, do not broadcast, keep the socket open. |
  * | — | BINARY `AWARENESS` | `authz.can(documentId, userId, 'canRead')` | a viewer may publish its cursor; presence never requires `canEdit`. |
+ *
+ * ## M4 B1 — identity is resolved before authorization
+ *
+ * `authorizeDocument`/`listReadableDocuments` now take a **resolved internal `userId`**, not a
+ * cookie. `resolveAuthenticatedUser` is the one function that turns a request into that id
+ * (`AUTH_MODE=demo` → the existing demo session; `AUTH_MODE=clerk` → verified Clerk identity
+ * → `app_user` mapping). The WS calls below are unchanged because they already receive a
+ * `userId` from `resolveSession`.
  *
  * ## Non-negotiables that follow from the contract
  *
@@ -55,3 +63,24 @@ export { SESSION_TTL_MS } from './session-store.js';
 export { DEFAULT_DEMO_USER_ID, DEMO_IDENTITIES, type DemoIdentity } from './demo-fixture.js';
 
 export type { DocumentCatalog } from './documents.js';
+
+/* ------------------------------------------------------------------ *
+ * M4 B1 — Clerk identity seam, internal user mapping, identity resolver
+ * ------------------------------------------------------------------ */
+
+export {
+  createFakeSessionVerifier,
+  type FakeSessionVerifierLookup,
+  type SessionVerifier,
+  type VerifiedIdentity,
+} from './session-verifier.js';
+
+export { isAppUserStore, type AppUser, type AppUserStore } from './app-user.js';
+
+export {
+  createIdentityDeps,
+  resolveAuthenticatedUser,
+  type AuthenticatedUser,
+  type IdentityDeps,
+  type IdentityOptions,
+} from './identity.js';

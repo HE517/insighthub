@@ -2,12 +2,15 @@
  * The authorization decision core.
  *
  * ```text
- * cookie → session → userId → document membership → DocumentRole
+ * identity (demo session or Clerk-verified) → userId → document membership → DocumentRole
  *        → documentCapabilities → decision
  * ```
  *
  * (`docs/ARCHITECTURE.md` §8.1.) Every layer has exactly one decision point and all of them
  * live here; `app.ts` only maps decisions to HTTP responses and never decides anything itself.
+ * **M4 B1:** identity is resolved one layer up (`identity.ts`, `docs/CONTRACTS.md` §18), so
+ * `authorizeDocument`/`listReadableDocuments` receive an internal `userId` and never read a
+ * cookie. The demo session store below remains the demo authentication mechanism.
  *
  * ## Two rules this file is built around
  *
@@ -77,7 +80,8 @@ export type DocumentAccessDecision =
       readonly kind: 'granted';
       readonly document: DocumentMeta;
       readonly role: DocumentRole;
-      readonly session: AuthzSession;
+      /** The resolved internal user id the decision was made for. */
+      readonly userId: string;
     }
   | { readonly kind: 'unauthenticated' }
   | { readonly kind: 'not_found' }
@@ -131,15 +135,15 @@ export interface AuthzService {
   /** The single capability question. Resolves a role, then asks `documentCapabilities`. */
   can(documentId: string, userId: string, capability: DocumentCapability): boolean;
 
-  /** Authorize one document read (§17.4's 401 / 403 / 404 rule). */
+  /** Authorize one document read (§17.4's 401 / 403 / 404 rule) for a resolved internal user. */
   authorizeDocument(
     documentId: string,
-    cookieHeader: string | undefined,
+    userId: string,
     capability: DocumentCapability,
   ): Promise<DocumentAccessDecision>;
 
-  /** The documents where the caller has at least `canRead`. */
-  listReadableDocuments(cookieHeader: string | undefined): Promise<DocumentListDecision>;
+  /** The documents where the resolved internal user has at least `canRead`. */
+  listReadableDocuments(userId: string): Promise<DocumentListDecision>;
 
   close(): void;
 }
@@ -219,16 +223,17 @@ class Authz implements AuthzService {
 
   async authorizeDocument(
     documentId: string,
-    cookieHeader: string | undefined,
+    userId: string,
     capability: DocumentCapability,
   ): Promise<DocumentAccessDecision> {
-    const session = this.resolveSession(cookieHeader);
-    if (session === null) return { kind: 'unauthenticated' };
+    // Identity is resolved one layer up (`identity.ts`, §18). An empty id here is a wiring
+    // mistake or a deliberately fail-closed double; it is never "everyone".
+    if (userId.length === 0) return { kind: 'unauthenticated' };
 
     // Branch 1 — the non-disclosure branch. Three caller states (no membership, a membership
     // that somehow cannot read, an unknown document) all leave through this one value, so the
     // responses cannot differ in status, body or headers (§17.4).
-    const role = this.roleFor(documentId, session.userId);
+    const role = this.roleFor(documentId, userId);
     if (role === null || !documentCapabilities.canRead(role)) return { kind: 'not_found' };
 
     const document = await this.#documents.get(documentId);
@@ -236,19 +241,18 @@ class Authz implements AuthzService {
 
     // Branch 2 — the caller can read, so existence is no longer a secret and a refusal may say
     // why. `can()` is used rather than a second capability lookup so the rule stays in one place.
-    if (!this.can(documentId, session.userId, capability)) return { kind: 'forbidden' };
+    if (!this.can(documentId, userId, capability)) return { kind: 'forbidden' };
 
-    return { kind: 'granted', document, role, session };
+    return { kind: 'granted', document, role, userId };
   }
 
-  async listReadableDocuments(cookieHeader: string | undefined): Promise<DocumentListDecision> {
-    const session = this.resolveSession(cookieHeader);
-    if (session === null) return { kind: 'unauthenticated' };
+  async listReadableDocuments(userId: string): Promise<DocumentListDecision> {
+    if (userId.length === 0) return { kind: 'unauthenticated' };
 
     const documents: DocumentMeta[] = [];
-    for (const row of this.#memberships.rowsForUser(session.userId)) {
+    for (const row of this.#memberships.rowsForUser(userId)) {
       // One rule, used everywhere: the list is exactly "documents where `canRead` holds".
-      if (!this.can(row.documentId, session.userId, 'canRead')) continue;
+      if (!this.can(row.documentId, userId, 'canRead')) continue;
       const document = await this.#documents.get(row.documentId);
       // A membership pointing at a document the catalog does not know grants nothing. Skipping
       // it (instead of inventing metadata) keeps the list a subset of what a direct GET grants.
@@ -257,7 +261,7 @@ class Authz implements AuthzService {
     }
     // Deterministic order: the response must not depend on SQLite's row order.
     documents.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-    return { kind: 'listed', userId: session.userId, documents };
+    return { kind: 'listed', userId, documents };
   }
 
   close(): void {

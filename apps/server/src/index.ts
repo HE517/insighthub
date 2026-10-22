@@ -29,16 +29,29 @@ import { createServer } from 'node:http';
 
 import { createApp } from './app.js';
 import { createServerAiProviderFromEnv, readServerAiProviderKind } from './ai/openai.js';
-import { createAuthz, type AuthzService } from './authz/public.js';
+import { createAuthz, isAppUserStore, type AuthzService } from './authz/public.js';
 import { loadConfig } from './config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
 import type { DocumentStore } from './persistence/types.js';
+import { findStartupRefusal } from './startup.js';
 import { attachWebSocketServer } from './ws.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // The minimum M4 B1 gate: a production process may not run on the demo fixture, and clerk
+  // mode cannot start before B2 supplies the real verifier. Printed as a code + a sentence,
+  // never a stack; B3 will extend this into the full production config validator.
+  const refusal = findStartupRefusal(config);
+  if (refusal !== null) {
+    console.error(`[server] refusing to start: ${refusal.code}`);
+    console.error(`[server]   ${refusal.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const dataPath = config.dataPath;
 
   if (dataPath === undefined) {
@@ -111,7 +124,11 @@ async function main(): Promise<void> {
     console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
   }
 
-  const app = createApp(config, authz, aiProvider);
+  const app = createApp(config, authz, aiProvider, {
+    // The internal-user mapping lives in the document database (`app_user`, §18.1). In demo
+    // mode this is unused; passing it here means B2 only has to supply the verifier.
+    appUsers: isAppUserStore(store) ? store : null,
+  });
   const server = createServer(app);
   // Both seams are supplied, so neither of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store or without authz is a wiring mistake, not a mode.

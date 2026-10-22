@@ -16,9 +16,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createApp } from '../app.js';
-import { type ServerConfig } from '../config.js';
+import type { ServerAiProvider } from '../ai/provider.js';
+import { type AuthMode, type ServerConfig } from '../config.js';
+import { openDocumentStore } from '../persistence/open-store.js';
+import type { DocumentStore } from '../persistence/types.js';
 import { createAuthz, type AuthzService } from './authz.js';
 import type { DocumentCatalog } from './documents.js';
+import { createIdentityDeps, type IdentityDeps } from './identity.js';
+import type { SessionVerifier } from './session-verifier.js';
+import { isAppUserStore } from './app-user.js';
 
 /** CORS origin used by every harness. An explicit origin, never `*` (§17.4). */
 export const TEST_CORS_ORIGIN = 'http://localhost:5173';
@@ -30,6 +36,14 @@ export interface HarnessOptions {
   readonly documents?: DocumentCatalog;
   /** Override the data directory (to reopen a previous one and simulate a restart). */
   readonly dataPath?: string;
+  /** `AUTH_MODE`; defaults to `demo` so every pre-B1 caller is unchanged. */
+  readonly authMode?: AuthMode;
+  /** `NODE_ENV` as the app sees it (the demo-bootstrap gate reads this). */
+  readonly nodeEnv?: string;
+  /** Injected Clerk verifier. Required when `authMode` is `clerk`. */
+  readonly verifier?: SessionVerifier | null;
+  /** Injected AI provider (the same seam `createApp` exposes). `null` = not configured. */
+  readonly aiProvider?: ServerAiProvider | null;
 }
 
 export interface Harness {
@@ -37,6 +51,10 @@ export interface Harness {
   readonly authz: AuthzService;
   readonly dataPath: string;
   readonly config: ServerConfig;
+  /** The identity seam this harness uses (also what the capability-matrix probe mounts). */
+  readonly identity: IdentityDeps;
+  /** The durable store, opened only when the mapping table is needed (`authMode=clerk`). */
+  readonly store: DocumentStore | null;
   /** `fetch` against the harness server. A `cookie` header can be supplied directly. */
   request(path: string, init?: RequestInit): Promise<Response>;
   /**
@@ -51,12 +69,15 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const ownsDataPath = options.dataPath === undefined;
   const dataPath = options.dataPath ?? (await mkdtemp(join(tmpdir(), 'insighthub-authz-')));
 
+  const authMode: AuthMode = options.authMode ?? 'demo';
   const config: ServerConfig = {
     port: 0,
     host: '127.0.0.1',
     corsOrigin: TEST_CORS_ORIGIN,
     wsPath: '/ws',
     dataPath,
+    authMode,
+    ...(options.nodeEnv === undefined ? {} : { nodeEnv: options.nodeEnv }),
   };
 
   const authz = await createAuthz({
@@ -65,7 +86,21 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.documents === undefined ? {} : { documents: options.documents }),
   });
 
-  const server: Server = createServer(createApp(config, authz));
+  // The `app_user` table lives in `insighthub.db`, so clerk mode needs the durable store.
+  // Demo mode keeps the pre-B1 shape (authz only), which is what makes the regression test
+  // compare apples to apples.
+  const opened =
+    authMode === 'clerk' ? await openDocumentStore(dataPath) : null;
+  const appUsers = opened !== null && isAppUserStore(opened.store) ? opened.store : null;
+  const identityOptions = {
+    verifier: options.verifier ?? null,
+    appUsers,
+  };
+  const identity = createIdentityDeps(authMode, authz, identityOptions);
+
+  const server: Server = createServer(
+    createApp(config, authz, options.aiProvider, identityOptions),
+  );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -75,6 +110,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     authz,
     dataPath,
     config,
+    identity,
+    store: opened === null ? null : opened.store,
     request: (path: string, init?: RequestInit): Promise<Response> =>
       fetch(`${baseUrl}${path}`, init),
     close: async (): Promise<void> => {
@@ -82,6 +119,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       // never surface as "closed store" noise from an in-flight request.
       await new Promise<void>((resolve) => server.close(() => resolve()));
       authz.close();
+      if (opened !== null) await opened.store.close();
       if (ownsDataPath) await rm(dataPath, { recursive: true, force: true });
     },
   };

@@ -2,9 +2,9 @@
  * `POST /api/ai/suggest` — the M3 Round 2 server endpoint (`docs/CONTRACTS.md` §11.2, §12).
  *
  * ```text
- * cookie ──► session (§17.2)                              ── 401 session_required
+ * cookie ──► resolveAuthenticatedUser (§18)               ── 401 session_required
  * body   ──► aiSuggestHttpRequestSchema                   ── 400 invalid_request
- * documentId ──► authz.authorizeDocument(..., 'canRead')  ── 404 not_found (non-disclosure)
+ * documentId ──► authz.authorizeDocument(userId, 'canRead') ── 404 not_found (non-disclosure)
  * provider ──► suggest(input, signal)                     ── 503 / 504 / 502
  * draft  ──► aiSuggestionDraftSchema (boundary check)      ── 502 invalid_provider_output
  *        ──► 200 AiSuggestionDraft
@@ -52,7 +52,8 @@ import {
   type AiSuggestHttpRequest,
 } from '@insighthub/shared';
 
-import type { AuthzService } from '../authz/public.js';
+import type { AuthzService, AuthenticatedUser, IdentityDeps } from '../authz/public.js';
+import { resolveAuthenticatedUser } from '../authz/public.js';
 import {
   ServerAiProviderError,
   type ServerAiProvider,
@@ -80,25 +81,36 @@ export function mountAiRoutes(
   app: Express,
   authz: AuthzService,
   provider: ServerAiProvider | null,
+  identityDeps: IdentityDeps,
 ): void {
   // The session guard runs **before** body parsing so "no session + malformed body" is the
   // contract's `401`, not a parser `400`. §11.2 lists the session check first, and a caller
   // without a session must not learn anything about body handling.
   app.post(
     '/api/ai/suggest',
-    requireSession(authz),
+    requireSession(identityDeps),
     parseSuggestBody,
     createSuggestHandler(authz, provider),
   );
 }
 
-/** Resolve the session from the cookie only (§17.2: the cookie is the only carrier). */
-function requireSession(authz: AuthzService): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (authz.resolveSession(req.headers.cookie) === null) {
+/** Where the guard leaves the resolved identity for the handler. */
+const AUTHENTICATED_USER_LOCAL = 'insighthub.authenticatedUser';
+
+/**
+ * Resolve the identity from the cookie only (§17.2/§18: the cookie is the only carrier).
+ *
+ * The body is the AI endpoint's existing `session_required` in both modes — it predates the
+ * Clerk seam and §11.2 already names that code, so demo behaviour does not change here.
+ */
+function requireSession(identityDeps: IdentityDeps): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
       res.status(401).json(AI_RESPONSE_BODIES.sessionRequired);
       return;
     }
+    res.locals[AUTHENTICATED_USER_LOCAL] = user;
     next();
   };
 }
@@ -126,6 +138,14 @@ function createSuggestHandler(
   provider: ServerAiProvider | null,
 ): RequestHandler {
   return async (req: Request, res: Response): Promise<void> => {
+    const user = res.locals[AUTHENTICATED_USER_LOCAL] as AuthenticatedUser | undefined;
+    if (user === undefined) {
+      // Unreachable while `requireSession` is mounted first; kept so a future re-ordering fails
+      // closed instead of authorizing an anonymous request.
+      res.status(401).json(AI_RESPONSE_BODIES.sessionRequired);
+      return;
+    }
+
     const parsed = aiSuggestHttpRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json(AI_RESPONSE_BODIES.invalidRequest);
@@ -135,12 +155,8 @@ function createSuggestHandler(
 
     // The one authorization decision. `authorizeDocument` is the same function the read
     // endpoint uses, so `not_found` here means the same thing and produces the same bytes
-    // (§17.4 / §11.2).
-    const decision = await authz.authorizeDocument(
-      request.documentId,
-      req.headers.cookie,
-      'canRead',
-    );
+    // (§17.4 / §11.2). The identity is the **internal** user id resolved above (§18.1).
+    const decision = await authz.authorizeDocument(request.documentId, user.userId, 'canRead');
     switch (decision.kind) {
       case 'unauthenticated':
         // The guard above normally catches this; a session that expired between the two

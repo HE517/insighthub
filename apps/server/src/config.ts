@@ -21,6 +21,27 @@ function readPort(value: string | undefined, fallback: number): number {
  */
 export const DEFAULT_DATA_PATH = './.insighthub-data';
 
+/**
+ * How a request becomes an identity (`docs/CONTRACTS.md` §18.6).
+ *
+ * `demo` is the development/test fixture (`POST /api/session/bootstrap`); `clerk` is the
+ * production path and requires a real `SessionVerifier` (M4 B2). The default is `demo`
+ * because every test and the browser suite run without Clerk, and a production process that
+ * leaves it at the default **must refuse to start** (`startup.ts`).
+ */
+export type AuthMode = 'clerk' | 'demo';
+
+/**
+ * Parse `AUTH_MODE`.
+ *
+ * Unknown values resolve to `demo`, which is the safe direction for B1: in production that
+ * combination is refused at startup, and in development it is the only mode that can run
+ * without Clerk. Full configuration fail-fast is M4 B3 (`docs/DECISIONS.md` D-082 §5).
+ */
+export function readAuthMode(value: string | undefined): AuthMode {
+  return value === 'clerk' ? 'clerk' : 'demo';
+}
+
 export interface ServerConfig {
   port: number;
   host: string;
@@ -28,6 +49,19 @@ export interface ServerConfig {
   corsOrigin: string;
   /** WebSocket upgrade path. */
   wsPath: string;
+  /**
+   * Identity mode (§18.6). Optional at the type level for hand-built configs, in which case
+   * it means `demo` — the same default `loadConfig` applies.
+   */
+  authMode?: AuthMode;
+  /**
+   * The process environment's `NODE_ENV`, if any.
+   *
+   * Carried on the config rather than read from `process.env` inside `createApp` so the
+   * demo-bootstrap gate is a property of the configuration a test can state, not of the
+   * ambient process a test happens to share.
+   */
+  nodeEnv?: string;
   /**
    * Directory holding the durable store (`docs/ARCHITECTURE.md` §7.10).
    *
@@ -45,6 +79,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     host: env.HOST ?? '127.0.0.1',
     corsOrigin: env.CORS_ORIGIN ?? 'http://localhost:5173',
     wsPath: env.WS_PATH ?? '/ws',
+    authMode: readAuthMode(env.AUTH_MODE),
+    ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),
     // An empty value is treated as unset: `INSIGHTHUB_DATA_PATH=` in a shell should not
     // mean "store at the filesystem root".
     dataPath:

@@ -253,10 +253,6 @@ describe('membership durability (P2-5, Node half)', () => {
 
 describe('authorizeDocument — the non-disclosure branch', () => {
   it('collapses unknown document, no membership and unreadable membership into not_found', async () => {
-    const session = authz.bootstrap('demo-grace', undefined);
-    assert.equal(session.kind, 'issued');
-    if (session.kind !== 'issued') return;
-
     // `grace` has no membership on either document; `no-such-document` exists for nobody.
     // A document that exists in the membership table but not in the catalog is a third shape
     // (membership present, metadata absent) and it must also be `not_found`.
@@ -270,33 +266,21 @@ describe('authorizeDocument — the non-disclosure branch', () => {
     });
 
     try {
-      const cookie = `insighthub_session=${session.token}`;
-
       for (const documentId of ['demo-private-notes', 'no-such-document']) {
-        const decision = await authz.authorizeDocument(documentId, cookie, 'canRead');
+        // Identity is resolved one layer up since M4 B1; the decision core receives the
+        // internal user id directly (`identity.ts`). Demo ids *are* internal ids.
+        const decision = await authz.authorizeDocument(documentId, 'demo-grace', 'canRead');
         assert.equal(decision.kind, 'not_found', documentId);
       }
 
       // Ownership of `demo-document` is real, but this catalog cannot describe it.
-      const adaSession = authz.bootstrap('demo-ada', undefined);
-      assert.equal(adaSession.kind, 'issued');
-      if (adaSession.kind !== 'issued') return;
-      const adaCookie = `insighthub_session=${adaSession.token}`;
-      assert.equal((await authz.authorizeDocument('demo-document', adaCookie, 'canRead')).kind, 'granted');
-
-      // A session is process-scoped, so the second authz instance needs its own bootstrap: the
-      // first instance's token means nothing to it (that is the stated limitation, not a bug).
-      const secondSession = withoutMetadata.bootstrap('demo-ada', undefined);
-      assert.equal(secondSession.kind, 'issued');
-      if (secondSession.kind !== 'issued') return;
       assert.equal(
-        (
-          await withoutMetadata.authorizeDocument(
-            'demo-document',
-            `insighthub_session=${secondSession.token}`,
-            'canRead',
-          )
-        ).kind,
+        (await authz.authorizeDocument('demo-document', 'demo-ada', 'canRead')).kind,
+        'granted',
+      );
+
+      assert.equal(
+        (await withoutMetadata.authorizeDocument('demo-document', 'demo-ada', 'canRead')).kind,
         'not_found',
         'membership without metadata must not fabricate a document',
       );
@@ -306,28 +290,24 @@ describe('authorizeDocument — the non-disclosure branch', () => {
     }
   });
 
-  it('answers unauthenticated without a session, before looking at the document', async () => {
-    for (const cookie of [undefined, '', 'insighthub_session=', 'insighthub_session=not-a-token']) {
-      assert.equal(
-        (await authz.authorizeDocument('demo-document', cookie, 'canRead')).kind,
-        'unauthenticated',
-        `cookie ${JSON.stringify(cookie)}`,
-      );
-    }
+  it('answers unauthenticated for an empty user id, before looking at the document', async () => {
+    // The HTTP layer turns "no session / no verified Clerk identity" into `null` before this
+    // call (`identity.ts`); an empty id reaching here is a wiring mistake and never "everyone".
+    assert.equal(
+      (await authz.authorizeDocument('demo-document', '', 'canRead')).kind,
+      'unauthenticated',
+    );
+    assert.equal((await authz.listReadableDocuments('')).kind, 'unauthenticated');
   });
 
   it('reports forbidden only when canRead already held', async () => {
-    const session = authz.bootstrap('demo-linus', undefined); // viewer on demo-document
-    assert.equal(session.kind, 'issued');
-    if (session.kind !== 'issued') return;
-    const cookie = `insighthub_session=${session.token}`;
-
+    // `demo-linus` is a viewer on `demo-document`.
     // A viewer can read, so existence is no longer a secret and the refusal may say why.
-    const decision = await authz.authorizeDocument('demo-document', cookie, 'canEdit');
+    const decision = await authz.authorizeDocument('demo-document', 'demo-linus', 'canEdit');
     assert.equal(decision.kind, 'forbidden');
     // …but on a document it cannot read at all, the same capability yields the opaque answer.
     assert.equal(
-      (await authz.authorizeDocument('demo-private-notes', cookie, 'canEdit')).kind,
+      (await authz.authorizeDocument('demo-private-notes', 'demo-linus', 'canEdit')).kind,
       'not_found',
     );
   });
@@ -340,10 +320,7 @@ describe('authorizeDocument — the non-disclosure branch', () => {
     };
 
     for (const [demoUserId, expected] of Object.entries(expectations)) {
-      const session = authz.bootstrap(demoUserId, undefined);
-      assert.equal(session.kind, 'issued');
-      if (session.kind !== 'issued') return;
-      const decision = await authz.listReadableDocuments(`insighthub_session=${session.token}`);
+      const decision = await authz.listReadableDocuments(demoUserId);
       assert.equal(decision.kind, 'listed');
       if (decision.kind !== 'listed') return;
       assert.deepEqual(
