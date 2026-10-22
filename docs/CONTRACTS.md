@@ -585,6 +585,22 @@ otherwise-applicable suggestion becomes falsely stale — which would violate th
 criterion "edits outside the region must still apply". The anchor module records the measurement
 table next to the constants; do not "fix" it back to `>= 0` without re-measuring.
 
+**Revision semantics (normative, and the reason check #1 may pass after a remote edit).** The
+`baseRevision` / `currentRevision` pair is a **client-local** counter: it counts *this client's own*
+document updates (origins `local` and `ai`), not every update the replica merges. Two consequences
+follow, and both are required by the acceptance criteria:
+
+- A remote edit — even one inside the suggested region — does **not** fail check #1. It is caught
+  by check #2/#3 instead, which is the only way "a peer edited elsewhere, the suggestion still
+  applies" and "a peer edited the region, the suggestion is stale" can coexist.
+- A **local** edit (the user typing, or an earlier accepted AI edit) does fail check #1. The
+  user's own document has moved on since the proposal, so the proposal's premise is gone.
+
+Because the counter is local, a suggestion must not be shared across clients as if its
+`baseRevision` meant the same thing for everyone; M3 round 1 generates and applies proposals on
+one client (see D-075 §4). Anything that changes this — a server-side provider, a shared proposal
+queue — needs its own revision definition and a contract change.
+
 **Validation order (normative).** A suggestion is applicable only if all three hold; the first
 failure wins and the suggestion is `stale`, never partially applied:
 
