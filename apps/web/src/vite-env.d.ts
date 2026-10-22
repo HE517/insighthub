@@ -10,6 +10,12 @@ interface ImportMetaEnv {
    * anything else (including unset) keeps the deterministic local provider. Never a key.
    */
   readonly VITE_AI_PROVIDER?: string;
+  /**
+   * Clerk **publishable** key (M4 B2, `docs/CONTRACTS.md` §18.6). Public by design: it is inlined
+   * into the browser bundle and only identifies the Clerk application. Present and non-blank
+   * enables Clerk mode; absent keeps the demo application. The secret key never appears here.
+   */
+  readonly VITE_CLERK_PUBLISHABLE_KEY?: string;
 }
 
 interface ImportMeta {

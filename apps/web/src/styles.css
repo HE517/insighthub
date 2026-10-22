@@ -243,6 +243,84 @@ body {
 }
 
 /* ------------------------------------------------------------------ *
+ * Clerk mode (M4 B2): auth gate + Clerk identity
+ *
+ * The gate is a full-page state, not an overlay: when it is up the
+ * editor and its socket are not mounted at all.
+ * ------------------------------------------------------------------ */
+
+.auth-gate,
+.auth-boot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  min-height: 100vh;
+  padding: 32px 18px;
+  background: var(--app);
+}
+
+.auth-gate__intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.auth-gate__lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-gate__card {
+  width: 100%;
+  max-width: 420px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 0 12px 32px rgb(30 60 120 / 10%);
+}
+
+.auth-gate__status,
+.auth-boot {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The Clerk identity block shares `.identity`; only the sign-out control is new. */
+.identity--clerk {
+  gap: 10px;
+}
+
+.identity__signout {
+  margin-left: 4px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.identity__signout:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.identity__signout:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ *
  * Workspace, document header
  * ------------------------------------------------------------------ */
 

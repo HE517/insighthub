@@ -81,6 +81,12 @@ export async function requestJson<T>(
         error: { kind: 'http', status: response.status, message: `HTTP ${response.status}` },
       };
     }
+    // `204 No Content` is a success with no body (the frozen `DELETE /api/session` response,
+    // `docs/CONTRACTS.md` §17.4). Parsing it as JSON would throw and turn a successful delete into
+    // a `network` error, so the empty-body case is answered before the parser is reached.
+    if (response.status === 204 || response.status === 205) {
+      return { ok: true, data: undefined as T };
+    }
     return { ok: true, data: (await response.json()) as T };
   } catch (error) {
     if (controller.signal.aborted) {
@@ -114,6 +120,17 @@ export function getJson<T>(
 /** POST a JSON body. Used for the session bootstrap, which must send its cookie. */
 export function postJson<T>(path: string, options: ApiRequestOptions = {}): Promise<ApiResult<T>> {
   return requestJson<T>('POST', path, options);
+}
+
+/**
+ * DELETE a resource. `204` resolves `ok: true` with `undefined`, which is what the session
+ * logout path needs (`docs/CONTRACTS.md` §17.4: `DELETE /api/session` → `204`).
+ */
+export function deleteJson<T = void>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<ApiResult<T>> {
+  return requestJson<T>('DELETE', path, options);
 }
 
 export function fetchHealth(options?: {

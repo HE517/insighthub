@@ -24,7 +24,16 @@
  */
 import type { CollaborativeSessionOptions } from '@insighthub/shared';
 
-import type { SessionIdentity } from './session/bootstrap.js';
+/**
+ * The two fields presence needs from any server-issued identity.
+ *
+ * Both the demo bootstrap (`SessionIdentity`) and the Clerk mapping (`ClerkServerIdentity`) satisfy
+ * it; the awareness user is display metadata only, so the session's expiry is irrelevant here.
+ */
+export interface PresenceIdentity {
+  readonly userId: string;
+  readonly displayName: string;
+}
 
 /** A per-tab suffix so two tabs on one machine stay two collaborators. */
 const TAB_SUFFIX = Math.random().toString(36).slice(2, 6);
@@ -49,7 +58,7 @@ const FALLBACK_USER: CollaborativeSessionOptions['user'] = {
  * only changes when the server identity itself changes (one transition, when the bootstrap lands).
  */
 export function presenceUserFor(
-  identity: SessionIdentity | null | undefined,
+  identity: PresenceIdentity | null | undefined,
 ): CollaborativeSessionOptions['user'] {
   if (identity === null || identity === undefined) return FALLBACK_USER;
   return { id: identity.userId, name: identity.displayName };
