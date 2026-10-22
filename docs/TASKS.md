@@ -827,10 +827,39 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 | **R6** | `tests/browser/lib/app.mjs#openApp` 仍以隐式 `arrangeAccess` 打开文档（latent F3 入口，当前未被使用） | M3 的新场景一旦用它，就会重新获得"夹具发权限"的假成功通道 | A6 |
 | **R7** | 主 bundle **1.41 MB 未拆分** | M3 会显著增大前端体积，首屏会更差 | A2（性能） |
 
-## M4 — Hardening (sketch)
+## M4 — Production Readiness / Launch（**FROZEN D-082**；分批推进，未开始实现）
 
-Markdown preview performance, virtualized lists, chaos/regression suite.
-Owners: A2 (performance), A6 (chaos), A7 (integration gate).
+**目标**：把 M3 的能力带到真实可运营的 V1（Clerk 认证 + Render 单实例 + SQLite + 备份 + 真实 provider），
+**不引入** K8s/Redis/Postgres/多区域。完整约束见 `docs/DECISIONS.md` **D-082**。
+
+| 批次 | 内容 | Owner | 验收（简述） | 需要 Owner |
+| --- | --- | --- | --- | --- |
+| B1 | Clerk 架构 + internal user mapping（契约/数据模型先行） | A0 → A5/A3/A2 | 映射链文档化并可测；demo bootstrap 标记 dev-only；不新建第二套 session | Clerk 凭据（pub/secret 配置位置） |
+| B2 | production auth/session/WS 证明 | A3 + A6 | HTTP 与 WS upgrade 均受 Clerk 认证；restart/deploy 后仍可认证；logout/revoke 生效 | — |
+| B3 | production config fail-fast | A3 | 缺 required config 启动失败；生产拒绝 `stub` 与 demo bootstrap | — |
+| B4 | CSRF / CORS / origin hardening | A5 + A3 | 单源 https、Origin 校验、bootstrap 限流；CSRF 威胁模型记录 | — |
+| B5 | AI limits + OpenAI policy | A3 + A5 | 20/h、100/d、1 并发/用户、4 并发/服务、30s、0 重试、4096 tokens 全部可测；429 语义 | 模型/预算已冻结（D-082） |
+| B6 | persistence migration / integrity | A1 + A3 | `user_version` 迁移；启动 integrity check；磁盘满明确失败 | — |
+| B7 | deployment packaging | A3 + A0 | Render Web Service、同源静态托管、绝对 `/var/data`、readiness | Render 账号/域名 |
+| B8 | backup + restore drill | A3 + A6 | nightly logical backup、7 天保留、**真实恢复演练** | — |
+| B9 | structured logging | A3 | request/session/document 关联、脱敏、级别 | — |
+| B10 | production-like Gate | A6 | 重启、备份恢复、失败路径、无泄漏句柄；真实生产构建 | — |
+| B11 | staging deploy | A0 + A3 | Render hostname 可达；HTTPS/WSS；持久盘 | Render 凭据/域名 |
+| B12 | real OpenAI live smoke | A3 + A6 | opt-in、单次、固定 prompt；不替代确定性 gate | `OPENAI_API_KEY`（生产项目） |
+| B13 | deployed smoke | A6 | 登录/会话/协作/权限/AI 全链路/失败路径 | — |
+| B14 | A7 Production Readiness final review | A7 | GO/NO-GO + 条件关闭 | — |
+
+**Gate 纪律**：每批只跑最小 gate；完整浏览器套件只在 A6 evidence、批次收口、final HEAD 跑。
+**禁止**为省 token 省略功能结果、failure behavior、security result 或 Gate 数字。
+
+### M4 前置事实（当前未满足，B1–B3 的目标）
+
+- demo bootstrap 接受请求体 `demoUserId` → **可冒充**；生产必须禁用。
+- 无 Clerk 集成；无 internal user 映射；无真实登出/撤销渠道。
+- `loadConfig` 使用开发默认值；无 `NODE_ENV=production` 校验；`AI_PROVIDER=stub` 仅警告。
+- 无限流/预算/并发上限；provider 超时与输出上限未在服务端强制。
+- 无部署产物/TLS/持久卷/备份/restore drill；日志为 `console` 文本。
+
 
 ---
 

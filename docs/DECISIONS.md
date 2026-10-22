@@ -3406,3 +3406,95 @@ M3 的技术与文档条件**已满足**；唯一剩余动作是负责人对 `m3
 
 **后果。** M3 从"实现完成但口径没对齐"变成"状态、证据、限制三者一致"：12 项 DONE、1 项
 IMPLEMENTED/NOT LIVE-VERIFIED、16 条 residual 全部具名且不得从发布说明里删掉。
+
+---
+
+## D-082 · 2026-10-22 · accepted · M4 冻结：Clerk 认证、Render 部署、OpenAI 策略、删除与分批 DAG (M4 kickoff)
+
+**背景。** 负责人接受 M4 Gap Analysis 并冻结四项 owner decisions。本条把它们写成可执行约束，并重排
+M4 的 P0 DAG（单实例 V1，不做 over-engineering）。
+
+### 1. D1 — 认证：Clerk managed authentication
+
+- V1 sign-in：**Email + Google**；**不自建** password storage / Argon2 / password reset。
+- 映射链（必须保持）：`Clerk verified identity → InsightHub internal user → document membership →
+  DocumentRole → documentCapabilities → 既有 HTTP / WS authorization`。
+- **Demo Identity Bootstrap 只能保留为 development/test fixture；production 必须禁用**（配置层面拒绝，
+  不是靠"记得别用"）。
+- **不要机械实现 P0-2 的 SQLite durable login-session table。** 先重新评估 Clerk session 是否已经
+  满足：server restart continuity、deploy continuity、logout/revocation、HTTP authentication、
+  WebSocket upgrade authentication。若 Clerk session 完整承担 authentication session，**不要再造第二套
+  durable login session**；InsightHub 只保存 internal user mapping（以及必要的文档成员关系）。
+- 需要凭据时只给五项（创建入口、application 名称、`VITE_CLERK_PUBLISHABLE_KEY`（public）、
+  `CLERK_SECRET_KEY`（**server only**）、以及如何验证"已配置"）——**不得要求把 secret 粘贴进对话**。
+
+### 2. D2 — 部署：Render 单实例
+
+- 拓扑：**single Render Web Service + single Node process + same-origin React production build +
+  Express API + WebSocket + SQLite + Render Persistent Disk**。
+- 不拆 frontend/backend 独立 origin（除非出现无法避免的 blocker）。
+- 目标 origin `https://app.<owner-domain>`；域名未就绪时先用 Render hostname 做 staging；custom domain
+  不阻塞代码 hardening，但 public launch 前必须配置。
+- 持久数据必须写**绝对挂载路径**（如 `/var/data/...`），**不得**依赖 ephemeral filesystem。
+- V1 明确声明：**single instance / single region / no HA / no horizontal scaling / deploy 与 restart
+  可有短暂停机**。
+- **不引入** Kubernetes、Kafka、Redis、Postgres、distributed locks、multi-region（除非后续有真实证据）。
+- Backup：**SQLite logical backup，nightly，retain 7 days，必须实际做 restore drill**；不得把 disk
+  snapshot 当作唯一恢复机制。
+- Git remote：到需要时先给 **secret scan / repo hygiene 报告**，再请求**一次** Owner 对"private
+  GitHub remote + normal push"的授权；**仍禁止** force push / history rewrite / 移动 milestone tags。
+
+### 3. D3 — OpenAI 模型与成本策略
+
+- Production default `OPENAI_MODEL=gpt-5.6-luna`，保持 server-side configurable；**不自动 fallback 到
+  更贵模型**；若真实质量 benchmark 证明 Luna 不足，再由 Owner 比较 Terra。
+- 限额：**20 req/user/hour、100/user/day、max 1 concurrent generation/user、max 4 concurrent
+  provider requests/server、provider timeout 30s、automatic retry = 0、max output tokens = 4096**。
+  用户可主动 retry；server 不得静默重复烧 token。
+- 独立 OpenAI API Project：**InsightHub Production**；预算 monthly hard limit **USD 50**，通知 USD 25 /
+  USD 40。**App-side rate/cost enforcement 仍必须实现**，不得只依赖 provider budget。
+- M3 流水线不变：OpenAI output → strict schema → proposal → permission → anchor/RelativePosition →
+  expectedText → Diff Preview → Accept → Yjs transaction；**provider 永不直接 mutation `Y.Text`**。
+
+### 4. D4 — 删除与隐私（P1-4 进入 V1）
+
+- 最小 account deletion：authenticated confirmation → revoke sessions → remove/disable internal user →
+  clean memberships → 显式处理"用户拥有的文档" → 删除后 active data 不可再通过产品访问。
+- **V1 ownership rule**：若账号是某文档唯一 owner 且当前没有 ownership-transfer domain，account
+  deletion **同时删除该用户拥有且无法转移的文档**。
+- Backup：primary active data 按删除流程移除；backups 按 7-day retention **自然过期**。
+- **不得**在代码/docs 中编造 GDPR/CCPA 法律承诺；正式 privacy-policy 措辞在 launch 前单独 review。
+
+### 5. M4 实施 DAG（分批，不一次性铺开）
+
+```text
+B1  Clerk 架构 + internal user mapping（契约与数据模型先行）
+B2  production auth/session/WS 证明（HTTP + WS upgrade；restart/deploy 连续性；logout/revoke）
+B3  production config fail-fast（含拒绝 stub、拒绝 demo bootstrap）
+B4  CSRF / CORS / origin hardening
+B5  AI limits + OpenAI production policy（20/h、100/d、并发、30s、0 retry、4096 tokens）
+B6  persistence migration / integrity（user_version、启动 integrity check、磁盘满）
+B7  deployment packaging（Render Web Service、同源静态托管、绝对 data path、健康/readiness）
+B8  backup + restore drill（nightly、7 天、真实恢复演练）
+B9  structured logging（request/session/document 关联，脱敏）
+B10 production-like Gate（A6：重启、备份恢复、失败路径、无泄漏句柄）
+B11 staging deploy（Render hostname）
+B12 real OpenAI live smoke（Owner 提供 key 后，opt-in，不替代确定性 gate）
+B13 deployed smoke（登录、协作、权限、AI 全链路）
+B14 A7 Production Readiness final review
+```
+
+### 6. 分批与 Gate 纪律（cost-control）
+
+- 每批只派必要 Agent；**不并发铺开**；每批自带最小 gate。
+- 完整 `node tests/browser/run.mjs` 只在：A6 正式 evidence、批次收口、final integrated HEAD。
+- **功能结果、failure behavior、security result、Gate 数字不得为省 token 省略。**
+
+### 7. M4 的完成定义（launch）
+
+B1–B14 全部完成，且：真实 Clerk 登录可用、demo bootstrap 在生产不可用、WS upgrade 受认证、配置
+fail-fast、AI 限额生效、备份可恢复、结构化日志可用、production-like gate 与 deployed smoke 通过、
+A7 终审 GO。**在此之前不得宣称 production ready。**
+
+**后果。** M4 从"补一堆生产特性"变成 14 个可独立验收的小批次，且认证不重复造 session、部署不引入
+多余基础设施、AI 成本有硬上限与 app-side 执行。
