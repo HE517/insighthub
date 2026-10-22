@@ -85,7 +85,10 @@ before(async () => {
   const app = express();
   app.disable('x-powered-by');
   for (const capability of CAPABILITIES) {
-    app.get(`/probe/${capability}/:id`, createDocumentAccessHandler(harness.authz, capability));
+    app.get(
+      `/probe/${capability}/:id`,
+      createDocumentAccessHandler(harness.authz, capability, harness.identity),
+    );
   }
   app.use((_req, res) => {
     res.status(404).json({ error: 'not_found' });

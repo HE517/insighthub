@@ -36,10 +36,13 @@
  * "intermittent duplicate seq" the moment the pipeline is refactored.
  */
 import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import type { DocumentMeta } from '@insighthub/shared';
 
+import type { AppUser, AppUserStore } from '../authz/app-user.js';
+import type { VerifiedIdentity } from '../authz/session-verifier.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from './constants.js';
 import { defaultDocumentTitle, type DocumentMetaStore } from './document-meta.js';
 import {
@@ -60,7 +63,7 @@ const EMPTY = new Uint8Array(0);
 type Db = InstanceType<SqliteModule['DatabaseSync']>;
 type Stmt = ReturnType<Db['prepare']>;
 
-export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
+export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, AppUserStore {
   readonly #db: Db;
   readonly #statements: {
     selectDocument: Stmt;
@@ -79,6 +82,10 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
     touchMeta: Stmt;
     deleteMeta: Stmt;
     selectHighestSequence: Stmt;
+    selectAppUserByClerkId: Stmt;
+    selectAppUserById: Stmt;
+    insertAppUser: Stmt;
+    updateAppUserProfile: Stmt;
   };
   #closed = false;
 
@@ -127,6 +134,22 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
         `SELECT
            COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0) AS log_seq,
            COALESCE((SELECT snapshot_seq FROM document WHERE document_id = ?), 0) AS snapshot_seq`,
+      ),
+      // ---- app_user (M4 B1) ----
+      // `clerk_user_id` is UNIQUE in the schema, so this lookup is the idempotency key.
+      selectAppUserByClerkId: db.prepare(
+        'SELECT id, clerk_user_id, email, display_name, created_at, updated_at FROM app_user WHERE clerk_user_id = ?',
+      ),
+      selectAppUserById: db.prepare(
+        'SELECT id, clerk_user_id, email, display_name, created_at, updated_at FROM app_user WHERE id = ?',
+      ),
+      insertAppUser: db.prepare(
+        'INSERT OR IGNORE INTO app_user (id, clerk_user_id, email, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ),
+      // `COALESCE` keeps a previously known profile field when a later verification does not
+      // carry it: a Clerk user whose name is not returned this time must not lose the name.
+      updateAppUserProfile: db.prepare(
+        'UPDATE app_user SET email = COALESCE(?, email), display_name = COALESCE(?, display_name), updated_at = ? WHERE id = ?',
       ),
     };
   }
@@ -182,6 +205,21 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
           owner_id TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
+        )
+      `);
+      // The internal user mapping (`docs/CONTRACTS.md` §18.1). It lives in the same file as the
+      // documents on purpose: it is the mapping every membership row is keyed by, not a second
+      // database and not a session store — there is no token, expiry or password column here.
+      // `clerk_user_id` is UNIQUE, which is what makes "the same Clerk user is one internal
+      // user" a storage invariant rather than a convention. Schema versioning is M4 B6.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS app_user (
+          id TEXT PRIMARY KEY,
+          clerk_user_id TEXT NOT NULL UNIQUE,
+          email TEXT,
+          display_name TEXT,
+          created_at INTEGER,
+          updated_at INTEGER
         )
       `);
     } catch (error) {
@@ -342,6 +380,80 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore {
     });
   }
 
+  /* ---------------------------------------------------------------- *
+   * app_user (M4 B1) — mapping only, never a session
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Map a verified Clerk identity to one internal id.
+   *
+   * `clerk_user_id` is UNIQUE and the insert is `OR IGNORE`, so two racing first requests can
+   * never create two rows: the loser's insert is ignored and the following SELECT returns the
+   * winner's id. The common path is a read only — a profile `UPDATE` runs only when Clerk
+   * actually supplies a changed email/name, which keeps a per-request authentication check
+   * from turning into a write on every request.
+   *
+   * The id is generated here (`randomUUID`) and never derived from the Clerk `sub`: the
+   * internal id is the server's, so a recreated Clerk user cannot silently inherit
+   * memberships.
+   */
+  async upsertByClerkUserId(identity: VerifiedIdentity): Promise<string> {
+    return this.#guard('append', () => {
+      const existing = this.#statements.selectAppUserByClerkId.get(identity.clerkUserId);
+      if (existing !== undefined) {
+        const id = String(existing['id']);
+        const currentEmail = typeof existing['email'] === 'string' ? existing['email'] : null;
+        const currentName =
+          typeof existing['display_name'] === 'string' ? existing['display_name'] : null;
+        const emailChanged = identity.email !== undefined && identity.email !== currentEmail;
+        const nameChanged =
+          identity.displayName !== undefined && identity.displayName !== currentName;
+        if (emailChanged || nameChanged) {
+          // `COALESCE` in the statement keeps a field Clerk did not return this time.
+          this.#statements.updateAppUserProfile.run(
+            identity.email ?? null,
+            identity.displayName ?? null,
+            Date.now(),
+            id,
+          );
+        }
+        return id;
+      }
+
+      const id = randomUUID();
+      const now = Date.now();
+      this.#statements.insertAppUser.run(
+        id,
+        identity.clerkUserId,
+        identity.email ?? null,
+        identity.displayName ?? null,
+        now,
+        now,
+      );
+      // If another connection won the race, `OR IGNORE` left its row in place. Re-reading by
+      // the unique key is what makes the returned id the stored one, not the one we minted.
+      const stored = this.#statements.selectAppUserByClerkId.get(identity.clerkUserId);
+      if (stored === undefined) {
+        throw new Error('app_user row disappeared immediately after insert');
+      }
+      return String(stored['id']);
+    });
+  }
+
+  async findById(internalUserId: string): Promise<AppUser | null> {
+    return this.#guard('load', () => {
+      const row = this.#statements.selectAppUserById.get(internalUserId);
+      return row === undefined ? null : toAppUser(row);
+    });
+  }
+
+  async findByClerkUserId(clerkUserId: string): Promise<AppUser | null> {
+    return this.#guard('load', () => {
+      const row = this.#statements.selectAppUserByClerkId.get(clerkUserId);
+      return row === undefined ? null : toAppUser(row);
+    });
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
@@ -414,6 +526,25 @@ function readInteger(value: unknown): number {
   if (typeof value === 'number') return value;
   if (typeof value === 'bigint') return Number(value);
   return 0;
+}
+
+/**
+ * Map one `app_user` row.
+ *
+ * A NULL `email`/`display_name` becomes `null`, not `''`: Clerk may genuinely not know the
+ * value, and an empty string would make the identity look like it had one.
+ */
+function toAppUser(row: Record<string, unknown>): AppUser {
+  const email = row['email'];
+  const displayName = row['display_name'];
+  return {
+    id: String(row['id']),
+    clerkUserId: String(row['clerk_user_id']),
+    email: typeof email === 'string' ? email : null,
+    displayName: typeof displayName === 'string' ? displayName : null,
+    createdAt: readInteger(row['created_at']),
+    updatedAt: readInteger(row['updated_at']),
+  };
 }
 
 /**
