@@ -1079,4 +1079,65 @@ export function register(runner) {
       );
     },
   );
+
+  /**
+   * A collapsed caret is not a selection.
+   *
+   * A6's round-2 probe found that the panel sent `selection: {from, to}` with `from === to` in
+   * remote mode, the stub "uppercased" that empty range, and the user got an Accept-able proposal
+   * whose diff was empty — "AI looks like it did something" with nothing to review. The fix makes
+   * the remote provider omit a collapsed selection, so the stub sees the whole document instead.
+   * This scenario keeps that from regressing: the proposal must be non-empty and Accept must
+   * actually change the document.
+   */
+  runner.scenario(
+    'm3r/5-collapsed-caret-is-not-an-empty-proposal',
+    'remote mode: generating with a collapsed caret sends no selection, so the proposal is non-empty and Accept writes the uppercase text',
+    async (ctx) => {
+      await ensureRemoteAiStack(ctx);
+      assertStubServer(ctx);
+
+      const documentId = `a6-m3r-caret-${marker('doc')}`;
+      const baseText = `caret only ${marker('base')}`;
+      const upperText = baseText.toUpperCase();
+
+      const page = await ctx.newAppPage({ documentId });
+      await waitForConnectionStatus(page, 'connected', { timeoutMs: 30_000 });
+
+      // Typing leaves the caret *collapsed* at the end of the document: no selection.
+      await typeInEditor(page, baseText);
+      await waitForEditorText(page, (text) => text === baseText, {
+        label: 'the locally typed baseline',
+      });
+      await waitForDurableText(ctx.stack.dataPath, documentId, (text) => text === baseText, {
+        label: 'the baseline to be durable',
+      });
+
+      await openPanel(page);
+      await typeInstruction(page, 'uppercase');
+      await generate(page);
+
+      const proposal = await waitForPanel(page, (state) => state.phase === 'proposal', {
+        label: 'a proposal from the server draft',
+      });
+      ctx.note('proposal for a collapsed caret', {
+        summary: proposal.summary,
+        diffLength: proposal.diffLength,
+      });
+      assert(
+        proposal.diffLength > 0,
+        'a collapsed caret must not produce an empty diff — the proposal must show a real change',
+      );
+
+      await clickVisible(page, AI.accept);
+      const applied = await waitForDurableText(
+        ctx.stack.dataPath,
+        documentId,
+        (text) => text === upperText,
+        { label: 'Accept to write the uppercase text through the Yjs transaction' },
+      );
+      ctx.note('durable after Accept', { durable: JSON.stringify(applied) });
+      assertEqual(applied, upperText, 'Accept must actually change the durable document');
+    },
+  );
 }

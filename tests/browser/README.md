@@ -76,7 +76,7 @@ Vite would invalidate them.
 The remote evidence is a separate group that exists only when asked for:
 
 ```bash
-INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 72 = 68 + 4
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 73 = 68 + 5
 ```
 
 `INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
@@ -277,7 +277,7 @@ covering more than it does.
 | `m3r/3-ai-directory` | `ai-directory[data-state="ready"]` lists the server's readable documents; exactly one row carries `aria-current="true"` and it is the active document; selecting another readable row switches `active-document` and unmounts `ai-panel`; reopening marks the new document |
 | `m3r/4-ai-directory-offline` | CDP `Network.emulateNetworkConditions { offline: true }` + Refresh → `ai-directory[data-state="error"]`, `ai-directory-error[data-directory-error="network"]`, **zero** `ai-directory-item` elements; restoring the network + Refresh → `data-state="ready"` with rows, and the page recorded a real `200` |
 
-Acceptance **H** is the gate itself: the scenario count is now 68 (72 with
+Acceptance **H** is the gate itself: the scenario count is now 68 (73 with
 `INSIGHTHUB_E2E_AI_MODE=remote`), and the four commands in
 `docs/TASKS.md` must all pass on the integrated HEAD.
 

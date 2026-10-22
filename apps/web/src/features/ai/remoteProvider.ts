@@ -1,7 +1,7 @@
 import { aiSuggestionDraftSchema, type AiEditSuggestion } from '@insighthub/shared';
 
 import { apiUrl } from '../../api.js';
-import { buildSuggestion, type AiProvider, type AiSuggestInput } from './provider.js';
+import { buildSuggestion, projectText, type AiProvider, type AiSuggestInput } from './provider.js';
 
 /**
  * The **remote** provider (M3 Round 2, `docs/DECISIONS.md` D-080, `docs/CONTRACTS.md` §11.2).
@@ -145,12 +145,20 @@ export function createRemoteProvider(options: RemoteProviderOptions = {}): AiPro
     async suggest(input: AiSuggestInput): Promise<AiEditSuggestion> {
       if (isAborted(input.signal)) throw new RemoteProviderError('aborted');
 
+      // A collapsed caret is not a selection. Sending `{from:to}` with `from === to` invites a
+      // provider to "edit" an empty range, which yields a schema-valid draft that changes nothing
+      // and a proposal the user could Accept for no effect (A6 round-2 probe). Omit it instead.
+      const selection =
+        input.selection === undefined || input.selection.from === input.selection.to
+          ? undefined
+          : input.selection;
+
       const body = {
         documentId: input.documentId,
         instruction: input.instruction,
         baseRevision: input.baseRevision,
         content: input.text,
-        ...(input.selection === undefined ? {} : { selection: input.selection }),
+        ...(selection === undefined ? {} : { selection }),
       };
 
       let response: Response;
@@ -187,6 +195,13 @@ export function createRemoteProvider(options: RemoteProviderOptions = {}): AiPro
 
       const draft = aiSuggestionDraftSchema.safeParse(payload);
       if (!draft.success) throw new RemoteProviderError('invalid-output');
+
+      // A schema-valid draft can still be a no-op (every operation writes back the same text).
+      // Such a draft must never become an Accept-able proposal: there would be nothing to review
+      // and nothing to apply. Treat it as unusable output, not as an empty suggestion.
+      if (projectText(input.text, draft.data.operations) === input.text) {
+        throw new RemoteProviderError('invalid-output');
+      }
 
       // Anchors, diff and `baseRevision` are minted here, against the **live** `Y.Text` the input
       // carries. A draft whose offsets no longer fit the document (the user typed while the

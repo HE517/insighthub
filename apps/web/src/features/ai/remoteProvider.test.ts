@@ -206,6 +206,40 @@ describe('remote provider: request shape', () => {
     const body = JSON.parse(String(fake.calls[0].init.body)) as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(body, 'selection')).toBe(false);
   });
+
+  it('treats a collapsed caret as "no selection" instead of an empty range', async () => {
+    // A6's round-2 probe: sending `{from:to}` with `from === to` let the stub "uppercase" an empty
+    // range and produced an Accept-able proposal with an empty diff. A caret is not a selection.
+    const doc = createDocument('alpha beta');
+    const fake = fakeFetch(() =>
+      jsonResponse({
+        summary: 'Uppercase the first word',
+        operations: [{ kind: 'replace', index: 0, length: 5, text: 'ALPHA' }],
+      }),
+    );
+    const provider = createRemoteProvider({ fetchImpl: fake.fetchImpl, now: () => FIXED_NOW });
+
+    await provider.suggest(inputFor(doc, 'Uppercase', { from: 3, to: 3 }));
+
+    const body = JSON.parse(String(fake.calls[0].init.body)) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(body, 'selection')).toBe(false);
+  });
+
+  it('refuses a schema-valid draft that changes nothing', async () => {
+    // Schema validity is not usefulness: a no-op draft must never become an Accept-able proposal.
+    const doc = createDocument('alpha beta');
+    const fake = fakeFetch(() =>
+      jsonResponse({
+        summary: 'No change',
+        operations: [{ kind: 'replace', index: 0, length: 0, text: '' }],
+      }),
+    );
+    const provider = createRemoteProvider({ fetchImpl: fake.fetchImpl, now: () => FIXED_NOW });
+
+    await expect(provider.suggest(inputFor(doc))).rejects.toMatchObject({
+      kind: 'invalid-output',
+    });
+  });
 });
 
 describe('remote provider: the failure matrix never returns a suggestion', () => {
