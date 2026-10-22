@@ -30,6 +30,13 @@
  * injected provider. The route owns no authorization logic and no provider construction; both
  * are passed in, which is what makes the failure matrix testable without a real model.
  *
+ * ## AI budget (M4 B5, `docs/DECISIONS.md` D-082 D3)
+ *
+ * The application owns exactly one `AiLimits` instance (`ai/limits.ts`): 20 requests/user/hour,
+ * 100/user/day, 1 concurrent generation/user, 4 concurrent provider requests/server. It is
+ * per-app, not a module singleton, so two apps in one process cannot share counters; the
+ * optional fifth `createApp` parameter is the clock/limits injection seam for tests.
+ *
  * ## CORS and CSRF (M4 B4)
  *
  * The API is served on a different port than the Vite dev server, so the browser needs
@@ -59,6 +66,7 @@ import express, {
 
 import { PROTOCOL_VERSION, type DocumentCapability } from '@insighthub/shared';
 
+import { AiLimits } from './ai/limits.js';
 import { createServerAiProviderFromEnv } from './ai/openai.js';
 import { type ServerAiProvider } from './ai/provider.js';
 import { mountAiRoutes } from './ai/route.js';
@@ -176,6 +184,7 @@ export function createApp(
   authz: AuthzService,
   aiProvider: ServerAiProvider | null = createServerAiProviderFromEnv(process.env),
   identity: IdentityOptions = {},
+  aiLimits: AiLimits = new AiLimits(),
 ): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
@@ -226,7 +235,7 @@ export function createApp(
   });
 
   mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled, bootstrapLimiter);
-  mountAiRoutes(app, authz, aiProvider, identityDeps);
+  mountAiRoutes(app, authz, aiProvider, identityDeps, aiLimits);
 
   /* ---------------------------------------------------------------- *
    * Fallbacks

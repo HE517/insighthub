@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import type { AiSuggestionDraft } from '@insighthub/shared';
 
 import {
+  DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_OPENAI_TIMEOUT_MS,
   OPENAI_SYSTEM_PROMPT,
@@ -158,10 +159,12 @@ describe('request shape', () => {
       model: string;
       messages: Array<{ role: string; content: string }>;
       temperature: number;
+      max_tokens: number;
       response_format: { type: string };
     };
     assert.equal(payload.model, 'gpt-test');
     assert.equal(payload.temperature, 0);
+    assert.equal(payload.max_tokens, DEFAULT_OPENAI_MAX_OUTPUT_TOKENS);
     assert.deepEqual(payload.response_format, { type: 'json_object' });
     assert.equal(payload.messages[0]?.role, 'system');
     assert.equal(payload.messages[0]?.content, OPENAI_SYSTEM_PROMPT);
@@ -171,12 +174,37 @@ describe('request shape', () => {
     assert.ok(payload.messages[1]?.content.includes('Selection (UTF-16 offsets): 0..5'));
   });
 
-  it('uses the documented default model when none is supplied', async () => {
+  it('sends the D-082 D3 default model and a 4096 max_tokens when nothing is configured', async () => {
     const fake = fakeFetch(() => completion(JSON.stringify(VALID_OUTPUT)));
     const provider = createOpenAiProvider({ apiKey: API_KEY, fetchImpl: fake.fetchImpl });
 
     const draft = await provider.suggest(INPUT, new AbortController().signal);
     assert.equal(draft.model, DEFAULT_OPENAI_MODEL);
+
+    // The two hard numbers D-082 D3 fixes, captured from the actual request body.
+    assert.equal(DEFAULT_OPENAI_MODEL, 'gpt-5.6-luna');
+    assert.equal(DEFAULT_OPENAI_MAX_OUTPUT_TOKENS, 4096);
+    const payload = JSON.parse(String((fake.calls[0] as FetchCall).init.body)) as {
+      model: string;
+      max_tokens: number;
+    };
+    assert.equal(payload.model, 'gpt-5.6-luna');
+    assert.equal(payload.max_tokens, 4096);
+  });
+
+  it('honours an explicit maxOutputTokens instead of the default', async () => {
+    const fake = fakeFetch(() => completion(JSON.stringify(VALID_OUTPUT)));
+    const provider = createOpenAiProvider({
+      apiKey: API_KEY,
+      maxOutputTokens: 512,
+      fetchImpl: fake.fetchImpl,
+    });
+
+    await provider.suggest(INPUT, new AbortController().signal);
+    const payload = JSON.parse(String((fake.calls[0] as FetchCall).init.body)) as {
+      max_tokens: number;
+    };
+    assert.equal(payload.max_tokens, 512);
   });
 });
 
@@ -298,6 +326,8 @@ describe('failure mapping', () => {
         provider.suggest(INPUT, new AbortController().signal),
         'provider',
       );
+      // D-082 D3: automatic retry = 0. A 5xx is one attempt, never a background retry.
+      assert.equal(fake.calls.length, 1, `HTTP ${status} must not be retried`);
       // The adapter reports the status class, never the body.
       assert.ok(!error.message.includes(API_KEY));
       assert.ok(!error.message.includes(CONTENT));
@@ -305,7 +335,7 @@ describe('failure mapping', () => {
     }
   });
 
-  it('maps a network error to provider', async () => {
+  it('maps a network error to provider without retrying', async () => {
     const fake = fakeFetch(() => {
       throw new TypeError(`connect failed while sending ${API_KEY}`);
     });
@@ -315,6 +345,7 @@ describe('failure mapping', () => {
       provider.suggest(INPUT, new AbortController().signal),
       'provider',
     );
+    assert.equal(fake.calls.length, 1, 'a network failure must not be retried');
     assert.ok(!error.message.includes(API_KEY));
   });
 
@@ -329,6 +360,7 @@ describe('failure mapping', () => {
     const release = keepEventLoopAlive();
     try {
       await expectKind(provider.suggest(INPUT, new AbortController().signal), 'timeout');
+      assert.equal(fake.calls.length, 1, 'a deadline must not be retried');
     } finally {
       release();
     }
@@ -347,6 +379,7 @@ describe('failure mapping', () => {
     controller.abort();
 
     await expectKind(pending, 'timeout');
+    assert.equal(fake.calls.length, 1, 'an abort must not be retried');
   });
 });
 
@@ -417,6 +450,13 @@ describe('credential hygiene', () => {
       (error: unknown) => error instanceof ServerAiProviderError && error.kind === 'not-configured',
     );
     assert.throws(() => createOpenAiProvider({ apiKey: API_KEY, timeoutMs: 0 }), RangeError);
+    for (const maxOutputTokens of [0, -1, 1.5]) {
+      assert.throws(
+        () => createOpenAiProvider({ apiKey: API_KEY, maxOutputTokens }),
+        RangeError,
+        `maxOutputTokens=${maxOutputTokens}`,
+      );
+    }
   });
 });
 
@@ -438,7 +478,12 @@ describe('configuration', () => {
 
     assert.deepEqual(
       readOpenAiProviderConfig({ AI_PROVIDER: 'openai', OPENAI_API_KEY: ` ${API_KEY} ` }),
-      { apiKey: API_KEY, model: DEFAULT_OPENAI_MODEL },
+      {
+        apiKey: API_KEY,
+        model: DEFAULT_OPENAI_MODEL,
+        maxOutputTokens: DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
+        timeoutMs: DEFAULT_OPENAI_TIMEOUT_MS,
+      },
     );
     // Case/whitespace-insensitive selector; explicit model wins over the default.
     assert.deepEqual(
@@ -447,8 +492,41 @@ describe('configuration', () => {
         OPENAI_API_KEY: API_KEY,
         OPENAI_MODEL: 'gpt-explicit',
       }),
-      { apiKey: API_KEY, model: 'gpt-explicit' },
+      {
+        apiKey: API_KEY,
+        model: 'gpt-explicit',
+        maxOutputTokens: DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
+        timeoutMs: DEFAULT_OPENAI_TIMEOUT_MS,
+      },
     );
+  });
+
+  it('reads the output-token and timeout bounds, falling back on invalid values', () => {
+    const base = { AI_PROVIDER: 'openai', OPENAI_API_KEY: API_KEY };
+
+    assert.deepEqual(
+      readOpenAiProviderConfig({
+        ...base,
+        OPENAI_MAX_OUTPUT_TOKENS: '2048',
+        AI_PROVIDER_TIMEOUT_MS: '15000',
+      }),
+      {
+        apiKey: API_KEY,
+        model: DEFAULT_OPENAI_MODEL,
+        maxOutputTokens: 2048,
+        timeoutMs: 15_000,
+      },
+    );
+
+    for (const bad of ['', '   ', '0', '-1', '1.5', 'many']) {
+      const config = readOpenAiProviderConfig({
+        ...base,
+        OPENAI_MAX_OUTPUT_TOKENS: bad,
+        AI_PROVIDER_TIMEOUT_MS: bad,
+      });
+      assert.equal(config?.maxOutputTokens, DEFAULT_OPENAI_MAX_OUTPUT_TOKENS, bad);
+      assert.equal(config?.timeoutMs, DEFAULT_OPENAI_TIMEOUT_MS, bad);
+    }
   });
 
   it('builds a provider only when configured, and never throws on missing configuration', () => {

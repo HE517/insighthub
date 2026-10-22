@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { createApp } from '../app.js';
 import { createAuthz, type AuthzService } from '../authz/public.js';
 import { type ServerConfig } from '../config.js';
+import { AiLimits } from './limits.js';
 import type { ServerAiProvider } from './provider.js';
 
 export const TEST_CORS_ORIGIN = 'http://localhost:5173';
@@ -25,8 +26,22 @@ export const TEST_CORS_ORIGIN = 'http://localhost:5173';
 export interface AiTestHarness {
   readonly baseUrl: string;
   readonly authz: AuthzService;
+  /** The per-app budget, exposed so a test can assert no slot leaked. */
+  readonly aiLimits: AiLimits;
   readonly request: (path: string, init?: RequestInit) => Promise<Response>;
   close(): Promise<void>;
+}
+
+/** Test seams for the M4 B5 budget and for identities outside the demo roster. */
+export interface AiTestHarnessOptions {
+  /** Injected budget; a test that advances a clock supplies one. Defaults to a fresh `AiLimits`. */
+  readonly aiLimits?: AiLimits;
+  /**
+   * Replace the real authz. Only the server-concurrency scenario needs this: the frozen demo
+   * roster has three identities, and four simultaneous provider slots need five users. The AI
+   * route still runs unchanged; only identity + the read decision are stubbed.
+   */
+  readonly authz?: AuthzService;
 }
 
 /**
@@ -34,9 +49,13 @@ export interface AiTestHarness {
  *
  * `null` means "not configured" — the exact state the 503 test needs. Every test passes an
  * explicit provider (or `null`), so no test can accidentally pick up a developer's
- * `OPENAI_API_KEY` from the environment.
+ * `OPENAI_API_KEY` from the environment. The budget is created per harness (= per app), so
+ * counters never leak between tests.
  */
-export async function startAiHarness(aiProvider: ServerAiProvider | null): Promise<AiTestHarness> {
+export async function startAiHarness(
+  aiProvider: ServerAiProvider | null,
+  options: AiTestHarnessOptions = {},
+): Promise<AiTestHarness> {
   const dataPath = await mkdtemp(join(tmpdir(), 'insighthub-ai-'));
 
   const config: ServerConfig = {
@@ -47,8 +66,9 @@ export async function startAiHarness(aiProvider: ServerAiProvider | null): Promi
     dataPath,
   };
 
-  const authz = await createAuthz({ dataPath });
-  const server: Server = createServer(createApp(config, authz, aiProvider));
+  const authz = options.authz ?? (await createAuthz({ dataPath }));
+  const aiLimits = options.aiLimits ?? new AiLimits();
+  const server: Server = createServer(createApp(config, authz, aiProvider, {}, aiLimits));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -56,6 +76,7 @@ export async function startAiHarness(aiProvider: ServerAiProvider | null): Promi
   return {
     baseUrl,
     authz,
+    aiLimits,
     request: (path: string, init?: RequestInit): Promise<Response> =>
       fetch(`${baseUrl}${path}`, init),
     close: async (): Promise<void> => {

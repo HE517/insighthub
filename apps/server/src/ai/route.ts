@@ -5,6 +5,7 @@
  * cookie ──► resolveAuthenticatedUser (§18)               ── 401 session_required
  * body   ──► aiSuggestHttpRequestSchema                   ── 400 invalid_request
  * documentId ──► authz.authorizeDocument(userId, 'canRead') ── 404 not_found (non-disclosure)
+ * budget ──► aiLimits.acquire(userId)                      ── 429 rate_limited (+ Retry-After)
  * provider ──► suggest(input, signal)                     ── 503 / 504 / 502
  * draft  ──► aiSuggestionDraftSchema (boundary check)      ── 502 invalid_provider_output
  *        ──► 200 AiSuggestionDraft
@@ -37,6 +38,26 @@
  * client went away) the signal aborts, the provider stops its network call, and the handler
  * writes nothing further. A late resolution after the abort is discarded rather than sent
  * to a dead socket.
+ *
+ * ## Budget enforcement (M4 B5, `docs/DECISIONS.md` D-082 D3)
+ *
+ * Every decision that can refuse a request (session, body, read access) runs **before** the
+ * budget, so a request that would be a 401/400/404 never consumes a user's hourly or daily
+ * allotment. After `granted`, and before the provider is touched, the handler calls
+ * `aiLimits.acquire(userId)`:
+ *
+ * - denied → `429 {"error":"rate_limited"}` plus `Retry-After` (whole seconds), and the
+ *   provider is **not** called. Concurrency exhaustion is the same 429, never a 503: the
+ *   caller is allowed to use the endpoint, just not right now;
+ * - allowed → the generation is counted immediately and one server slot is reserved.
+ *
+ * The reservation is released in `finally`, so a provider throw, an `invalid-output` answer,
+ * a timeout, or a client abort all return the slot. The *count* is deliberately not released:
+ * the provider was called and tokens were spent, so failed generations still count against
+ * 20/h and 100/d. Limiter refusals cost nothing and are not counted.
+ *
+ * `429` is the only status this module adds, which keeps a budget refusal distinguishable from
+ * every provider failure (`502`/`503`/`504`) on the wire.
  */
 import express, {
   type Express,
@@ -54,6 +75,7 @@ import {
 
 import type { AuthzService, AuthenticatedUser, IdentityDeps } from '../authz/public.js';
 import { resolveAuthenticatedUser } from '../authz/public.js';
+import type { AiLimits } from './limits.js';
 import {
   ServerAiProviderError,
   type ServerAiProvider,
@@ -74,6 +96,11 @@ export const AI_RESPONSE_BODIES = {
   providerTimeout: { error: 'provider_timeout' },
   providerError: { error: 'provider_error' },
   invalidProviderOutput: { error: 'invalid_provider_output' },
+  /**
+   * The M4 B5 budget refusal (§11.2). Its own status (429) and its own body, so a caller can
+   * tell "come back later" apart from "the provider failed"; `Retry-After` says when.
+   */
+  rateLimited: { error: 'rate_limited' },
 } as const;
 
 /** Mount the AI route. `provider` is `null` when no credential/configuration exists. */
@@ -82,6 +109,7 @@ export function mountAiRoutes(
   authz: AuthzService,
   provider: ServerAiProvider | null,
   identityDeps: IdentityDeps,
+  limits: AiLimits,
 ): void {
   // The session guard runs **before** body parsing so "no session + malformed body" is the
   // contract's `401`, not a parser `400`. §11.2 lists the session check first, and a caller
@@ -90,7 +118,7 @@ export function mountAiRoutes(
     '/api/ai/suggest',
     requireSession(identityDeps),
     parseSuggestBody,
-    createSuggestHandler(authz, provider),
+    createSuggestHandler(authz, provider, limits),
   );
 }
 
@@ -136,6 +164,7 @@ const parseSuggestBody: RequestHandler = (req: Request, res: Response, next: Nex
 function createSuggestHandler(
   authz: AuthzService,
   provider: ServerAiProvider | null,
+  limits: AiLimits,
 ): RequestHandler {
   return async (req: Request, res: Response): Promise<void> => {
     const user = res.locals[AUTHENTICATED_USER_LOCAL] as AuthenticatedUser | undefined;
@@ -178,7 +207,20 @@ function createSuggestHandler(
 
     if (provider === null) {
       // Missing configuration is a normal runtime state this round, not a startup failure.
+      // Checked before the budget: a request that cannot reach a provider must not consume
+      // the caller's hourly/daily allowance.
       res.status(503).json(AI_RESPONSE_BODIES.providerNotConfigured);
+      return;
+    }
+
+    // Check-and-reserve in one synchronous call, after every refusal branch above and before
+    // the provider. `acquire` never awaits, so two concurrent requests cannot both observe a
+    // free slot. A denial writes the frozen 429 + Retry-After and stops here: no provider
+    // call, no abort controller, no counter.
+    const budget = limits.acquire(user.userId);
+    if (!budget.allowed) {
+      res.setHeader('Retry-After', String(budget.retryAfterSeconds));
+      res.status(429).json(AI_RESPONSE_BODIES.rateLimited);
       return;
     }
 
@@ -206,6 +248,10 @@ function createSuggestHandler(
       respondToProviderFailure(res, error);
     } finally {
       res.off('close', abortOnClose);
+      // Every path — success, typed provider failure, invalid output, timeout, abort, or an
+      // unexpected throw — gives the server slot back. The hour/day counts are deliberately
+      // not restored: the provider was invoked and its cost is already spent (D-082 D3).
+      limits.release(user.userId);
     }
   };
 }

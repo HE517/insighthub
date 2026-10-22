@@ -154,7 +154,7 @@ describe('POST /api/ai/suggest — no server-side document content source', () =
         /from\s+['"]\.\.\/authz\/(?!public\.js)/,
       ],
     ];
-    const MODULES = ['./route.ts', './provider.ts', './openai.ts', './stub.ts'];
+    const MODULES = ['./route.ts', './provider.ts', './openai.ts', './stub.ts', './limits.ts'];
 
     for (const relative of MODULES) {
       const source = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');

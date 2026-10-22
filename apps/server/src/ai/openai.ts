@@ -29,6 +29,8 @@
  * | `AI_PROVIDER` | `openai` enables this adapter; `stub` selects the development/evidence-only provider (`stub.ts`); anything else (including unset) means disabled |
  * | `OPENAI_API_KEY` | **required** when `AI_PROVIDER=openai`; absent ⇒ `503`, never a crash |
  * | `OPENAI_MODEL` | optional; defaults to {@link DEFAULT_OPENAI_MODEL} |
+ * | `OPENAI_MAX_OUTPUT_TOKENS` | optional; defaults to {@link DEFAULT_OPENAI_MAX_OUTPUT_TOKENS} (4096) |
+ * | `AI_PROVIDER_TIMEOUT_MS` | optional; defaults to {@link DEFAULT_OPENAI_TIMEOUT_MS} (30 s) |
  *
  * There is deliberately no `VITE_OPENAI_API_KEY` path and no browser→OpenAI call. Missing
  * configuration is a runtime `503` (`ai_provider_not_configured`) this round; the startup
@@ -46,6 +48,15 @@
  * The caller's `AbortSignal` (client disconnect) and an internal deadline are combined with
  * `AbortSignal.any`. Both surface as `kind: 'timeout'`, because §11.2 maps "provider timeout
  * / aborted" to the same `504 provider_timeout`.
+ *
+ * ## Retry policy: none (D-082 D3)
+ *
+ * D-082 D3 fixes `automatic retry = 0`. `suggest` makes exactly **one** `fetch` call: a 5xx, a
+ * network failure and a timeout all become a `ServerAiProviderError` and go straight back to
+ * the route (`502`/`504`). There is no loop, no backoff and no fallback to another (more
+ * expensive) model. A user-initiated retry is the only retry, so a transient upstream failure
+ * cannot silently multiply token spend. The adapter test asserts `fetch` was called exactly
+ * once for each failure class.
  */
 import {
   aiSuggestionDraftSchema,
@@ -64,10 +75,19 @@ import { createStubProvider } from './stub.js';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 
 /** Default model when `OPENAI_MODEL` is unset. Documented here, as §11.2 requires. */
-export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-luna';
 
-/** Default deadline for one suggestion. */
+/** Default deadline for one suggestion (D-082 D3: 30 s). */
 export const DEFAULT_OPENAI_TIMEOUT_MS = 30_000;
+
+/**
+ * Default cap on the model's output tokens (D-082 D3: 4096).
+ *
+ * Sent as `max_tokens` on the request. It is a server-side cost ceiling, not a suggestion: the
+ * contract's draft schema already caps 32 operations, and this bounds what the model can bill
+ * even for a hostile instruction.
+ */
+export const DEFAULT_OPENAI_MAX_OUTPUT_TOKENS = 4096;
 
 /** The system prompt. Exported so the adapter test can pin the JSON-only instruction. */
 export const OPENAI_SYSTEM_PROMPT = [
@@ -94,6 +114,8 @@ export interface OpenAiProviderOptions {
   readonly model?: string;
   /** Defaults to {@link DEFAULT_OPENAI_TIMEOUT_MS}. */
   readonly timeoutMs?: number;
+  /** Defaults to {@link DEFAULT_OPENAI_MAX_OUTPUT_TOKENS}; sent as `max_tokens`. */
+  readonly maxOutputTokens?: number;
   /** Test seam. Production omits it and uses the global `fetch`. */
   readonly fetchImpl?: typeof fetch;
 }
@@ -102,6 +124,8 @@ export interface OpenAiProviderOptions {
 export interface OpenAiProviderConfig {
   readonly apiKey: string;
   readonly model: string;
+  readonly maxOutputTokens: number;
+  readonly timeoutMs: number;
 }
 
 /**
@@ -124,7 +148,25 @@ export function readOpenAiProviderConfig(env: NodeJS.ProcessEnv): OpenAiProvider
   if (apiKey === '') return null;
 
   const model = (env['OPENAI_MODEL'] ?? '').trim() || DEFAULT_OPENAI_MODEL;
-  return { apiKey, model };
+  // Numeric policy: an unset/blank/invalid value means "use the frozen default", matching the
+  // permissive config layer (`config.ts`). Fail-fast for *invalid configuration* is M4 B3's
+  // gate, not this reader's job; the hard numbers themselves come from D-082 D3.
+  return {
+    apiKey,
+    model,
+    maxOutputTokens: readPositiveIntegerEnv(
+      env['OPENAI_MAX_OUTPUT_TOKENS'],
+      DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
+    ),
+    timeoutMs: readPositiveIntegerEnv(env['AI_PROVIDER_TIMEOUT_MS'], DEFAULT_OPENAI_TIMEOUT_MS),
+  };
+}
+
+/** `undefined`/blank/non-positive/non-integer ⇒ `fallback`, so a typo cannot disable a bound. */
+function readPositiveIntegerEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === '') return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 /** The provider class selected by configuration. `disabled` means the route answers `503`. */
@@ -168,7 +210,7 @@ export function createServerAiProviderFromEnv(
   return config === null ? null : createOpenAiProvider(config);
 }
 
-/** Build the OpenAI-backed provider. Throws only for an empty key or a non-positive timeout. */
+/** Build the OpenAI-backed provider. Throws for an empty key or a non-positive numeric bound. */
 export function createOpenAiProvider(options: OpenAiProviderOptions): ServerAiProvider {
   const apiKey = options.apiKey.trim();
   if (apiKey === '') {
@@ -184,6 +226,11 @@ export function createOpenAiProvider(options: OpenAiProviderOptions): ServerAiPr
   const timeoutMs = options.timeoutMs ?? DEFAULT_OPENAI_TIMEOUT_MS;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new RangeError('timeoutMs must be a positive finite number');
+  }
+
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_OPENAI_MAX_OUTPUT_TOKENS;
+  if (!Number.isInteger(maxOutputTokens) || maxOutputTokens <= 0) {
+    throw new RangeError('maxOutputTokens must be a positive integer');
   }
 
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -209,6 +256,9 @@ export function createOpenAiProvider(options: OpenAiProviderOptions): ServerAiPr
               { role: 'user', content: buildUserPrompt(input) },
             ],
             temperature: 0,
+            // D-082 D3's hard output bound. `max_tokens` (not `max_completion_tokens`) is the
+            // documented field for the Chat Completions endpoint this adapter targets.
+            max_tokens: maxOutputTokens,
             response_format: { type: 'json_object' },
           }),
           signal: combined,
