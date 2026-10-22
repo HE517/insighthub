@@ -3211,3 +3211,57 @@ PROJECT/TASKS/ARCHITECTURE 文字。
 **后果。** "M3 已完成"这句话被拆成了可核对的 13 行状态表：11 项 DONE、1 项 PARTIAL（directory）、
 1 项 NOT IMPLEMENTED（真实 provider）。代价是 M3 的关闭被推迟；收益是不会把"当前实现"说成"原始要求"，
 也不会让一个 required 能力从 milestone 里悄悄消失。
+
+---
+
+## D-079 · 2026-10-22 · accepted · UI Visual Fidelity CLOSED：两个 Gate 与可执行的保真度检查 (UI closure)
+
+**背景。** 项目负责人实际运行生产 UI 后判定：上一轮 UI redesign 的**结构**完成、**视觉保真度**未完成
+（hover / focus / pressed / tooltip / subtle motion 不完整），并要求把
+**Engineering Gate 与 Design Fidelity Gate 分开**：60/60 只证明没有功能回归，不证明视觉完成。
+
+### 1. 交付
+
+| 项 | 内容 |
+| --- | --- |
+| A2 | `4078669`（**只改** `apps/web/src/styles.css`，+106/−4）：logo hover、switcher `focus-within`、头像 hover + tooltip（hover/键盘 focus）、Undo/Redo 四态、connection pill hover-only pulse、editor `focus-within`、notice reveal、`prefers-reduced-motion` |
+| A6 轮次 | 该轮**在提交前失败**（无报告）；它写好的 `32-design-fidelity.mjs`（8 个场景）完整且为绿，由 A0 接管完成 |
+| A0 接管修正 | `page-instrument.js` 的 `summary.editorLive` 改为**已挂载 `.cm-editor` 的 DOM 真值**。旧实现是 MutationObserver 加/减记账，删除时只匹配"被移除节点自身是否 `.cm-editor`"；React 在一次性身份重挂载中移除的是**祖先包装节点**，减记漏掉 → 计数永久偏高 1，导致 `lifecycle/repeated-open-switch-cycles` 在全套件里偶发红、单独跑却绿。DOM 计数是**更强**的断言，记账值保留为 `editorLiveTally` 供诊断 |
+| 最终门禁（`a2586c0`） | typecheck 0 / test 0（vitest **465** + server **181**）/ build 0 / browser **68/68** |
+
+### 2. 两个 Gate 的正式定义（此后按此判定）
+
+```text
+Engineering Gate:      typecheck / test / build / browser suite（功能与契约不回归）
+Design Fidelity Gate:  ui/1…ui/8（计算样式断言：hover / focus / pressed / disabled /
+                       tooltip / pulse / reduced-motion / notice 文案）
+```
+
+`ui/*` 场景断言的是**可计算的视觉属性**，例如 logo hover 的 `transform` 矩阵（`rotate(-4deg) scale(1.04)`）、
+switcher focus 的 accent 边框 + 3px ring + `translateY(-1px)`、头像 hover 的 `translateY(-4px) scale(1.08)` + `z-index: 4`、
+Undo pressed 的 `scale(.93)`、disabled 的 `opacity .38` + `not-allowed` + 无 hover transform、
+pill 仅 `connected`+hover 时的 `ih-pulse`、reduced-motion 下 `transition-duration: 0s` 而 tooltip/notice 仍可见。
+
+**mutation 证明**：把 `.brand:hover .brand__logo` 的 transform 中和后，`ui/1-logo-hover-transforms` 立刻失败
+（`last computed value "none"`），随后还原。连续两次全套件 **68/68**，集成后再跑一次 **68/68**。
+
+### 3. 明确 deferred（不静默漏掉）
+
+| 项 | 状态 | 原因 |
+| --- | --- | --- |
+| 编辑器逐行 hover / active-line 视觉 | **INTENTIONALLY DEFERRED** | 需要新增 CodeMirror extension（`highlightActiveLine*` 或自定义 hover）；负责人本轮明确"不要为了视觉新增编辑器行为 extension" |
+| 本地用户 `you` 头像 | **NOT OBSERVABLE** | `getCollaborators()` 不返回本地 client；不合成第二套 presence（R14）。`isSelf` 分支保留，能力不丢 |
+| 文档 id 提交后的 title flash | **INTENTIONALLY DEFERRED** | 需要额外 UI state；原型反馈项，未列入本轮验收 |
+
+**观察（记为 R11，不阻断）**：远端光标姓名标签目前是**贴着 caret 的彩色块**，在空行/行尾时视觉上接近
+"选中文字"；prototype 用深色胶囊浮在 caret 上方。属 presence 渲染的视觉打磨，需单独验收（会动 `remoteCursorExtension`）。
+
+### 4. 状态
+
+UI redesign **CLOSED**（Engineering Gate PASS + Design Fidelity Gate PASS）。这**不改变** M3 的状态：
+M3 仍未 CLOSED，Round 2（directory 接线 + 真实 provider，D-078）是下一步。
+R1–R11 继续作为具名残留，不得因 UI 收口而删除。
+
+**后果。** "看起来像不像一个完成品"第一次进入**可执行门禁**：以后任何人改 CSS 破坏 hover/focus/pressed/
+tooltip/reduced-motion，`ui/*` 会红，而不是等负责人再手动发现一遍。代价是多 8 个场景与一份需要维护的
+视觉断言；收益是设计保真度不再依赖"看截图的人当天有没有注意到"。
