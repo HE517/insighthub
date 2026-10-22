@@ -3298,8 +3298,13 @@ tooltip/reduced-motion，`ui/*` 会红，而不是等负责人再手动发现一
 ### 3. 配置
 
 `OPENAI_API_KEY`（仅服务端，`AI_PROVIDER=openai` 时必需）、`OPENAI_MODEL`（可选）、
-`AI_PROVIDER=openai|disabled`。**禁止** `VITE_OPENAI_API_KEY`、禁止 key 进 bundle / 日志 / 文档 / fixture。
+`AI_PROVIDER=openai|disabled|stub`。**禁止** `VITE_OPENAI_API_KEY`、禁止 key 进 bundle / 日志 / 文档 / fixture。
 缺 required config 时生产启动 fail fast（M4 D3 会把这一条扩展成完整 config contract）。
+
+`stub` 是 **development/evidence only** 的确定性 provider（零网络，把提交内容或选区做大写）：它让
+"浏览器 → 端点 → draft → 客户端铸锚 → 预览 → Accept"这条真实 HTTP 链路在没有 key 时也能被证据化。
+它**不是默认值**，也**不是** OpenAI 配置失败时的回退；启动日志会明确标注。**M4 D3 的生产配置校验必须
+拒绝 `stub`**，并保留一条启动警告直到那时。
 
 ### 4. 测试与门禁的确定性
 

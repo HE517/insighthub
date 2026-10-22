@@ -675,7 +675,13 @@ repaired-by-guess output is forbidden:
 
 **Configuration (server only).** `OPENAI_API_KEY` (required when `AI_PROVIDER=openai`),
 `OPENAI_MODEL` (optional, default documented in the adapter), `AI_PROVIDER` (`openai` |
-`disabled`). No key in the browser bundle, no `VITE_OPENAI_API_KEY`, no browser→OpenAI call.
+`disabled` | `stub`). No key in the browser bundle, no `VITE_OPENAI_API_KEY`, no browser→OpenAI call.
+
+`AI_PROVIDER=stub` is a **development/evidence-only** value: a deterministic, network-free
+provider (uppercases the submitted content or the selected range) that lets the real HTTP chain —
+browser → endpoint → draft → client-minted anchors → preview → Accept — be evidenced without a key.
+It is never the default, never a fallback for a missing/invalid OpenAI configuration, and the
+startup log says so. **Production configuration validation (M4 D3) must reject `stub`.**
 
 **Test determinism.** Repository gates never call a real model: unit/integration tests inject a
 fake server provider, the browser suite keeps using the deterministic client provider, and a
