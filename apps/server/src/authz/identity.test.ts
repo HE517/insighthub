@@ -17,7 +17,7 @@
  * - the schema has no login-session table — only `document*` and `app_user`.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,7 +28,13 @@ import { createAuthz } from './authz.js';
 import { isAppUserStore } from './app-user.js';
 import { AUTHZ_DATABASE_FILE_NAME, openMembershipStore } from './membership-store.js';
 import { createFakeSessionVerifier, type VerifiedIdentity } from './session-verifier.js';
-import { bootstrap, getWithSession, setCookies, startHarness, type Harness } from './test-support.js';
+import {
+  bootstrap,
+  getWithSession,
+  setCookies,
+  startHarness,
+  type Harness,
+} from './test-support.js';
 import { loadConfig, type ServerConfig } from '../config.js';
 import { DATABASE_FILE_NAME } from '../persistence/sqlite-store.js';
 import { openDocumentStore } from '../persistence/open-store.js';
@@ -123,6 +129,25 @@ describe('AUTH_MODE=clerk — verified identity maps to an internal user', () =>
     }
   });
 
+  it('clears the stale demo cookie on DELETE even when the Clerk session is already gone', async () => {
+    // The client calls this right after `signOut()` (A2's B2 wiring). Requiring a verified
+    // session here would answer 401 and leave the demo cookie behind forever. Clearing the
+    // caller's own cookie is not a privileged operation (§18.2: Clerk owns the session).
+    for (const cookie of [null, 'clerk_session=forged', ADA_COOKIE]) {
+      const response = await harness.request('/api/session', {
+        method: 'DELETE',
+        headers: cookie === null ? {} : { cookie },
+      });
+      assert.equal(response.status, 204, `DELETE with ${cookie ?? 'no cookie'}`);
+      const setCookie = response.headers.get('set-cookie') ?? '';
+      assert.match(
+        setCookie,
+        /insighthub_session=;/,
+        'the demo cookie must be cleared regardless of Clerk authentication',
+      );
+    }
+  });
+
   it('returns the internal id, not the Clerk sub, and no locally invented expiry', async () => {
     const response = await harness.request('/api/session', { headers: { cookie: ADA_COOKIE } });
     assert.equal(response.status, 200);
@@ -131,7 +156,11 @@ describe('AUTH_MODE=clerk — verified identity maps to an internal user', () =>
     assert.deepEqual(Object.keys(body).sort(), ['displayName', 'userId']);
     assert.equal(body['displayName'], 'Ada Lovelace');
     assert.equal(typeof body['userId'], 'string');
-    assert.notEqual(body['userId'], ADA_IDENTITY.clerkUserId, 'the Clerk sub must not leak as userId');
+    assert.notEqual(
+      body['userId'],
+      ADA_IDENTITY.clerkUserId,
+      'the Clerk sub must not leak as userId',
+    );
     assert.equal(body['expiresAt'], undefined, 'Clerk owns the session lifetime (§18.2)');
 
     // Idempotent mapping over HTTP: the same verified sub resolves to the same internal id.
@@ -250,11 +279,7 @@ describe('AUTH_MODE=demo — the pre-B1 session flow is unchanged', () => {
       ['demo-document', 'demo-private-notes', 'demo-team-notes'],
     );
 
-    const document = await getWithSession(
-      harness,
-      '/api/documents/demo-document',
-      session.cookie,
-    );
+    const document = await getWithSession(harness, '/api/documents/demo-document', session.cookie);
     assert.equal(document.status, 200);
   });
 
@@ -329,22 +354,32 @@ describe('startup guard', () => {
   });
 
   it('refuses NODE_ENV=production with AUTH_MODE=demo', () => {
-    const refusal = findStartupRefusal(
-      baseConfig({ nodeEnv: 'production', authMode: 'demo' }),
-    );
+    const refusal = findStartupRefusal(baseConfig({ nodeEnv: 'production', authMode: 'demo' }), {});
     assert.equal(refusal?.code, 'DEMO_AUTH_IN_PRODUCTION');
   });
 
   it('allows demo outside production', () => {
-    assert.equal(findStartupRefusal(baseConfig({ nodeEnv: 'development', authMode: 'demo' })), null);
-    assert.equal(findStartupRefusal(baseConfig({ authMode: 'demo' })), null);
+    assert.equal(
+      findStartupRefusal(baseConfig({ nodeEnv: 'development', authMode: 'demo' }), {}),
+      null,
+    );
+    assert.equal(findStartupRefusal(baseConfig({ authMode: 'demo' }), {}), null);
   });
 
-  it('refuses clerk mode until B2 wires the real verifier', () => {
-    // B1-transitional: there is deliberately no `@clerk/*` dependency in this build, so
-    // starting clerk mode would mean serving requests with no verifier at all.
-    const refusal = findStartupRefusal(baseConfig({ nodeEnv: 'production', authMode: 'clerk' }));
-    assert.equal(refusal?.code, 'CLERK_VERIFIER_NOT_WIRED');
+  it('refuses clerk mode without CLERK_SECRET_KEY, and accepts a configured secret', () => {
+    const clerk = baseConfig({ nodeEnv: 'production', authMode: 'clerk' });
+
+    // B1's transitional `CLERK_VERIFIER_NOT_WIRED` guard is gone (B2 wires the verifier); the
+    // remaining rule is the configuration the verifier needs. An empty value counts as missing.
+    assert.equal(findStartupRefusal(clerk, {})?.code, 'AUTH_CONFIG_MISSING');
+    assert.equal(
+      findStartupRefusal(clerk, { CLERK_SECRET_KEY: '   ' })?.code,
+      'AUTH_CONFIG_MISSING',
+    );
+
+    // A fake (well-shaped) secret is enough for the startup rule: the real Clerk call is not
+    // made at startup, and this suite must never contact Clerk.
+    assert.equal(findStartupRefusal(clerk, { CLERK_SECRET_KEY: 'sk_test_not_a_real_key' }), null);
   });
 
   it('makes the real entrypoint exit non-zero before listening', () => {
@@ -365,6 +400,102 @@ describe('startup guard', () => {
     assert.equal(result.status, 1, `stdout=${result.stdout}\nstderr=${result.stderr}`);
     assert.match(result.stderr, /refusing to start: DEMO_AUTH_IN_PRODUCTION/);
     assert.doesNotMatch(result.stdout, /http\s+ready/, 'the server must not have listened');
+  });
+
+  it('makes the real entrypoint refuse clerk mode without a secret, before listening', () => {
+    const serverRoot = fileURLToPath(new URL('../../', import.meta.url));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: 'production',
+      AUTH_MODE: 'clerk',
+      PORT: '0',
+      INSIGHTHUB_DATA_PATH: join(tmpdir(), `insighthub-clerk-guard-${process.pid}`),
+    };
+    // The parent process may legitimately have a Clerk key configured; this test is about its
+    // absence, so it is removed explicitly rather than assumed unset.
+    delete env['CLERK_SECRET_KEY'];
+
+    const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+      cwd: serverRoot,
+      env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+
+    assert.equal(result.status, 1, `stdout=${result.stdout}\nstderr=${result.stderr}`);
+    assert.match(result.stderr, /refusing to start: AUTH_CONFIG_MISSING/);
+    assert.doesNotMatch(result.stdout, /http\s+ready/, 'the server must not have listened');
+  });
+
+  it('starts clerk mode with a configured secret, and never prints the value', async () => {
+    const serverRoot = fileURLToPath(new URL('../../', import.meta.url));
+    const dataPath = await mkdtemp(join(tmpdir(), 'insighthub-clerk-start-'));
+    const secret = 'sk_test_not_a_real_key';
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+      cwd: serverRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        AUTH_MODE: 'clerk',
+        CLERK_SECRET_KEY: secret,
+        // No publishable key: the process must still start (B3 owns making it required). The
+        // startup warning is expected and no request is made, so Clerk is never contacted.
+        CLERK_PUBLISHABLE_KEY: '',
+        VITE_CLERK_PUBLISHABLE_KEY: '',
+        PORT: '0',
+        INSIGHTHUB_DATA_PATH: dataPath,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+
+    try {
+      const deadline = Date.now() + 30_000;
+      while (!/http\s+ready/.test(stdout)) {
+        if (child.exitCode !== null) {
+          assert.fail(`the clerk server exited early (${child.exitCode})\n${stdout}\n${stderr}`);
+        }
+        if (Date.now() > deadline) {
+          assert.fail(`the clerk server never listened\n${stdout}\n${stderr}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      // The verifier was constructed and wired: startup reports the mode, not a refusal.
+      assert.match(stdout, /auth\s+ready\s+clerk/);
+      assert.doesNotMatch(stderr, /AUTH_CONFIG_MISSING/);
+      // The secret is never logged, in either stream.
+      assert.ok(!stdout.includes(secret), 'the secret reached stdout');
+      assert.ok(!stderr.includes(secret), 'the secret reached stderr');
+    } finally {
+      child.kill();
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          resolve();
+        }, 5_000);
+        timer.unref();
+        child.once('exit', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });
 
@@ -389,14 +520,16 @@ describe('database schema (M4 B1)', () => {
     try {
       const documentDb = new sqlite.DatabaseSync(join(directory, DATABASE_FILE_NAME));
       try {
-        const tables = (documentDb
-          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-          .all() as Array<Record<string, unknown>>).map((row) => String(row['name']));
+        const tables = (
+          documentDb
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .all() as Array<Record<string, unknown>>
+        ).map((row) => String(row['name']));
         assert.deepEqual(tables, ['app_user', 'document', 'document_meta', 'document_update']);
 
-        const columns = (documentDb.prepare('PRAGMA table_info(app_user)').all() as Array<
-          Record<string, unknown>
-        >).map((row) => String(row['name']));
+        const columns = (
+          documentDb.prepare('PRAGMA table_info(app_user)').all() as Array<Record<string, unknown>>
+        ).map((row) => String(row['name']));
         assert.deepEqual(columns, [
           'id',
           'clerk_user_id',
@@ -417,9 +550,11 @@ describe('database schema (M4 B1)', () => {
       // table either (demo sessions stay in the process-scoped `Map`).
       const authzDb = new sqlite.DatabaseSync(join(directory, AUTHZ_DATABASE_FILE_NAME));
       try {
-        const tables = (authzDb
-          .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-          .all() as Array<Record<string, unknown>>).map((row) => String(row['name']));
+        const tables = (
+          authzDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<
+            Record<string, unknown>
+          >
+        ).map((row) => String(row['name']));
         assert.ok(tables.length > 0, 'the membership table exists');
         for (const table of tables) {
           assert.ok(!/session/i.test(table), `unexpected session-like table: ${table}`);

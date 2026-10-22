@@ -29,8 +29,16 @@ import { createServer } from 'node:http';
 
 import { createApp } from './app.js';
 import { createServerAiProviderFromEnv, readServerAiProviderKind } from './ai/openai.js';
-import { createAuthz, isAppUserStore, type AuthzService } from './authz/public.js';
-import { loadConfig } from './config.js';
+import {
+  createAuthz,
+  createClerkSessionVerifier,
+  createIdentityDeps,
+  isAppUserStore,
+  type AuthzService,
+  type IdentityOptions,
+  type SessionVerifier,
+} from './authz/public.js';
+import { loadConfig, type AuthMode } from './config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
@@ -41,10 +49,11 @@ import { attachWebSocketServer } from './ws.js';
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  // The minimum M4 B1 gate: a production process may not run on the demo fixture, and clerk
-  // mode cannot start before B2 supplies the real verifier. Printed as a code + a sentence,
-  // never a stack; B3 will extend this into the full production config validator.
-  const refusal = findStartupRefusal(config);
+  // The minimum M4 gate: a production process may not run on the demo fixture (B1), and clerk
+  // mode may not start without the secret key it verifies sessions with (B2). Printed as a
+  // code + a sentence, never a stack and never the value; B3 will extend this into the full
+  // production config validator.
+  const refusal = findStartupRefusal(config, process.env);
   if (refusal !== null) {
     console.error(`[server] refusing to start: ${refusal.code}`);
     console.error(`[server]   ${refusal.message}`);
@@ -104,6 +113,36 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The identity seam is built **once** and handed to both transports, so a socket and an HTTP
+  // request cannot disagree about who a cookie denotes (`docs/CONTRACTS.md` §18.4). In demo mode
+  // it is the pre-B1 session lookup; in clerk mode it is `createClerkSessionVerifier` plus the
+  // `app_user` mapping. The `findStartupRefusal` gate above guarantees the secret exists.
+  const authMode = config.authMode ?? 'demo';
+  const verifier = createSessionVerifier(authMode, process.env);
+  const identityOptions: IdentityOptions = {
+    // The internal-user mapping lives in the document database (`app_user`, §18.1). In demo
+    // mode this is unused.
+    appUsers: isAppUserStore(store) ? store : null,
+    verifier,
+  };
+  // Constructing the deps validates the mode's inputs: a clerk server without a verifier or
+  // without the mapping store fails here instead of silently admitting nobody.
+  const identity = createIdentityDeps(authMode, authz, identityOptions);
+
+  console.log(`[server] auth    ready  ${authMode === 'clerk' ? 'clerk' : 'demo'}`);
+  if (
+    authMode === 'clerk' &&
+    !isNonEmptyEnvironmentValue(
+      process.env.CLERK_PUBLISHABLE_KEY ?? process.env.VITE_CLERK_PUBLISHABLE_KEY,
+    )
+  ) {
+    // Public key, not a secret — printing that it is absent is safe. `@clerk/backend` needs it
+    // to authenticate a session token; refusing to start over it is B3's configuration gate.
+    console.warn(
+      '[server] auth    WARNING: CLERK_PUBLISHABLE_KEY (or VITE_CLERK_PUBLISHABLE_KEY) is not set; Clerk session verification will fail closed',
+    );
+  }
+
   // Built here (rather than inside `createApp`) only so the startup log can say which provider
   // is configured. A missing key is not a startup failure this round: the route answers
   // `503 ai_provider_not_configured` (D-080 §3 puts fail-fast in M4 D3). The log prints only
@@ -124,15 +163,12 @@ async function main(): Promise<void> {
     console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
   }
 
-  const app = createApp(config, authz, aiProvider, {
-    // The internal-user mapping lives in the document database (`app_user`, §18.1). In demo
-    // mode this is unused; passing it here means B2 only has to supply the verifier.
-    appUsers: isAppUserStore(store) ? store : null,
-  });
+  const app = createApp(config, authz, aiProvider, identityOptions);
   const server = createServer(app);
-  // Both seams are supplied, so neither of `attachWebSocketServer`'s fail-closed checks can
-  // fire: a data directory without a store or without authz is a wiring mistake, not a mode.
-  const socket = attachWebSocketServer(server, config, { store, authz });
+  // All three seams are supplied, so none of `attachWebSocketServer`'s fail-closed checks can
+  // fire: a data directory without a store, without authz, or a clerk-mode socket without an
+  // identity resolver is a wiring mistake, not a mode.
+  const socket = attachWebSocketServer(server, config, { store, authz, identity });
 
   await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
 
@@ -170,6 +206,36 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+/**
+ * Build the Clerk verifier for clerk mode, or `null` in demo mode.
+ *
+ * Only **presence** of the secret is inspected here; the value is passed to the SDK and never
+ * logged. `findStartupRefusal` already refuses a clerk start without it, so the `null` return
+ * below is an unreachable fail-closed guard rather than a configuration path — a clerk-mode app
+ * built with `null` throws in `createIdentityDeps` instead of serving 401s forever.
+ *
+ * The publishable key is optional here: it is a **public** value (the browser already has it as
+ * `VITE_CLERK_PUBLISHABLE_KEY`), but `@clerk/backend` needs it to authenticate session cookies,
+ * so it is forwarded when the process has it. B3 owns making it a required production setting.
+ */
+function createSessionVerifier(authMode: AuthMode, env: NodeJS.ProcessEnv): SessionVerifier | null {
+  if (authMode !== 'clerk') return null;
+
+  const secretKey = env.CLERK_SECRET_KEY;
+  if (typeof secretKey !== 'string' || secretKey.trim() === '') return null;
+
+  const publishableKey = env.CLERK_PUBLISHABLE_KEY ?? env.VITE_CLERK_PUBLISHABLE_KEY;
+  return createClerkSessionVerifier({
+    secretKey,
+    ...(isNonEmptyEnvironmentValue(publishableKey) ? { publishableKey } : {}),
+  });
+}
+
+/** True for a defined, non-blank environment value (an empty shell variable means "unset"). */
+function isNonEmptyEnvironmentValue(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 await main();

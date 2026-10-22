@@ -9,13 +9,13 @@
  *
  * ## What this file is, and what it deliberately is not
  *
- * This is the **only** place a Clerk session may be turned into an identity, and it is a
- * *seam*: an interface plus a fake. There is no `@clerk/*` dependency, no JWKS fetch, no
- * network call and no cookie format assumption here. B2 supplies
- * `createClerkSessionVerifier` (Clerk backend SDK, server-side secret only) and wires it at
- * `apps/server/src/index.ts`; until then the real verifier does not exist, so production
- * cannot accidentally run on the fake — `index.ts` refuses to start with `AUTH_MODE=clerk`
- * (B1 transition, B2 replaces that guard).
+ * This file owns the **interface and the fake**; the real implementation is
+ * `authz/clerk-session-verifier.ts` (`createClerkSessionVerifier`, M4 B2). Keeping the interface
+ * here means `identity.ts`, `app.ts` and the WebSocket upgrade depend on `SessionVerifier`, not
+ * on `@clerk/backend`, and the suite can run without the network.
+ *
+ * `index.ts` constructs the real verifier for `AUTH_MODE=clerk`; the fake is never constructed
+ * by production code and is only reachable through an injected test option.
  *
  * ## Why the fake is allowed to exist in `src/`
  *
