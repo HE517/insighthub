@@ -13,19 +13,22 @@ import * as shared from './index.js';
  * it proves the number moved, which is what makes the record checkable.
  */
 describe('shared contract version', () => {
-  it('is 7 after CollaborativeSession gained getRole()', () => {
+  it('is 8 after AI operations gained a required anchor', () => {
     // 2: M1-A0 (binary data plane, awareness, CollaborativeSession, error vocabulary)
     // 3: M2-P0-2 step 1 (presence write seam)
     // 4: M2-P0-2 step 3 (awareness narrowed to AwarenessBinding)
     // 5: M2 Phase 2 (FORBIDDEN — a closed vocabulary grew, CONTRACTS §17.6)
     // 6: M2 Phase 2 (RoomJoinedPayload.role — a payload gained a required field, §5.2/§17.8)
     // 7: M2 Phase 2 (CollaborativeSession.getRole — a frozen seam grew a member, §17.9)
-    expect(shared.SHARED_CONTRACT_VERSION).toBe(7);
+    // 8: M3 (AiEditOperation gained the required anchor + expectedText, §11.1 / D-075)
+    expect(shared.SHARED_CONTRACT_VERSION).toBe(8);
   });
 
   it('keeps PROTOCOL_VERSION at 2: no framing or payload change', () => {
     // §17.6: `FORBIDDEN` rides inside the existing `error` message, so the wire protocol
     // is untouched. Bumping this would falsely claim a wire change.
+    // M3: the anchor is JSON that travels over the HTTP/in-memory suggestion path; no
+    // WebSocket frame, message type, payload or error code moved, so this stays 2.
     expect(shared.PROTOCOL_VERSION).toBe(2);
   });
 
@@ -34,5 +37,13 @@ describe('shared contract version', () => {
     // in `errors.ts` and not through the barrel would be unusable by A3.
     expect(shared.WS_ERROR_CODES.FORBIDDEN).toBe('FORBIDDEN');
     assert.equal(shared.isFatalErrorCode(shared.WS_ERROR_CODES.FORBIDDEN), false);
+  });
+
+  it('re-exports the M3 anchoring helpers through the package barrel', () => {
+    // A4/A2 must consume these from `@insighthub/shared`, not by reaching into src.
+    expect(typeof shared.createOperationAnchor).toBe('function');
+    expect(typeof shared.validateSuggestionAgainstDocument).toBe('function');
+    expect(typeof shared.encodeRelativePosition).toBe('function');
+    expect(typeof shared.decodeRelativePosition).toBe('function');
   });
 });

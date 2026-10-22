@@ -12,6 +12,7 @@ export * from './document.js';
 export * from './permission.js';
 export * from './connection.js';
 export * from './ai-suggestion.js';
+export * from './ai-anchor.js';
 export * from './awareness-state.js';
 export * from './binary-frame.js';
 export * from './protocol.js';
@@ -59,7 +60,18 @@ export * from './collab-session.js';
  * runtime callers: no member was removed, retyped or narrowed. `PROTOCOL_VERSION` stays **2**:
  * the wire already carries the role in `room-joined`, so no frame, message or payload changed.
  *
+ * v8 (M3, A1): every `AiEditOperation` gained a **required** `anchor`
+ * (`docs/CONTRACTS.md` §11.1): an encoded Yjs RelativePosition for the start, one for a
+ * replace's end, and the exact `expectedText` that was reviewed. This is a **closed-shape
+ * growth**: v7 operation objects do not typecheck, and an operation without an anchor is
+ * rejected by the schema — the point is that "un-anchored suggestion" stops existing rather
+ * than becoming an optional path. `packages/shared/src/ai-anchor.ts` adds the encode/decode
+ * and three-stage validation helpers. `PROTOCOL_VERSION` stays **2**: suggestions travel over
+ * the HTTP/in-memory layer, and no WebSocket frame type, message type, payload or error code
+ * changed. The anchor is JSON produced by Yjs's own `relativePositionToJSON` — no second
+ * binary convention is introduced.
+ *
  * See `docs/CONTRACTS.md` §15, §17 and `docs/DECISIONS.md` D-045 (design), D-057 (3 steps),
- * D-061 (M2 Phase 2 freeze) and D-062 (A3 owns `room-joined.role`).
+ * D-061 (M2 Phase 2 freeze), D-062 (A3 owns `room-joined.role`) and D-075 (M3 anchoring).
  */
-export const SHARED_CONTRACT_VERSION = 7;
+export const SHARED_CONTRACT_VERSION = 8;

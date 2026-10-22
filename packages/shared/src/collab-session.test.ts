@@ -146,7 +146,10 @@ describe('presence seam shape', () => {
     // wire-format change — one existing payload grew one field — so `PROTOCOL_VERSION` holds.
     // v7 (M2 Phase 2): `CollaborativeSession` gained `getRole()` (§17.9) — a frozen seam grew
     // a member. The wire already carried the role, so `PROTOCOL_VERSION` holds again.
-    expect(SHARED_CONTRACT_VERSION).toBe(7);
+    // v8 (M3): `AiEditOperation` gained the required `anchor` (§11.1) — a proposal shape grew,
+    // not the wire. Suggestions are not delivered over the WebSocket, so `PROTOCOL_VERSION`
+    // must not move with them.
+    expect(SHARED_CONTRACT_VERSION).toBe(8);
     // The wire is untouched: awareness already carried cursor and selection.
     expect(PROTOCOL_VERSION).toBe(2);
   });
