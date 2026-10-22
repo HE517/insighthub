@@ -47,6 +47,13 @@
  * alone. `updatedAt` belongs to the collaboration layer, so A2 neither computes nor
  * sends it (`docs/CONTRACTS.md` §15, M2-P0-2).
  *
+ * ## Selection access (read-only)
+ *
+ * `selectionRef` hands the parent a lazy reader over `EditorState.selection.main`, used by the AI
+ * panel at the moment it generates a proposal. It is a **read**, not a callback feed: nothing is
+ * dispatched, the view is not touched, and the editor still publishes presence through
+ * `publishPresence` at exactly the same points as before.
+ *
  * ## Read-only (`readOnly`)
  *
  * The caller passes the one bit `capabilityGate(role).readOnly`, i.e. "a **known** role may
@@ -82,6 +89,17 @@ export interface CollaborativeMarkdownEditorProps {
   bindingRef?: (binding: CollabTextBinding | null) => void;
   /** Diagnostics: called when the binding had to resync wholesale. */
   onResync?: (reason: string) => void;
+  /**
+   * Read-only access to the editor's **current selection**, for callers that need it at the moment
+   * of an action rather than on every keystroke (the AI panel's "generate from the selection").
+   *
+   * Called with a lazy reader once the view exists and with `null` on teardown. The reader returns
+   * the live `EditorState.selection.main` anchors, or `null` while the view is gone. It never
+   * selects, scrolls or dispatches anything, and it is read through a ref exactly like
+   * `bindingRef`/`onResync`, so passing a new inline arrow on every parent render cannot rebuild
+   * the editor.
+   */
+  selectionRef?: (read: (() => { anchor: number; head: number } | null) | null) => void;
 }
 
 const editorTheme = EditorView.theme({
@@ -97,6 +115,7 @@ export function CollaborativeMarkdownEditor({
   readOnly = false,
   bindingRef,
   onResync,
+  selectionRef,
 }: CollaborativeMarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -107,6 +126,8 @@ export function CollaborativeMarkdownEditor({
   onResyncRef.current = onResync;
   const bindingRefCb = useRef(bindingRef);
   bindingRefCb.current = bindingRef;
+  const selectionRefCb = useRef(selectionRef);
+  selectionRefCb.current = selectionRef;
 
   /**
    * The current read-only flag, in a ref for the same reason as the callbacks: the view is
@@ -170,6 +191,16 @@ export function CollaborativeMarkdownEditor({
     );
     bindingRefCb.current?.(binding);
 
+    // Read-only selection access for the AI panel. The reader is lazy (`viewRef` is still null
+    // here, and only becomes non-null after `new EditorView`), so it always answers from the
+    // *current* `EditorState` and never from a snapshot.
+    selectionRefCb.current?.(() => {
+      const view = viewRef.current;
+      if (view === null) return null;
+      const range = view.state.selection.main;
+      return { anchor: range.anchor, head: range.head };
+    });
+
     // 2. Build the view from `Y.Text` content, so the editor opens on the truth
     //    instead of an empty buffer that would be resynced a moment later.
     const cursorExtension = new Compartment();
@@ -228,6 +259,7 @@ export function CollaborativeMarkdownEditor({
       binding?.flushLocalEdits();
       binding?.destroy();
       bindingRefCb.current?.(null);
+      selectionRefCb.current?.(null);
       viewRef.current = null;
       view.destroy();
     };

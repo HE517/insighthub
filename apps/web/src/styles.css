@@ -730,6 +730,332 @@ body {
 }
 
 /* ------------------------------------------------------------------ *
+ * AI proposal panel (M3)
+ *
+ * The review surface: the trigger in the document header, then instruction → proposal →
+ * Diff Preview → Accept / Reject. Colours come from the same Cloud palette as everything
+ * else (no second theme); the diff keeps `white-space: pre` and the mono font because its
+ * line structure is the information.
+ * ------------------------------------------------------------------ */
+
+.doc-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 31px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 640;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.doc-ai svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.doc-ai:hover {
+  border-color: #bcd4fb;
+  background: var(--accentSoft);
+  color: #1f4fa8;
+}
+
+.doc-ai[aria-expanded='true'] {
+  border-color: var(--accent);
+  background: var(--accentSoft);
+  color: #1f4fa8;
+}
+
+.doc-ai:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ai-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgb(37 47 62 / 5%);
+}
+
+.ai-panel__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ai-panel__heading {
+  min-width: 0;
+}
+
+.ai-panel__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+.ai-panel__note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.ai-panel__close {
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ai-panel__close:hover {
+  border-color: #c6d3e2;
+  color: var(--text);
+}
+
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-field__label {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ai-instruction {
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ai-instruction:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(57 119 233 / 10%);
+}
+
+.ai-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-chip {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--paper);
+  color: #3c4a61;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ai-chip:hover {
+  border-color: var(--accent);
+  background: var(--accentSoft);
+  color: var(--accent);
+}
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-primary {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.ai-primary:hover:not(:disabled) {
+  background: #2f66cc;
+}
+
+.ai-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ai-actions__hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-status {
+  margin: 0;
+  color: #3c4a61;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-panel[data-phase='error'] .ai-status {
+  color: #8c1d18;
+}
+
+.ai-panel[data-phase='applied'] .ai-status {
+  color: var(--green);
+}
+
+.ai-panel[data-phase='stale'] .ai-status {
+  color: #7a5a12;
+}
+
+.ai-empty {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--paper);
+}
+
+.ai-proposal[data-status='stale'] {
+  border-color: #f0d38b;
+  background: #fffdf5;
+}
+
+.ai-proposal__summary {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+/*
+ * The unified diff, verbatim: `white-space: pre` keeps the hunk line structure, and the
+ * mono font keeps `+`/`-` gutters aligned. Only the surface scrolls; the panel does not
+ * grow without bound on a large document.
+ */
+.ai-diff {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #f6f8fb;
+  color: #26344a;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.ai-diff:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ai-stale {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid #f0d38b;
+  border-radius: 7px;
+  background: #fff8e6;
+  color: #7a5a12;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-proposal__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-accept {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--green);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.ai-accept:hover:not(:disabled) {
+  background: #1f7f55;
+}
+
+.ai-accept:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-reject {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ai-reject:hover {
+  border-color: #f3b8b5;
+  background: #fdeeee;
+  color: #b3261e;
+}
+
+/* ------------------------------------------------------------------ *
  * Responsive (desktop-first, 1440px baseline)
  * ------------------------------------------------------------------ */
 
@@ -791,6 +1117,19 @@ body {
 
   .markdown-editor .cm-content {
     padding: 14px;
+  }
+
+  .ai-panel {
+    padding: 12px;
+  }
+
+  .ai-panel__head,
+  .ai-actions {
+    flex-wrap: wrap;
+  }
+
+  .ai-panel__close {
+    margin-left: 0;
   }
 }
 

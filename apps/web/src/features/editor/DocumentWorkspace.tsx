@@ -44,8 +44,20 @@
  * became one header row above a single paper canvas. The undo/redo buttons call the same
  * `runSessionHistory` the `Mod-z` keymap calls, so there is still exactly one undo mechanism
  * (`AGENTS.md` R13).
+ *
+ * ## AI proposal panel (M3)
+ *
+ * `DocumentHeader` owns the "Ask AI" trigger and this component owns whether the panel is open
+ * (`useState`). The panel itself (`AiSuggestPanel`) owns the proposal, the diff it renders and its
+ * generation state; **no document text ever enters React state** (`AGENTS.md` R11). The editor
+ * hands over a read-only selection reader (`selectionRef`) so "generate from the selection" reads
+ * the live `EditorState` instead of a copy.
+ *
+ * Closing the panel unmounts it, which disposes its revision tracker and aborts any in-flight
+ * generation (R9). A panel that is closed is absent from the DOM, not merely hidden, so
+ * `[data-testid="ai-panel"]` always means "open".
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { CollaborativeSession, CollaborativeSessionOptions } from '@insighthub/shared';
 
@@ -53,6 +65,7 @@ import { useCollaborativeDocument } from '../../collab/public.js';
 import { capabilityGate } from '../permissions/capabilityGate.js';
 import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
 import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
+import { AiSuggestPanel } from './AiSuggestPanel.js';
 import { CollaborativeMarkdownEditor } from './CollaborativeMarkdownEditor.js';
 import { DocumentHeader } from './DocumentHeader.js';
 import { runSessionHistory } from './editorEditability.js';
@@ -137,6 +150,16 @@ function ActiveDocument({
   // role is unknown the gate reports `readOnly: false`.
   const gate = capabilityGate(role);
 
+  // The AI panel is a UI state, so it lives here: open/closed only, never the proposal (the panel
+  // owns that) and never the document (the `Y.Text` owns that).
+  const [aiOpen, setAiOpen] = useState(false);
+  /**
+   * The editor's read-only selection reader. Held in a ref because it must be the *current* editor
+   * instance: the editor replaces it on every (re)mount and clears it on teardown, so a stale
+   * reader can never answer for a document that is no longer on screen.
+   */
+  const selectionReader = useRef<(() => { anchor: number; head: number } | null) | null>(null);
+
   return (
     <div className="workspace">
       <DocumentHeader
@@ -148,6 +171,8 @@ function ActiveDocument({
         undoState={undoState}
         onUndo={() => runSessionHistory(gate.readOnly, session, 'undo')}
         onRedo={() => runSessionHistory(gate.readOnly, session, 'redo')}
+        aiOpen={aiOpen}
+        onToggleAi={() => setAiOpen((open) => !open)}
       />
 
       {/*
@@ -176,17 +201,43 @@ function ActiveDocument({
         </span>
         {resyncReason === null ? null : (
           <div className="notice notice--warning" data-testid="editor-resync" role="alert">
-            <strong className="notice__title">The editor was resynchronised from the document</strong>
+            <strong className="notice__title">
+              The editor was resynchronised from the document
+            </strong>
             <span className="notice__detail">{`reason: ${resyncReason}`}</span>
           </div>
         )}
       </div>
+
+      {/*
+        The AI proposal panel. Mounted only while open: closing it disposes the revision tracker
+        and aborts any generation in flight (the panel's own unmount effect). It renders between
+        the notices and the canvas because it is a review surface *of* the document below it.
+      */}
+      {/*
+        A proposal's anchors were minted against one `Y.Doc`. If the session is replaced (the
+        one-time identity remount does exactly that), the old proposal belongs to a replica that
+        no longer exists, so the panel is keyed on the session's `Y.Doc` client id: a new replica
+        remounts it and drops the proposal instead of applying it to a different document instance.
+      */}
+      {aiOpen ? (
+        <AiSuggestPanel
+          key={session.localClientId}
+          session={session}
+          gate={gate}
+          readSelection={() => selectionReader.current?.() ?? null}
+          onClose={() => setAiOpen(false)}
+        />
+      ) : null}
 
       <div className="canvas">
         <CollaborativeMarkdownEditor
           session={session}
           readOnly={gate.readOnly}
           onResync={setResyncReason}
+          selectionRef={(read) => {
+            selectionReader.current = read;
+          }}
         />
       </div>
     </div>
