@@ -3265,3 +3265,64 @@ R1–R11 继续作为具名残留，不得因 UI 收口而删除。
 **后果。** "看起来像不像一个完成品"第一次进入**可执行门禁**：以后任何人改 CSS 破坏 hover/focus/pressed/
 tooltip/reduced-motion，`ui/*` 会红，而不是等负责人再手动发现一遍。代价是多 8 个场景与一份需要维护的
 视觉断言；收益是设计保真度不再依赖"看截图的人当天有没有注意到"。
+
+---
+
+## D-080 · 2026-10-22 · accepted · M3 Round 2：服务端真实 provider 的契约（draft，不是 suggestion）(M3 round 2)
+
+**背景。** 项目负责人要求"最终必须支持真实 production AI provider"，且 credential **只能**在服务端
+（`OPENAI_API_KEY`），browser 不得接触 key、不得直连 OpenAI。同时 D-078 已确认真实 provider 属于 M3
+未完成部分，不是新 scope。
+
+### 1. 核心设计选择：服务端返回 **draft**，不是 `AiEditSuggestion`
+
+锚点是 Yjs `RelativePosition`，**replica 特定**：只有铸造它的那个客户端才能在**自己的** `Y.Text` 上正确
+解析。服务端若替客户端铸锚，得到的锚在客户端会解析错或解析不到。因此冻结为两段：
+
+```text
+客户端 ──(instruction, content 快照, baseRevision, selection)──► POST /api/ai/suggest
+服务端 ──► model ──► AiSuggestionDraft { summary, operations: plain offsets, model? }
+客户端 ──► 用活的 Y.Text 铸 anchor（createOperationAnchor）→ 本地算 diff → AiEditSuggestion
+       ──► Diff Preview → Accept → 三段校验 → 一次 ai 事务
+```
+
+契约见 `docs/CONTRACTS.md` §11.2 / §12。**模型只能产 proposal 的原料，永远不能直接写 `Y.Text`**——
+这条在 round 1 由客户端 provider 保证，round 2 由"服务端只返回 draft、写入永远在客户端走三段校验"保证。
+
+### 2. 失败一律 fail closed
+
+`401 session_required` / `404 not_found`（非披露） / `503 ai_provider_not_configured` /
+`504 provider_timeout` / `502 provider_error` / `502 invalid_provider_output` / `429 rate_limited`（预留）。
+**禁止**：把畸形/部分输出修补成"看起来能 Accept"的 draft；把 provider 错误吞成空建议。
+
+### 3. 配置
+
+`OPENAI_API_KEY`（仅服务端，`AI_PROVIDER=openai` 时必需）、`OPENAI_MODEL`（可选）、
+`AI_PROVIDER=openai|disabled`。**禁止** `VITE_OPENAI_API_KEY`、禁止 key 进 bundle / 日志 / 文档 / fixture。
+缺 required config 时生产启动 fail fast（M4 D3 会把这一条扩展成完整 config contract）。
+
+### 4. 测试与门禁的确定性
+
+仓库 Gate **永不**调用真实模型：server 测试注入 fake provider；browser 套件继续用客户端确定性 provider；
+`live` smoke 仅在 `OPENAI_API_KEY` 存在时 opt-in，且**不替代**确定性证据。这样 CI 不会因为公网、延迟、
+rate limit 变红或烧 token。
+
+### 5. 不做（本轮）
+
+流式输出、function calling / agent tools、多轮对话、成本记账与配额 UI（M4 D6）、真实认证（M4 D1）。
+本轮仍用现有 session 认证；`/api/ai/suggest` 与其它端点共享 §17.4 的非披露与 §17.5 的授权语义。
+
+### 6. 分工
+
+| Agent | 交付 |
+| --- | --- |
+| A3 | `POST /api/ai/suggest` 处理器（session 鉴权 + canRead + 非披露）、server `AiProvider` seam、`OpenAiProvider`（**fetch**，不加 SDK 依赖）、注入式 fake、失败矩阵测试 |
+| A4 | 客户端 `RemoteProvider`（调该端点）+ 把 draft 转成 `AiEditSuggestion`（铸锚、本地 diff） |
+| A2 | directory 接线（R2-1，见 D-078 §4） |
+| A5 | AI 生成/接受路径的权限一致性复核（新端点不得成为新的读旁路） |
+| A6 | 真实浏览器：draft→preview→accept 闭环、provider 失败时无半合法提案 |
+| A7 | M3 round 2 终审 |
+
+**后果。** 真实模型被放进产品，但**没有**把 key、锚定或写入权下放给 browser 或模型：模型只产出
+"针对某段快照的纯偏移操作"，锚定、预览、校验、写入仍全部在客户端与既有 `ai` 事务里。代价是多一个
+HTTP 端点与一次序列化；收益是"模型不能直接改文档"这条架构约束在真实 provider 下依然成立。

@@ -623,6 +623,65 @@ is unchanged: suggestions travel over the HTTP layer, not the WebSocket wire.
 Generation is client-side behind an `AiProvider` seam; applying still goes through the existing
 `CollaborativeSession.transact` with `TRANSACTION_ORIGINS.ai`.
 
+### 11.2 M3 Round 2: server-side provider (frozen by D-080)
+
+Round 2 adds a **server-side** provider so a real model can be used without ever putting a
+credential in the browser. The endpoint returns a **draft**, not a suggestion:
+
+```ts
+type AiOperationDraft =
+  | { kind: 'replace'; index: number; length: number; text: string }
+  | { kind: 'insert';  index: number; text: string };
+
+type AiSuggestionDraft = {
+  summary: string;                 // 1..500
+  operations: AiOperationDraft[];  // 1..32, plain offsets into the submitted `content`
+  model?: string;                  // which model produced it (never a key)
+};
+```
+
+`POST /api/ai/suggest` — request `AiSuggestRequest` plus an optional
+`selection: { from: number; to: number }` (UTF-16, same space as `index`). Response `200` is an
+`AiSuggestionDraft`.
+
+**Why a draft and not an `AiEditSuggestion`:** anchors are `RelativePosition`s, which are
+**replica-specific** — only the client that minted them can resolve them against its own
+`Y.Text`. A server minting anchors would produce positions that resolve on the server and
+misresolve (or fail) on the client. So:
+
+1. the server returns plain offsets against the `content` it was given;
+2. the **client** re-reads its live `Y.Text`, confirms the snapshot still matches, mints the
+   anchors with `createOperationAnchor`, computes the diff, stamps `baseRevision` from its local
+   revision counter, and only then produces the `AiEditSuggestion` (§11 / §11.1);
+3. Accept still goes through the three checks and one `ai`-origin transaction.
+
+**Authorization:** the session cookie is required (`401`), and the caller must be able to read
+the document; unknown document / no membership behave exactly like §17.4's non-disclosure rule
+(`404`, never a hint that the document exists).
+
+**Fail closed (normative).** Every failure returns an error and **no draft**; a partial or
+repaired-by-guess output is forbidden:
+
+| Situation | Response |
+| --- | --- |
+| missing/expired session | `401 session_required` |
+| no read access | `404 not_found` (non-disclosure) |
+| provider not configured | `503 ai_provider_not_configured` |
+| provider timeout / aborted | `504 provider_timeout` |
+| provider 5xx / network | `502 provider_error` |
+| model output not parseable | `502 invalid_provider_output` |
+| model output fails the draft schema (unknown op, too many ops, summary too long, negative index, …) | `502 invalid_provider_output` |
+| rate limited | `429 rate_limited` (reserved; enforcement is M4 D6) |
+
+**Configuration (server only).** `OPENAI_API_KEY` (required when `AI_PROVIDER=openai`),
+`OPENAI_MODEL` (optional, default documented in the adapter), `AI_PROVIDER` (`openai` |
+`disabled`). No key in the browser bundle, no `VITE_OPENAI_API_KEY`, no browser→OpenAI call.
+
+**Test determinism.** Repository gates never call a real model: unit/integration tests inject a
+fake server provider, the browser suite keeps using the deterministic client provider, and a
+`live` smoke test runs only when `OPENAI_API_KEY` is set. A live smoke never replaces
+deterministic evidence.
+
 ## 12. HTTP API
 
 | Method | Path | Response | Milestone |
@@ -634,6 +693,7 @@ Generation is client-side behind an `AiProvider` seam; applying still goes throu
 | `DELETE` | `/api/session` | `204` + cleared cookie / `401` — §17.4 | M2 Phase 2 |
 | `GET` | `/api/documents` | `200 { documents: DocumentMeta[] }` / `401` — §17.4 | M2 Phase 2 |
 | `GET` | `/api/documents/:id` | `200 DocumentMeta` / `401` / `403` / `404` — §17.4 | M2 Phase 2 |
+| `POST` | `/api/ai/suggest` | `200 AiSuggestionDraft` / `401` / `403` / `404` / `503` / `502` / `504` — §11.2 | M3 Round 2 |
 
 Unknown paths return `404 { "error": "not_found" }`. The non-disclosure rule for
 `/api/documents/:id` (§17.4) governs which of `403` and `404` a caller may see.
