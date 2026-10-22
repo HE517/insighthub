@@ -35,7 +35,11 @@ services:
       # Render routes traffic to the service's external interface, not to loopback. The server's
       # development default is 127.0.0.1 (safe on a laptop); a deployment must bind 0.0.0.0 or
       # the port is unreachable. `PORT` is injected by Render and read by `config.ts` unchanged.
-      - key: HOST
+      # `node:sqlite` (the server's only database) exists from Node 22.5, so the runtime is
+      # pinned rather than left to the platform default. The root `engines` field states the
+      # same floor.
+      - key: NODE_VERSION
+        value: 22.14.0      - key: HOST
         value: 0.0.0.0
       # Production identity (D-082 D1): Clerk only. `AUTH_MODE=demo` is refused in production.
       - key: AUTH_MODE

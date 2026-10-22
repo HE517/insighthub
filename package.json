@@ -5,7 +5,7 @@
   "description": "InsightHub - team knowledge base document & AI assistant platform (M0 bootstrap)",
   "packageManager": "pnpm@10.34.7",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "predev": "pnpm --filter @insighthub/shared build",
