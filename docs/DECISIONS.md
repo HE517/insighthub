@@ -2925,3 +2925,95 @@ persistence；`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。因此�
 **后果。** 页面从"M1/M2 诊断布局"变成三层低噪音编辑器，且这次变更**可被现有 53 个真实浏览器场景
 证伪**；代价是集成时暴露并修掉了一个既有的身份重挂载竞态，以及两个被如实记录的后续项
 （remote cursor label、bootstrap 窗口输入的去向）。
+
+---
+
+## D-075 · 2026-10-22 · accepted · M3 冻结：RelativePosition 锚定、本地 provider、A–H 验收 (M3 kickoff)
+
+**背景。** UI redesign 已集成（D-074，`9800612`，53/53）。项目负责人在 autopilot 指令中把 M3 的
+核心目标固定为：AI 工具（directory / read / selection / edit）→ proposal → Diff Preview →
+Accept/Reject；stale 保护用 **Yjs RelativePosition + original text validation**；accepted change
+必须走 Yjs transaction；AI origin 的 undo 语义必须与 local/remote 隔离。本条是 M3 的 scope 冻结。
+
+### 1. 仓库现状（只读重建，不是记忆）
+
+| 项 | 事实 |
+| --- | --- |
+| 契约 | `packages/shared/src/ai-suggestion.ts` 已冻结 `AiEditSuggestion` / `AiSuggestRequest` / `isSuggestionStale` / `aiAcceptRequiredRole`（accept 需 ≥ editor） |
+| origin | `TRANSACTION_ORIGINS` 已含 `ai`；`UNDO_TRACKED_ORIGINS = [local, ai]`，且有测试钉住 `remote`/`persistence` 不在其中 |
+| 应用路径 | `CollaborativeSession.transact(fn, origin)` 已接受 `TransactionOrigin` → **AI 应用不需要改 seam** |
+| 实现 | `apps/server` 与 `apps/web` 中 **0 处** AI 实现；M3 是在冻结契约上新建 |
+| 前置 | M2 CLOSED（`m2-closed`）；R1–R9 已具名登记 |
+
+### 2. 锚定：加性升级，取代 D-004 的"M4 升级路径"
+
+D-004 写"M3 用 plain offset + `baseRevision`，RelativePosition 留到 M4"。负责人本轮明确要求
+RelativePosition + original text validation，故**按加性演进**冻结（`docs/CONTRACTS.md` §11.1）：
+
+- 每个 operation **必须**带 `anchor: { start, end?, expectedText }`（Yjs `RelativePosition` 的 JSON 编码）；
+- `index`/`length` 保留（用于 Diff Preview 渲染与可读性），但**不是**应用时的权威；
+- 应用前按顺序校验：① `baseRevision` → ② anchor 能在当前 `Y.Text` 上解析 → ③ 解析出的文本**逐字**等于 `expectedText`；
+- 任一失败 → `stale`，**绝不部分应用**；
+- `SHARED_CONTRACT_VERSION` **7 → 8**；`PROTOCOL_VERSION` 不变（建议走 HTTP/内存，不上 WS wire）。
+
+**为什么 RelativePosition 不够、必须加 `expectedText`**：Yjs 会保留被删除位置的"墓碑"，删除后的
+RelativePosition 仍能解析到一个相邻位置。只靠 anchor，"解析成功"可能对应**完全不同的文本**。
+`expectedText` 是把"解析成功"升级成"仍然是你审阅过的那段文字"的唯一判据。
+
+### 3. M3 范围（冻结）
+
+1. **AI tools（客户端）**：document directory（列出可读文档）、read（读当前 `Y.Text`）、selection（当前选区/位置）、edit（构造 `AiEditOperation[]`）。
+2. **Proposal**：`AiEditSuggestion`（summary + operations + unified diff），**永远不是文档状态**。
+3. **Diff Preview**：渲染 proposal 的 diff 与 summary；未 Accept 前 `Y.Text` 一字节不变。
+4. **Accept / Reject**：Accept → 重新跑 §2 的三段校验 → 在 `session.transact(..., TRANSACTION_ORIGINS.ai)` 内应用；Reject → 只改 proposal 状态，不碰 `Y.Text`。
+5. **Stale 保护**：Accept 时校验；失败即拒（UI 显示 stale，要求重新生成）。
+6. **Undo 隔离**：AI 编辑被 `UNDO_TRACKED_ORIGINS` 跟踪（本地 undo 可以撤回自己的 AI 编辑），但**绝不**回滚 remote；不实现快照式 undo。
+7. **权限**：生成要求 `canRead`（内容本就可读）；**Accept 要求 `canEdit`**，UI 用 `capabilityGate` 门控，服务端仍在 WS 写路径拒绝越权；viewer/commenter **不得**通过 AI 绕过。
+8. **离线**：离线可生成（基于本地 `Y.Text`）；Accept 后的写入本地即生效，重连后按 CRDT 合并；**不得**产生重复 apply。
+
+### 4. M3 round 1 的边界：**不接入外部 AI 服务**
+
+autopilot 规则把"需要真实 credential / 外部付费服务"列为 owner decision。为避免用一个未授权的
+外部依赖驱动整个里程碑，M3 round 1 冻结为：
+
+- 一个 **`AiProvider` seam**（A4 定义，客户端）；
+- 默认实现是**确定性本地 provider**（基于指令做可预测的改写/扩写/缩短，产出真实 diff 与锚点）；
+- **不新增运行时依赖、不新增 HTTP 端点、不发网络请求**；
+- 换成真实模型（含服务端代理、API key、计费）属**单独 owner decision**，不在本轮。
+
+这不是"AI 功能缩水"的借口：M3 要验证的是**提案 → 审阅 → 应用 → 撤销**这条闭环与它的安全语义；
+provider 是可替换的输入源。报告与发布说明**不得**把本地 provider 说成"接入大模型"。
+
+### 5. DAG 与 ownership
+
+```text
+A0  冻结契约/架构（本条 + CONTRACTS §11.1 + ARCHITECTURE §3）   ← 本轮
+ ├─ A1 锚定与校验助手（shared 实现 + 版本 8）+ transact(origin) 接线
+ ├─ A4 AI tools + provider seam + proposal 生成（客户端编排）
+ ├─ A2 Diff Preview / Accept-Reject UI（只消费 proposal + gate）
+ ├─ A5 AI 操作的权限一致性复核（canEdit for accept；viewer 不可绕过）
+ ├─ A3 仅当需要服务端端点时（本轮不需要）
+ ├─ A6 真实浏览器 + 并发/离线/stale 负向证据
+ └─ A7 M3 final review
+```
+
+顺序：**A1 → A4 ∥ A2（A2 依赖 A4 的 proposal 类型，可先按冻结类型并行）→ A5 复核 → A0 集成 → A6 → A7**。
+
+### 6. M3 Acceptance（A–H，冻结）
+
+| # | 判据 | 证据层 |
+| --- | --- | --- |
+| A | Accept 后修改走 **Yjs transaction**（`ai` origin），第二个客户端看到的是普通 CRDT 编辑 | 浏览器 |
+| B | Reject **不修改** `Y.Text`（文本与 durable 均不变） | 浏览器 |
+| C | stale 建议**不得**被应用：revision 变化 / anchor 失效 / `expectedText` 不匹配三种情形各自被拒 | Node（确定性）+ 浏览器 |
+| D | RelativePosition 在**并发编辑**后行为正确：另一客户端在建议区域外编辑 → 仍可应用；区域内变更 → `expectedText` 拒绝 | 浏览器 + Node |
+| E | undo 隔离：本地 undo 能撤回自己的 AI 接受；**不**回滚 remote；AI 编辑不被 `remote` undo 影响 | 浏览器 |
+| F | 权限：viewer/commenter 不能通过 AI 绕过写权限（UI 不提供 + 服务端拒绝）；accept 需 `editor` | 浏览器 + Node |
+| G | 离线：离线生成可用；重连后**不重复 apply**；多客户端收敛 | 浏览器 |
+| H | 既有 53 场景**零回归**；四门禁在 integrated HEAD 全绿 | 全部 |
+
+R1–R9 继续作为具名残留带入本 milestone 的实现与最终 review；**不因 M3 开工而删除任何一条**。
+
+**后果。** M3 从"A4 直接写 AI 功能"变成"先冻结锚定与 provider 边界，再由 A1/A4/A2/A5 分头实现、
+A6 用真实浏览器证伪、A7 终审"。代价是多一轮契约与实现分离；收益是"stale 建议不会被错误应用"
+这件事有**可执行的判据**（三段校验），而不是一句承诺。

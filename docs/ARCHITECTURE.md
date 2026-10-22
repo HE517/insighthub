@@ -167,9 +167,16 @@ rollbacks.
 
 A suggestion is generated against a specific `baseRevision`. If the document has
 moved on (locally or remotely) by the time the user clicks Accept, the suggestion
-is **stale**: it must be rejected or regenerated, never applied blindly. M0
-anchors suggestions with plain UTF-16 offsets plus `baseRevision`
-(`docs/DECISIONS.md` D-004); RelativePosition anchoring is the M4 upgrade path.
+is **stale**: it must be rejected or regenerated, never applied blindly.
+
+M0 shipped plain UTF-16 offsets plus `baseRevision`, with RelativePosition named as
+the M4 upgrade path (`docs/DECISIONS.md` D-004). **M3 upgrades the anchoring**
+(`docs/DECISIONS.md` D-075): each operation carries an encoded Yjs `RelativePosition`
+plus the `expectedText` it was generated from, and application requires all three
+checks — revision, anchor resolution, exact text match (`docs/CONTRACTS.md` §11.1).
+RelativePosition alone is not sufficient: a deleted range's anchor still resolves, so
+`expectedText` is what proves "this is still the text the user reviewed". Offsets
+remain in the shape for rendering the diff; they are not the authority for applying.
 
 ## 3.1 Collaborative undo rule (frozen by M1-A0)
 

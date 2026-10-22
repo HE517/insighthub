@@ -767,10 +767,19 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 | 已知残余 | **R9** remote cursor label 定位缺陷（pre-existing，**修复进行中**，A2）；**bootstrap 窗口内输入是否丢失 = 未验证**（A6 的推断，A2 正在测量；测量前不得写成事实） |
 | 结论 | UI 阶段可收口；不新增 milestone、不动任何 tag |
 
-## M3 — AI suggestions (sketch)
+## M3 — AI suggestions（FROZEN，见 D-075；NOT STARTED 实现）
 
-AI request pipeline, suggestion + diff generation, Diff Preview, Accept / Reject
-/ Undo applied through a Yjs transaction. Owner: A4.
+**状态：scope 已冻结（`docs/DECISIONS.md` D-075），实现尚未开始。** 契约见 `docs/CONTRACTS.md` §11.1
+（RelativePosition anchor + `expectedText` 三段校验，`SHARED_CONTRACT_VERSION` 7 → 8）。
+
+| 项 | 内容 |
+| --- | --- |
+| 目标 | AI tools（directory / read / selection / edit）→ proposal → Diff Preview → Accept / Reject；accepted change 走 `session.transact(..., TRANSACTION_ORIGINS.ai)` |
+| 范围 | 客户端 provider seam + 确定性本地 provider（**不接外部 AI 服务、无新端点、无新依赖**）；Diff Preview UI；stale 三段校验；undo 隔离；权限一致性 |
+| 非目标 | 真实大模型接入（需 owner 决定凭据/成本）、Redux 保存正文、绕过 Yjs、整篇 snapshot 替换、把 AI mutation 混同为 local/remote、绕过 permission、改坏 `CollaborativeSession` seam |
+| DAG | `A0 冻结`（已完成）→ `A1 锚定/校验助手 + shared 版本 8` → `A4 provider/tools/proposal` ∥ `A2 Diff Preview UI` → `A5 权限一致性复核` → `A0 集成` → `A6 真实浏览器证据` → `A7 M3 final review` |
+| Acceptance | **A–H**（D-075 §6）：Yjs transaction / Reject 不改文本 / stale 三情形被拒 / 并发下 RelativePosition 正确 / undo 隔离 / viewer 不能绕过 / 离线不重复 apply / 既有 53 场景零回归 + 四门禁 |
+| 必带残留 | R1–R9（见下「M3 前置」），不得因开工而删除 |
 
 ### M3 前置：从 M2 移交的具名风险（A7 final review，必须写进 M3 kickoff）
 

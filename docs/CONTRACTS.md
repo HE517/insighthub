@@ -552,6 +552,49 @@ through a Yjs transaction stamped `TRANSACTION_ORIGINS.ai`. `AiEditSuggestion` i
 a proposal object and must never be treated as document state
 (`docs/ARCHITECTURE.md` §3).
 
+### 11.1 M3 anchoring: RelativePosition + original-text validation (supersedes D-004's M4 deferral)
+
+Frozen for M3 by `docs/DECISIONS.md` **D-075**. Every operation **must** carry an anchor; `index` /
+`length` stay in the shape (the Diff Preview renders from them, and they are the readable form of
+the range).
+
+```ts
+type AiOperationAnchor = {
+  /** Encoded Yjs RelativePosition (JSON of `RelativePosition.toJSON()`) for the operation start. */
+  start: string;
+  /** Encoded RelativePosition for the end of the replaced range. Present iff `kind === 'replace'`. */
+  end?: string;
+  /** The exact text the operation expects to find at the anchored range when it is applied. */
+  expectedText: string;
+};
+
+type AiEditOperation =
+  | { kind: 'replace'; index: number; length: number; text: string; anchor: AiOperationAnchor }
+  | { kind: 'insert';  index: number; text: string; anchor: AiOperationAnchor };
+```
+
+**Validation order (normative).** A suggestion is applicable only if all three hold; the first
+failure wins and the suggestion is `stale`, never partially applied:
+
+| # | Check | Failure means |
+| --- | --- | --- |
+| 1 | `baseRevision === currentRevision` (existing `isSuggestionStale`) | the document moved on |
+| 2 | each anchor resolves against the **current** `Y.Text` (a deleted anchor resolves to nothing) | the anchored region no longer exists |
+| 3 | the text at the resolved range equals `expectedText` (exact string compare) | the region moved **and** changed — the proposal's premise is gone |
+
+Checks 2 and 3 are why RelativePosition is not enough on its own: Yjs keeps a deleted position
+alive (it maps to a neighbouring index), so an anchor can resolve successfully onto **different
+text**. `expectedText` is the guard that turns "resolved" into "still the text you reviewed".
+
+**Why additive rather than a rewrite.** `index`/`length` are kept, so the diff rendering and any
+existing reader keep working; the anchor is what application uses. This is a *closed-shape growth*
+(a required field on an operation), so `SHARED_CONTRACT_VERSION` goes **7 → 8**. `PROTOCOL_VERSION`
+is unchanged: suggestions travel over the HTTP layer, not the WebSocket wire.
+
+**Non-goal in M3 round 1:** no server AI endpoint and no external AI provider (see D-075 §4).
+Generation is client-side behind an `AiProvider` seam; applying still goes through the existing
+`CollaborativeSession.transact` with `TRANSACTION_ORIGINS.ai`.
+
 ## 12. HTTP API
 
 | Method | Path | Response | Milestone |
