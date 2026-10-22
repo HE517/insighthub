@@ -574,7 +574,16 @@ the store semantics are frozen so eviction can never be mistaken for deletion.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `INSIGHTHUB_DATA_PATH` | `./.insighthub-data` (dev) | directory holding the durable store |
+| `INSIGHTHUB_DATA_PATH` | `./.insighthub-data` (dev) | directory holding the durable store; **absolute path required in production** (D-082) |
+| `DATA_MIN_FREE_BYTES` | `104857600` (100 MiB) | free-space floor checked at startup; below it the server refuses to start (`DATA_DISK_LOW`); `0` disables the check |
+
+The store is **schema-versioned** (`PRAGMA user_version`, currently **1**): a new directory is
+created at version 1, a version-0 directory is migrated in one transaction (its data is preserved,
+and missing tables are created with `IF NOT EXISTS`), and a *newer* version is refused
+(`DATA_SCHEMA_TOO_NEW`) rather than opened on a best-effort basis. On open the store runs
+`PRAGMA quick_check`; a corrupt file is `DATA_INTEGRITY_FAILED` and the process exits **before
+listening** — it never silently starts on an empty database. Runtime write failures
+(`SQLITE_FULL`, a read-only database) surface as errors from `append`; they are never swallowed.
 
 Tests must pass a per-test temporary directory and must never touch a development database;
 the test harness creates and removes its own path per suite (D-041). The store refuses to
