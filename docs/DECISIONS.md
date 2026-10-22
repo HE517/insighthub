@@ -3025,3 +3025,55 @@ R1–R9 继续作为具名残留带入本 milestone 的实现与最终 review；
 **后果。** M3 从"A4 直接写 AI 功能"变成"先冻结锚定与 provider 边界，再由 A1/A4/A2/A5 分头实现、
 A6 用真实浏览器证伪、A7 终审"。代价是多一轮契约与实现分离；收益是"stale 建议不会被错误应用"
 这件事有**可执行的判据**（三段校验），而不是一句承诺。
+
+---
+
+## D-076 · 2026-10-22 · accepted · M3 实现集成：revision 归属、UI 集成与四条裁定 (M3 round 1)
+
+**背景。** 按 D-075 的 DAG，M3 round 1 依次落地：A1 锚定（`df16a73`）、A4 编排（`5826cc2`）、
+A2 Diff Preview（`5db7db1`）。本条记录集成期间由 A0 做出的裁定，以及两处"看起来像缺陷、实际不是"的
+行为，避免它们被后续 agent 当成 bug 重新"修"一遍。
+
+### 1. 集成与门禁
+
+| 项 | 值 |
+| --- | --- |
+| 合入 | `0bb8af4`（A1）→ `987495c`（A4）→ `20c3470`（A2） |
+| 最终门禁（`20c3470`） | typecheck 0 / test 0（vitest **465** + server **181**）/ build 0 / browser **53/53** |
+| 禁区 | 三棒均未触碰 `packages/shared/**`（A1 除外，且是经批准的契约实现）、`apps/server/**`、`collab/**`、`tests/**`、`docs/**`、`package.json` |
+
+### 2. `revision.ts` 的归属：A2 具名例外（Why Required）
+
+`applySuggestion` 的 check #1 需要 `baseRevision` / `currentRevision`，而全仓没有任何计数器：A4 的
+provider 是纯函数、不拥有状态与时间；seam 也不暴露 revision。因此：
+
+- 由 A2 在 `apps/web/src/features/ai/revision.ts` 实现 `createLocalRevisionTracker(doc)`（只计
+  `local` / `ai` origin），作为**具名 ownership 例外**（最小、留痕、写明理由）；
+- 语义已冻结在 `docs/CONTRACTS.md` §11.1，**不是**实现细节：若按"任意 update"计数，远端编辑会让
+  check #1 失败，直接违反验收 D；
+- **下一次 A4 触碰 `features/ai/` 时，该文件转回 A4 ownership**；在那之前它是例外而不是新规则。
+
+### 3. 四条裁定
+
+| # | 问题 | 裁定 |
+| --- | --- | --- |
+| 1 | `AiSuggestInput.anchorText: Y.Text`（A4 的 seam 增补） | **接受**。锚点必须从**活的** `Y.Text` 铸出；用临时 `Y.Doc` 重放同一字符串会因 client id 不同而必然 `anchor-unresolved`（A4 有测试钉住）。这是机制必需，不是接口膨胀 |
+| 2 | 同 index 的 `insert` + `replace` | **判 `malformed`，拒绝应用**（A4 实现）。两种顺序产生不同文档，不能"尽力应用"；静默错位是 AI 写入里最严重的一类 |
+| 3 | UI 是否显示 base/current revision 数字 | **不显示**（只在 `ai-proposal` 的 data 属性里）。它是内部分析量，对用户没有意义；显示出来反而暗示"可以手动对齐" |
+| 4 | `revision.ts` 之外的 `features/ai/` 文件 | A4 的 5 个模块**零改动**；A2 只新增 `revision.ts` |
+
+### 4. 两处"不是缺陷"的行为（防止被误修）
+
+**（a）`Y.UndoManager.captureTimeout = 500 ms` 的合并。** 若用户"打字 → 立刻接受 AI 建议"发生在
+500 ms 内，两次事务会被合并成一个 undo item，一次 Undo 会同时撤回两者（A2 的探针第一次正是这样测到
+文本变空的；加 1.2 s 间隔后测得"一次 Undo 只撤回 AI 编辑"）。这是 Yjs 的既定合并语义，**不涉及
+remote**，也不违反 R13（仍然只撤回本地/AI origin）。**不要**为了这个改 `captureTimeout` 或改 undo
+实现；若将来确实需要更细的粒度，那是一次独立的、有证据的变更。
+
+**（b）服务端拒绝后的本地副本。** `applySuggestion` **不做**权限判定（A2 在 UI 上按
+`capabilityGate.canEdit` 门控 Accept，服务端在 WS 写路径仍是唯一权威）。已知角色为 `viewer` 但**离线**
+时点 Accept，会在本地写入并被 IndexedDB 持久化，重连后由服务端拒绝——这与"viewer 离线打字"是**同一类**
+既有本地分叉，不是 AI 新增的旁路。是否在 `applySuggestion` 加咨询性预检，由 A5 复核后裁决（见 A5 报告）。
+
+**后果。** M3 的"提案 → 审阅 → 应用"闭环在 `20c3470` 上真实可运行，且三条最容易被写错的语义
+（锚点边界、revision 是本地量、undo 合并）都已在仓库里有据可查，而不是等着下一个人重新踩一遍。
