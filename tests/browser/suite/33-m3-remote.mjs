@@ -13,7 +13,7 @@
  * `apps/server/src/ai/route.test.ts`, `stub.test.ts`), but **no browser ever drove it**: no test
  * could say that the real panel, over the real HTTP endpoint, against a real provider, produced
  * a proposal that the real editor accepted. A Node test can prove the mapping functions; it
- * cannot prove the wiring. These four scenarios close that gap.
+ * cannot prove the wiring. These five scenarios close that gap.
  *
  * ## The mode switch is deliberate, and it is why the default run is untouched
  *
@@ -25,7 +25,7 @@
  * product, so the switch happens here, at this group's boundary: the first `m3r/*` scenario stops
  * Vite, restarts the backend on a **fresh durable store** with `AI_PROVIDER=stub`, and starts Vite
  * with `VITE_AI_PROVIDER=remote`. The 68 have already run by then (this file sorts last), and
- * each of the four scenarios calls {@link ensureRemoteAiStack} so a filtered run
+ * each of the five scenarios calls {@link ensureRemoteAiStack} so a filtered run
  * (`--filter m3r/3`) switches too.
  *
  * The environment mechanism is `lib/stack.mjs` (`serverEnv` / `webEnv` injection,

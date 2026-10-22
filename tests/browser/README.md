@@ -276,6 +276,7 @@ covering more than it does.
 | `m3r/2-remote-provider-unconfigured` | with the backend on its default configuration (`AI_PROVIDER` unset) and the client still remote, Generate is answered `503`; `ai-status[data-provider-error="not-configured"]` is shown; there is no `ai-proposal`, no Accept, and neither editor nor durable text moves |
 | `m3r/3-ai-directory` | `ai-directory[data-state="ready"]` lists the server's readable documents; exactly one row carries `aria-current="true"` and it is the active document; selecting another readable row switches `active-document` and unmounts `ai-panel`; reopening marks the new document |
 | `m3r/4-ai-directory-offline` | CDP `Network.emulateNetworkConditions { offline: true }` + Refresh → `ai-directory[data-state="error"]`, `ai-directory-error[data-directory-error="network"]`, **zero** `ai-directory-item` elements; restoring the network + Refresh → `data-state="ready"` with rows, and the page recorded a real `200` |
+| `m3r/5-collapsed-caret-is-not-an-empty-proposal` | typing leaves a **collapsed** caret (no selection); Generate still sends no `selection`, so the stub sees the whole document and the proposal's diff is non-empty; Accept writes the uppercase text. Regression for A6's round-2 finding (an empty diff the user could Accept for no effect) |
 
 Acceptance **H** is the gate itself: the scenario count is now 68 (73 with
 `INSIGHTHUB_E2E_AI_MODE=remote`), and the four commands in

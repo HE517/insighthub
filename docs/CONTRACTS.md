@@ -688,6 +688,18 @@ fake server provider, the browser suite keeps using the deterministic client pro
 `live` smoke test runs only when `OPENAI_API_KEY` is set. A live smoke never replaces
 deterministic evidence.
 
+**Version impact.** The draft shape is an **additive** export set (`AiOperationDraft`,
+`AiSuggestionDraft`, `aiSuggestHttpRequestSchema`, `AI_MAX_DRAFT_OPERATIONS`): no existing type
+changed and the WebSocket wire is untouched, so `SHARED_CONTRACT_VERSION` stays **8** and
+`PROTOCOL_VERSION` stays **2**.
+
+**Upstream 429.** A 429 from the model provider is mapped to `provider` → `502` until M4 D6
+implements our own limits. The `429 rate_limited` row above is *our* budget, not the model's.
+
+**Production gate (not optional).** Enabling `AI_PROVIDER=openai` in production requires M4 D1
+(real authentication), M4 D3 (config validation that **rejects `stub`** and fails fast) and M4 D6
+(rate/concurrency/cost limits). See `docs/DECISIONS.md` D-081.
+
 ## 12. HTTP API
 
 | Method | Path | Response | Milestone |

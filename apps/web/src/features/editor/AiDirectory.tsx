@@ -31,7 +31,8 @@
  * `App.tsx` keys `DocumentWorkspace` by `documentId`: a different document is a different
  * component instance because one socket carries at most one room (`docs/CONTRACTS.md` §5.4). The
  * panel lives inside that workspace, so selecting a document unmounts the panel. That is the
- * frozen lifecycle, not a regression — `docs/DECISIONS.md` D-078 §4 R2-1 explicitly keeps it. Do
+ * frozen lifecycle, not a regression — `docs/DECISIONS.md` D-078 §4 R2-1 records it (see the
+ * errata there: the first wording said "the panel stays open"; the implementation closes it). Do
  * not "fix" it by moving the panel above the key or by keeping two sessions alive.
  *
  * ## The three states

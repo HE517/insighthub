@@ -165,9 +165,11 @@ rollbacks.
 
 ### Staleness
 
-A suggestion is generated against a specific `baseRevision`. If the document has
-moved on (locally or remotely) by the time the user clicks Accept, the suggestion
-is **stale**: it must be rejected or regenerated, never applied blindly.
+A suggestion is generated against a specific `baseRevision`. A **local** edit since then (the
+author typing, or an earlier accepted AI edit) makes it **stale**: the proposal's premise is gone,
+reject or regenerate, never apply blindly. A **remote** edit does *not* by itself make it stale —
+it is judged below by the anchor and the `expectedText` compare, so a peer editing outside the
+anchored region cannot invalidate a proposal that is still valid.
 
 M0 shipped plain UTF-16 offsets plus `baseRevision`, with RelativePosition named as
 the M4 upgrade path (`docs/DECISIONS.md` D-004). **M3 upgrades the anchoring**

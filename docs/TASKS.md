@@ -767,23 +767,27 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 | 已知残余 | **R9 remote cursor label 定位缺陷：已修复**（`95ea216`：label 改为 caret 子节点，caret 为 containing block；真实浏览器实测 label 从 `(192,128.3)` 移到 `(300.8,179.1)`、完整可见；旧实现下回归测试为红）。**残余收窄为边缘情形**：caret 距 scroller 右缘小于 label 宽度、或所在行滚到顶部时仍可能被裁（未做位置感知翻转）。**bootstrap 窗口输入丢失的推断已被测量否定**（见 D-074 §4 勘误），不列为缺陷 |
 | 结论 | UI 阶段可收口；不新增 milestone、不动任何 tag |
 
-## M3 — AI suggestions（FROZEN D-075；ROUND 1 已实现，A7 GO WITH CONDITIONS，milestone 未 CLOSED）
+## M3 — AI suggestions（Round 1 + 2 已实现；A7 round-2 GO WITH CONDITIONS，条件已关闭；milestone 关闭待负责人授权）
 
-**状态：round 1 已实现并通过 A7 独立终审（GO WITH CONDITIONS，条件已关闭），但 milestone 未 CLOSED。**
-按 D-078 的 original-scope reconciliation：11 项 DONE、**directory = PARTIAL**、**真实 LLM provider = NOT
-IMPLEMENTED**（`D-075 §4` 的确定性 provider 是 A0 的 round-1 边界，**不是**原始 scope 的终点）。
-`A1 锚定/校验助手`（`df16a73` → `0bb8af4`，v8）、`A4 AI 编排层`（`5826cc2` → `987495c`）、`A2 Diff
-Preview`（`5db7db1` → `20c3470`）、`A5 权限复核`（`f399c04` → `20a63ac`）、`A6 七个永久场景`
-（`ad73c3d` → `990b9be`）、`A7 终审`（`29bf467` → `881dd0e`）均已合入。契约见 `docs/CONTRACTS.md` §11.1。
+**状态：实现与证据完整，A7 round-2 终审 GO WITH CONDITIONS（P1=0；P2=3 已关闭）。milestone 未 CLOSED，只差
+负责人一次 tag 授权。** 按 D-081 的最终 reconciliation：**12 项 DONE**（含 directory）+ **真实 provider
+= IMPLEMENTED / NOT LIVE-VERIFIED**（服务端适配器 + 失败矩阵 + 真实 HTTP via `AI_PROVIDER=stub`；**从未
+联网调用真实模型**）。已合入：`A1 锚定`（`0bb8af4`）、`A4 编排`（`987495c`）、`A2 Diff Preview`（`20c3470`）、
+`A5 权限复核`（`20a63ac`）、`A6 七个场景`（`990b9be`）、`A7 round-1`（`881dd0e`）、`A3 端点`（`37be2f0`）、
+`A2 directory`（`c18d24b`）、`A3 stub`（`5c72ae5`）、`A4 remote provider`（`860e6cd`）、`A6 remote
+证据`（`eaa55a4`）、`documentId 守卫 + 折叠光标修复`（`c335508`）。契约见 `docs/CONTRACTS.md` §11.1/§11.2。
 
-### M3 Round 2（关闭前必须完成，D-078 §4）
+### M3 Round 2（D-078 §4）— 状态
 
-| # | 事项 | 验收 |
+| # | 事项 | 状态 |
 | --- | --- | --- |
-| R2-1 | **directory 工具接线**：AI 面板列出当前身份可读的文档（`GET /api/documents`，只读、标出当前文档），选中另一文档复用既有文档切换语义；不新增跨文档提案/应用 | 真实浏览器：目录可见、切换后提案针对新文档；无新写路径 |
-| R2-2 | **真实 provider**：`OpenAIProvider` 在**服务端**持有 `OPENAI_API_KEY`（browser 不接触 key），产出仍必须是 proposal（schema 校验 → 锚定 → 预览 → Accept → `ai` 事务）；失败一律 fail closed | 单测 + 失败注入（timeout/5xx/畸形 JSON/schema 不符/取消）；Gate 与 CI 仍只用确定性 provider；live smoke 仅 key 存在时 opt-in |
-| R2-3 | M3 integrated Gate + A7 复审 | 四门禁 + 60/60（或更多）；A7 独立复审 GO |
-| R2-4 | `m3-closed` | 满足后按 D-053 §5 请求**一次**负责人授权 |
+| R2-1 | directory 接线（只读目录 + 复用文档切换，无跨文档提案） | **DONE**（`m3r/3`/`m3r/4`；切换时面板关闭，见 D-078 R2-1 勘误） |
+| R2-2 | 服务端真实 provider（key 只在服务端、draft-only、fail closed） | **IMPLEMENTED / NOT LIVE-VERIFIED**（adapter + 失败矩阵 + 真实 HTTP via stub；真实模型未联网） |
+| R2-3 | M3 integrated Gate + A7 复审 | **DONE**：typecheck/test/build 绿；默认 **68/68**、remote **73/73**；A7 round-2 GO WITH CONDITIONS，条件 C1–C6 已关闭 |
+| R2-4 | `m3-closed` | **待负责人一次授权** |
+
+**`AI_PROVIDER=openai` 的生产启用前置（硬门，见 D-081）：** M4 D1 真实认证、M4 D3 配置 fail-fast
+（且**必须拒绝 `stub`**）、M4 D6 限流/并发/成本上限。三者未完成前，生产不得启用真实 provider。
 
 | 项 | 内容 |
 | --- | --- |

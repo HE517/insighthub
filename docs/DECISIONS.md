@@ -3203,7 +3203,7 @@ PROJECT/TASKS/ARCHITECTURE 文字。
 
 | # | 事项 | 处置 |
 | --- | --- | --- |
-| 1 | directory（PARTIAL） | **最小 Round 2**：把 `listDocuments` 接进 AI 面板，作为**只读目录**（列出当前身份可读的文档、标出当前文档）；选中另一文档时复用既有 **文档切换** 语义（`documentSelected`），面板保持打开，随后生成/审阅/应用仍只针对当前文档。**不新增**跨文档提案或跨文档应用语义 |
+| 1 | directory（PARTIAL） | **最小 Round 2**：把 `listDocuments` 接进 AI 面板，作为**只读目录**（列出当前身份可读的文档、标出当前文档）；选中另一文档时复用既有 **文档切换** 语义（`documentSelected`），随后生成/审阅/应用仍只针对当前文档。**不新增**跨文档提案或跨文档应用语义。**勘误（A7 round-2 N2）**：本轮原文写"面板保持打开"，**实现是面板关闭**——`App.tsx` 以 `documentId` 为 key，切文档必然重挂 workspace，而面板在 workspace 内；这是冻结生命周期的必然结果，不是遗漏。以实现为准（`m3r/3` 断言的就是"切换后 `ai-panel` 消失"） |
 | 2 | 真实 provider | 按 Part C 实现 `OpenAIProvider`（**服务端**持有 `OPENAI_API_KEY`，browser 不接触 key）；`DeterministicProvider` 保留，Gate 与 CI 仍只用它；live smoke 仅在存在 key 时 opt-in |
 | 3 | `m3-closed` | **暂不请求**。先完成 1+2 → M3 integrated Gate → A7 复审 → 再按 D-053 §5 请求一次 tag 授权 |
 | 4 | 原始 scope 的边界 | **不改写**：M3 仍是"提案 → 审阅 → 应用 + stale + 权限 + undo 隔离"；真实 provider 是**补齐**，不是新 scope |
@@ -3211,6 +3211,12 @@ PROJECT/TASKS/ARCHITECTURE 文字。
 **后果。** "M3 已完成"这句话被拆成了可核对的 13 行状态表：11 项 DONE、1 项 PARTIAL（directory）、
 1 项 NOT IMPLEMENTED（真实 provider）。代价是 M3 的关闭被推迟；收益是不会把"当前实现"说成"原始要求"，
 也不会让一个 required 能力从 milestone 里悄悄消失。
+
+**【终态更新（A7 round-2，2026-10-22）】** Round 2 交付后：directory **PARTIAL → DONE**（`m3r/3`/`m3r/4`
+真实浏览器证据，无新写路径；**面板在切换文档时关闭**，见 R2-1 勘误）；真实 provider
+**IMPLEMENTED / NOT LIVE-VERIFIED** —— 服务端 `OpenAiProvider` 适配器、失败矩阵、以及"真实 HTTP 经
+`AI_PROVIDER=stub`"的链路都已有证据，但**从未联网调用真实模型**（无 key，仓库 Gate 禁止联网）。
+因此状态表应为 **12 DONE + 1 IMPLEMENTED/NOT LIVE-VERIFIED**，而不是"全部已验证"。
 
 ---
 
@@ -3331,3 +3337,72 @@ rate limit 变红或烧 token。
 **后果。** 真实模型被放进产品，但**没有**把 key、锚定或写入权下放给 browser 或模型：模型只产出
 "针对某段快照的纯偏移操作"，锚定、预览、校验、写入仍全部在客户端与既有 `ai` 事务里。代价是多一个
 HTTP 端点与一次序列化；收益是"模型不能直接改文档"这条架构约束在真实 provider 下依然成立。
+
+---
+
+## D-081 · 2026-10-22 · accepted · M3 round-2 终审条件关闭与关闭口径 (M3 closure readiness)
+
+**背景。** A7 round-2 终审（`docs/agent-governance/A7-m3-r2-review.md`，base `c335508`）给出
+**GO WITH CONDITIONS**：P1=0、P2=3、P3=5。本条记录三个 P2 的关闭方式、生产者口径、以及关闭 M3 时
+必须保留的 16 条 residual。
+
+### 1. 三个 P2 的关闭
+
+| # | 问题 | 关闭方式 |
+| --- | --- | --- |
+| N1 | `ARCHITECTURE.md` 的 "moved on (locally **or remotely**)" 原句与 §11.1/验收 D 冲突（round-1 只追加未删） | **已删改**：明确"本地编辑使提案 stale；远端编辑不单独触发，由 anchor + `expectedText` 判" |
+| N2 | D-078 写"选中另一文档时**面板保持打开**"，实现与 `m3r/3` 是**关闭** | **以实现为准 + 勘误**：workspace 以 `documentId` 为 key，切文档必重挂，面板在 workspace 内，因此关闭是冻结生命周期的必然结果；D-078 R2-1 与 `AiDirectory.tsx` 注释已改 |
+| N3 | PROJECT/TASKS/D-078 仍写 directory PARTIAL、provider NOT IMPLEMENTED | **已回写**：directory **DONE**；真实 provider **IMPLEMENTED / NOT LIVE-VERIFIED** |
+
+### 2. P3 处置
+
+| # | 问题 | 处置 |
+| --- | --- | --- |
+| N4 | m3r 证据文档仍写"4 个场景"（实际 5） | 已修（suite 注释、README 表补 `m3r/5`） |
+| N5 | §11.2 无版本影响说明 | 已补：draft 是**加性导出**，`SHARED_CONTRACT_VERSION` 仍 **8**、`PROTOCOL_VERSION` 仍 **2** |
+| N6 | remote 的 400（instruction>2000 / content>200k）显示成通用 provider 错误 | **接受为 residual**（文案打磨，不改变 fail-closed） |
+| N7 | §11.2 未规定上游 429 映射 | 已补：上游 429 → `provider`/502，直到 M4 D6；`429 rate_limited` 是**我们**的预算 |
+| N8 | `AI_PROVIDER=openai` 的生产前置未成"门" | 见 §3；TASKS M3 与 CONTRACTS §11.2 已写入硬门 |
+
+### 3. 生产启用真实 provider 的硬门（不是建议）
+
+M3 关闭**不等于**"可以开真实模型给真实用户"。在以下三项完成前，生产**不得**设置
+`AI_PROVIDER=openai`：
+
+1. **M4 D1 真实认证**：当前 demo bootstrap 无凭据证明；openai 模式下任何 session 都能消耗运营成本。
+2. **M4 D3 配置 fail-fast**：生产启动缺 required config 必须崩；且**必须拒绝 `AI_PROVIDER=stub`**。
+3. **M4 D6 滥用/成本保护**：每用户限流、并发生成上限、请求/文档大小上限、输出上限、超时。
+
+### 4. "quota" 措辞的裁定（N8 的一部分）
+
+`PROJECT.md` 的 non-goal 指的是 **billing / plans / quota 计费产品**（订阅、套餐、账单）——这些**仍然**
+不做。`D-080 §5` 与本条说的是**运营保护**（rate limit、并发上限、成本闸），它不是计费功能，而是让
+真实 provider 可以安全对外的前提。两者不冲突，文档不再互指。
+
+### 5. M3 关闭时必须保留的 16 条 residual（发布说明口径）
+
+1. 真实 OpenAI **未联网验证**（无 key；Gate 禁止联网）；适配器只有 fake-fetch 与 stub 链路的证据。
+2. `AI_PROVIDER=stub` 是**开发/证据专用**，生产必须拒绝（M4 D3）。
+3. 无真实认证：demo bootstrap 无凭据证明（M4 D1）。
+4. 无限流/配额/成本闸（M4 D6）。
+5. `commenter` 没有专用浏览器场景（与 viewer 同 `canEdit=false` 路径）。
+6. `anchor-unresolved` 只有 Node 证据（浏览器覆盖 `revision` 与 `text-mismatch`）。
+7. 离线**未知角色**的 Accept 产生本地分叉：不出站、不自愈、reload 仍在；被提升为 editor 后才补交。
+8. `Y.UndoManager.captureTimeout=500ms`：打字后立刻 Accept 可能合并为一个 undo item。
+9. `revision` 是**客户端本地**量，提案不可跨客户端共享其 `baseRevision` 语义。
+10. 主 bundle ~965 kB 未拆分。
+11. `content` 与 `documentId` 没有服务端绑定：`canRead` 不是正文出境/配额控制（客户端本来就持有正文）。
+12. AI 目录每次打开都会 `GET /api/documents`，不缓存（离线显示错误而非旧列表）；切换文档会关闭面板。
+13. `aiAcceptRequiredRole` 仍为零消费者的共享词表（当前 `canEdit` 与它等价）。
+14. 2MB JSON body 在 authz 之前解析（M4 可前移）。
+15. remote 的 400 类错误显示为通用 provider 文案（N6）。
+16. `m3r/*` 只在 `INSIGHTHUB_E2E_AI_MODE=remote` 下运行；默认 Gate 是 68，不是 73。仅 Chromium 验证。
+
+### 6. 关闭口径
+
+M3 的技术与文档条件**已满足**；唯一剩余动作是负责人对 `m3-closed` 的**一次授权**。
+关闭顺序与 M2 一致：docs-only closure commit（标 CLOSED + 引用本节）→ 确认 diff 严格 docs-only →
+在该 HEAD 上重跑四门禁 → `git tag -a m3-closed` → 校验既有 tag 未动、remote none、树 clean。
+
+**后果。** M3 从"实现完成但口径没对齐"变成"状态、证据、限制三者一致"：12 项 DONE、1 项
+IMPLEMENTED/NOT LIVE-VERIFIED、16 条 residual 全部具名且不得从发布说明里删掉。
