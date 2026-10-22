@@ -75,6 +75,13 @@ import {
 
 import type { AuthzService, AuthenticatedUser, IdentityDeps } from '../authz/public.js';
 import { resolveAuthenticatedUser } from '../authz/public.js';
+import {
+  bindRequestDocument,
+  bindRequestUser,
+  getRequestId,
+  requestLogger,
+} from '../logging/http.js';
+import { readConfiguredAiModel } from '../logging/startup.js';
 import type { AiLimits } from './limits.js';
 import {
   ServerAiProviderError,
@@ -138,6 +145,9 @@ function requireSession(identityDeps: IdentityDeps): RequestHandler {
       res.status(401).json(AI_RESPONSE_BODIES.sessionRequired);
       return;
     }
+    // M4 B9: the internal user id joins the request's log context here, so both this route's
+    // `ai.suggest` event and the final `http.request` line carry it.
+    bindRequestUser(res, user.userId);
     res.locals[AUTHENTICATED_USER_LOCAL] = user;
     next();
   };
@@ -161,26 +171,96 @@ const parseSuggestBody: RequestHandler = (req: Request, res: Response, next: Nex
   });
 };
 
+/**
+ * The closed outcome vocabulary of `ai.suggest` (M4 B9).
+ *
+ * Every terminal state of the route maps to exactly one of these, so an operator can count
+ * "requests that produced a draft" against "requests the provider failed" without parsing prose.
+ * A client abort is deliberately **not** an outcome: the caller left, no answer was delivered,
+ * and the `http.request` line's status already tells that story.
+ */
+type AiSuggestOutcome =
+  | 'ok'
+  | 'refused'
+  | 'rate_limited'
+  | 'provider_error'
+  | 'timeout'
+  | 'invalid_output';
+
+/** Severity for one AI outcome: a refusal is normal, a provider failure is an error. */
+function outcomeLevel(outcome: AiSuggestOutcome): 'info' | 'warn' | 'error' {
+  switch (outcome) {
+    case 'ok':
+    case 'refused':
+      return 'info';
+    case 'rate_limited':
+    case 'timeout':
+    case 'invalid_output':
+      return 'warn';
+    case 'provider_error':
+      return 'error';
+  }
+}
+
 function createSuggestHandler(
   authz: AuthzService,
   provider: ServerAiProvider | null,
   limits: AiLimits,
 ): RequestHandler {
+  // Configuration, not request material: the model the adapter would use. It is safe to log and
+  // is what makes "which model produced this outcome?" answerable after a deployment.
+  const model = readConfiguredAiModel(process.env);
+
   return async (req: Request, res: Response): Promise<void> => {
     const user = res.locals[AUTHENTICATED_USER_LOCAL] as AuthenticatedUser | undefined;
+    const log = requestLogger(res);
+    const requestId = getRequestId(res);
     if (user === undefined) {
       // Unreachable while `requireSession` is mounted first; kept so a future re-ordering fails
       // closed instead of authorizing an anonymous request.
+      log.warn('ai.suggest', {
+        ...(requestId === undefined ? {} : { requestId }),
+        model,
+        outcome: 'refused',
+      });
       res.status(401).json(AI_RESPONSE_BODIES.sessionRequired);
       return;
     }
 
+    /**
+     * One `ai.suggest` line per terminal state.
+     *
+     * Only correlation identifiers, the model and the outcome are emitted. The instruction, the
+     * document content, the selection text and the proposal are **never** arguments to this
+     * function (M4 B9): the operator needs to know that a suggestion was refused or produced,
+     * not what the user was writing.
+     */
+    const record = (
+      outcome: AiSuggestOutcome,
+      documentId?: string,
+      producedBy?: string,
+    ): void => {
+      log.log(outcomeLevel(outcome), 'ai.suggest', {
+        ...(requestId === undefined ? {} : { requestId }),
+        userId: user.userId,
+        ...(documentId === undefined ? {} : { documentId }),
+        // The draft names the model that actually produced it (the stub reports `stub`); for a
+        // refusal there is no draft, so the configured model is the only truthful answer.
+        model: producedBy ?? model,
+        outcome,
+      });
+    };
+
     const parsed = aiSuggestHttpRequestSchema.safeParse(req.body);
     if (!parsed.success) {
+      record('refused');
       res.status(400).json(AI_RESPONSE_BODIES.invalidRequest);
       return;
     }
     const request = parsed.data;
+    // Correlates the route event and the final `http.request` line with the document, without
+    // publishing it to the client on a refusal.
+    bindRequestDocument(res, request.documentId);
 
     // The one authorization decision. `authorizeDocument` is the same function the read
     // endpoint uses, so `not_found` here means the same thing and produces the same bytes
@@ -190,15 +270,18 @@ function createSuggestHandler(
       case 'unauthenticated':
         // The guard above normally catches this; a session that expired between the two
         // checks must still be a 401, never a provider call.
+        record('refused', request.documentId);
         res.status(401).json(AI_RESPONSE_BODIES.sessionRequired);
         return;
       case 'not_found':
+        record('refused', request.documentId);
         res.status(404).json(AI_RESPONSE_BODIES.notFound);
         return;
       case 'forbidden':
         // Unreachable by construction: canRead is the only requirement, so a caller who
         // lacks it left through `not_found` above. Kept explicit (and mapped to the §17.4
         // 403) rather than falling through to a silent 200 if the capability ladder changes.
+        record('refused', request.documentId);
         res.status(403).json(AI_RESPONSE_BODIES.forbidden);
         return;
       case 'granted':
@@ -209,6 +292,7 @@ function createSuggestHandler(
       // Missing configuration is a normal runtime state this round, not a startup failure.
       // Checked before the budget: a request that cannot reach a provider must not consume
       // the caller's hourly/daily allowance.
+      record('provider_error', request.documentId);
       res.status(503).json(AI_RESPONSE_BODIES.providerNotConfigured);
       return;
     }
@@ -219,6 +303,7 @@ function createSuggestHandler(
     // call, no abort controller, no counter.
     const budget = limits.acquire(user.userId);
     if (!budget.allowed) {
+      record('rate_limited', request.documentId);
       res.setHeader('Retry-After', String(budget.retryAfterSeconds));
       res.status(429).json(AI_RESPONSE_BODIES.rateLimited);
       return;
@@ -235,17 +320,23 @@ function createSuggestHandler(
       // able to emit something a client cannot parse.
       const validated = aiSuggestionDraftSchema.safeParse(draft);
       if (!validated.success) {
+        record('invalid_output', request.documentId);
         sendFailure(res, 502, AI_RESPONSE_BODIES.invalidProviderOutput);
         return;
       }
 
-      // A late answer for a client that already hung up is discarded, not written.
+      // A late answer for a client that already hung up is discarded, not written. No
+      // `ai.suggest` line either: there is no delivered outcome to report.
       if (controller.signal.aborted || res.writableEnded || res.socket?.destroyed === true) {
         return;
       }
+      record('ok', request.documentId, validated.data.model);
       res.status(200).json(validated.data);
     } catch (error) {
-      respondToProviderFailure(res, error);
+      const outcome = respondToProviderFailure(res, error);
+      // A client that went away mid-generation is not a provider failure; the abort signal is
+      // the only reliable way to tell the two apart here.
+      if (!controller.signal.aborted) record(outcome, request.documentId);
     } finally {
       res.off('close', abortOnClose);
       // Every path — success, typed provider failure, invalid output, timeout, abort, or an
@@ -266,27 +357,27 @@ function toProviderInput(request: AiSuggestHttpRequest): ServerAiSuggestInput {
 }
 
 /**
- * Map a provider failure to §11.2.
+ * Map a provider failure to §11.2, and report the `ai.suggest` outcome it represents.
  *
  * The provider's `message` is intentionally ignored: only `kind` is read. An unknown throw is
  * treated as `provider_error` — a bug in a provider must still fail closed, never fall
  * through to a 200 or to Express's error handler (which would be a `500`).
  */
-function respondToProviderFailure(res: Response, error: unknown): void {
+function respondToProviderFailure(res: Response, error: unknown): AiSuggestOutcome {
   if (error instanceof ServerAiProviderError) {
     switch (error.kind) {
       case 'not-configured':
         sendFailure(res, 503, AI_RESPONSE_BODIES.providerNotConfigured);
-        return;
+        return 'provider_error';
       case 'timeout':
         sendFailure(res, 504, AI_RESPONSE_BODIES.providerTimeout);
-        return;
+        return 'timeout';
       case 'provider':
         sendFailure(res, 502, AI_RESPONSE_BODIES.providerError);
-        return;
+        return 'provider_error';
       case 'invalid-output':
         sendFailure(res, 502, AI_RESPONSE_BODIES.invalidProviderOutput);
-        return;
+        return 'invalid_output';
       default: {
         // Exhaustiveness guard: a new kind must fail the typecheck instead of silently
         // becoming a 200.
@@ -297,6 +388,7 @@ function respondToProviderFailure(res: Response, error: unknown): void {
   }
 
   sendFailure(res, 502, AI_RESPONSE_BODIES.providerError);
+  return 'provider_error';
 }
 
 /** Write one fixed error body, unless the response can no longer carry it. */

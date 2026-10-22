@@ -239,7 +239,8 @@ class ChildServer {
       }, timeoutMs);
 
       const check = (): void => {
-        if (this.stdout.includes('[server] ws    ready')) {
+        // M4 B9 startup logs are structured; the listener event is the readiness signal.
+        if (this.stdout.includes('"event":"server.listening"')) {
           clearTimeout(timer);
           resolve();
         }

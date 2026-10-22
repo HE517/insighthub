@@ -476,7 +476,8 @@ describe('startup guard', () => {
 
     try {
       const deadline = Date.now() + 30_000;
-      while (!/http\s+ready/.test(stdout)) {
+      // M4 B9: startup logs are JSON lines; wait for the structured listener event.
+      while (!/"event":"server\.listening"/.test(stdout)) {
         if (child.exitCode !== null) {
           assert.fail(`the clerk server exited early (${child.exitCode})\n${stdout}\n${stderr}`);
         }
@@ -487,7 +488,7 @@ describe('startup guard', () => {
       }
 
       // The verifier was constructed and wired: startup reports the mode, not a refusal.
-      assert.match(stdout, /auth\s+ready\s+clerk/);
+      assert.match(stdout, /"event":"server\.auth_ready"[^\n]*"authMode":"clerk"/);
       assert.doesNotMatch(stderr, /CLERK_SECRET_KEY_MISSING/);
       // The secret is never logged, in either stream.
       assert.ok(!stdout.includes(secret), 'the secret reached stdout');

@@ -53,6 +53,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { resolveAuthenticatedUser, type AuthzService, type IdentityDeps } from './authz/public.js';
 import type { AuthMode, ServerConfig } from './config.js';
+import { createLogger, type Logger } from './logging/logger.js';
 import { isAllowedOrigin, readOriginHeader } from './security/origin.js';
 import { Heartbeat } from './rooms/heartbeat.js';
 import { RoomRegistry, type HydrationOutcome, type RoomRegistryOptions } from './rooms/registry.js';
@@ -130,6 +131,24 @@ export interface WebSocketServerOptions extends RoomRegistryOptions {
    * supplies it in both modes, so production cannot run the two transports on different rules.
    */
   identity?: IdentityDeps;
+  /**
+   * Structured logger for transport events (M4 B9, `docs/DECISIONS.md` D-082 §5).
+   *
+   * Emits `ws.upgrade` (per upgrade, including refusals) and `ws.join` (per accepted room join),
+   * plus transport faults. The registry keeps its own `logger` option (`RegistryLogger`) because
+   * it is a different seam with a different shape; `index.ts` wires both.
+   *
+   * A capturing sink can be injected here, exactly as with `createApp`'s `AppOptions.logger`.
+   */
+  log?: Logger;
+}
+
+/** What the upgrade resolved, carried to the `connection` handler without touching the wire. */
+interface UpgradeInfo {
+  /** Correlation id for this upgrade; also the child logger's context. */
+  readonly requestId: string;
+  /** The internal user id, absent only in the no-identity wiring. */
+  readonly userId?: string;
 }
 
 /**
@@ -189,25 +208,30 @@ export function attachWebSocketServer(
   const wss = new WebSocketServer({ noServer: true });
   const registry = new RoomRegistry(options);
   const authz: AuthzService | undefined = options.authz;
+  const log = options.log ?? createLogger();
   const heartbeat = new Heartbeat({
     ...options.heartbeat,
     onTerminate: (reason) => {
-      // Logged only: the peer that failed this check cannot be told anything.
-      console.warn(`[ws] terminating peer: ${reason}`);
+      // Structured, and only the reason code: the peer that failed this check cannot be told
+      // anything, and the operator needs the cause, not a socket's payload.
+      log.warn('ws.peer_terminated', { reason });
     },
   });
 
   /** The context for each live socket, so teardown knows which one died. */
   const contextBySocket = new Map<WebSocket, SocketContext>();
 
+  /** Per-connection logger (connection id, upgrade request id, user id from the upgrade). */
+  const loggerByContext = new Map<SocketContext, Logger>();
+
   /**
-   * Identity resolved during the upgrade, handed to the `connection` handler.
+   * Identity and correlation id resolved during the upgrade, handed to the `connection` handler.
    *
    * A `WeakMap` keyed by the upgrade request, not a header and not a query parameter: the
    * resolved `userId` never becomes part of anything the socket layer reads, so no frame,
    * header or query string can supply or override it (`docs/CONTRACTS.md` §17.5).
    */
-  const userIdByUpgrade = new WeakMap<IncomingMessage, string>();
+  const upgradeInfoByRequest = new WeakMap<IncomingMessage, UpgradeInfo>();
 
   /**
    * Refuse an upgrade with a raw HTTP response and **no** socket (`docs/CONTRACTS.md` §18.4).
@@ -290,12 +314,17 @@ export function attachWebSocketServer(
       return;
     }
 
+    // A fresh id per upgrade, never derived from a client header: two upgrades can always be
+    // told apart, and a caller cannot choose the correlation id it is logged under.
+    const requestId = randomUUID();
+
     // B4: Origin is checked **before** identity, on purpose. A cross-site page must not be able
     // to open a socket at all, and it must not be able to use the upgrade as an oracle for
     // whether the user's cookie is valid. A missing Origin means a non-browser client, which
     // carries no ambient cookie — allowed, exactly as on the HTTP side.
     const requestOrigin = readOriginHeader(request.headers.origin);
     if (requestOrigin !== undefined && !isAllowedOrigin(config.corsOrigin, requestOrigin)) {
+      log.warn('ws.upgrade', { requestId, outcome: 'rejected_origin' });
       refuseForbiddenOrigin(socket);
       return;
     }
@@ -305,6 +334,7 @@ export function attachWebSocketServer(
       if (identity !== undefined) {
         const user = await resolveAuthenticatedUser({ cookie: request.headers.cookie }, identity);
         if (user === null) {
+          log.warn('ws.upgrade', { requestId, outcome: 'unauthenticated' });
           refuseUpgrade(socket, identity.mode);
           return;
         }
@@ -314,6 +344,7 @@ export function attachWebSocketServer(
         // and the harness pass both; clerk mode is refused at construction above.
         const session = authz.resolveSession(request.headers.cookie);
         if (session === null) {
+          log.warn('ws.upgrade', { requestId, outcome: 'unauthenticated' });
           refuseUpgrade(socket, 'demo');
           return;
         }
@@ -321,12 +352,13 @@ export function attachWebSocketServer(
       }
     } catch (error) {
       // `resolveAuthenticatedUser` already maps verifier failures to `null`; reaching here means
-      // the mapping store (or another dependency) failed. Fail closed and log only the class —
+      // the mapping store (or another dependency) failed. Fail closed and record only the class —
       // never a cookie, token or SQL fragment.
-      console.warn(
-        '[ws] upgrade identity resolution failed:',
-        error instanceof Error ? error.name : 'unknown error',
-      );
+      log.warn('ws.upgrade', {
+        requestId,
+        outcome: 'unauthenticated',
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
       refuseUpgrade(socket, identity?.mode ?? 'demo');
       return;
     }
@@ -335,8 +367,20 @@ export function attachWebSocketServer(
     if (socket.destroyed) return;
 
     // Carried to the socket's context below. The cookie is not retained: only the resolved
-    // identity is, so a token cannot leak into a room, a log line or an error message.
-    if (userId !== undefined) userIdByUpgrade.set(request, userId);
+    // identity and the correlation id are, so a token cannot leak into a room, a log line or an
+    // error message.
+    upgradeInfoByRequest.set(request, {
+      requestId,
+      ...(userId === undefined ? {} : { userId }),
+    });
+
+    // The identity is an internal id (`docs/CONTRACTS.md` §18.1) and is safe to log; the cookie
+    // that produced it is not, and is not in scope here.
+    log.info('ws.upgrade', {
+      requestId,
+      outcome: 'ok',
+      ...(userId === undefined ? {} : { userId }),
+    });
 
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
@@ -347,7 +391,9 @@ export function attachWebSocketServer(
     void handleUpgrade(request, socket, head).catch((error: unknown) => {
       // `handleUpgrade` handles its own refusals; a rejection here is a genuine fault (e.g. the
       // HTTP parser rejecting `head`). Never leave the raw socket open.
-      console.error('[ws] upgrade failed:', error instanceof Error ? error.message : String(error));
+      log.error('ws.upgrade_failed', {
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
       socket.destroy();
     });
   });
@@ -470,6 +516,14 @@ export function attachWebSocketServer(
         fail(context, result.code, result.message);
         return;
       }
+      // M4 B9: request ↔ session ↔ document correlation for the collaboration plane. The
+      // identity is the one resolved at the upgrade (never a frame field), and no document
+      // content, awareness state or frame payload is logged.
+      loggerByContext.get(context)?.info('ws.join', {
+        ...(context.userId === undefined ? {} : { userId: context.userId }),
+        documentId: result.documentId,
+        role: result.role,
+      });
       // Deliberately not awaited here: membership is synchronous (that is the invariant),
       // and the acknowledgement is what waits (D-043). A rejection is impossible — the
       // barrier promises are built to settle, never to throw — but the transport still
@@ -483,10 +537,9 @@ export function attachWebSocketServer(
         requestId,
         result.role,
       ).catch((error: unknown) => {
-        console.error(
-          `[ws] connection ${context.connectionId} join acknowledgement failed:`,
-          error instanceof Error ? error.message : String(error),
-        );
+        loggerByContext.get(context)?.error('ws.join_failed', {
+          errorClass: error instanceof Error ? error.name : typeof error,
+        });
       });
       return;
     }
@@ -509,8 +562,16 @@ export function attachWebSocketServer(
     const connectionId = randomUUID();
     // The identity comes from the session resolved at the upgrade — never from the frame
     // stream. `undefined` only in the no-authz mode described on `RoomRegistryOptions.authz`.
-    const context = registry.registerSocket(ws, connectionId, userIdByUpgrade.get(request));
+    const upgradeInfo = upgradeInfoByRequest.get(request);
+    const context = registry.registerSocket(ws, connectionId, upgradeInfo?.userId);
     contextBySocket.set(ws, context);
+    // Every event for this socket shares the upgrade's `requestId` and the connection id, so a
+    // join can be traced back to the HTTP upgrade that admitted it.
+    const connectionLog = log.child({
+      connectionId,
+      ...(upgradeInfo === undefined ? {} : { requestId: upgradeInfo.requestId }),
+    });
+    loggerByContext.set(context, connectionLog);
     heartbeat.track(ws);
 
     // The M0 acceptance criterion: the client receives `{ type: "connected" }`.
@@ -540,10 +601,9 @@ export function attachWebSocketServer(
             // The registry converts its own failures into frozen codes; reaching here means
             // a genuine programming error. Log it and close, rather than leaving a socket in
             // an unknown state.
-            console.error(
-              `[ws] connection ${connectionId} binary frame failed:`,
-              error instanceof Error ? error.message : String(error),
-            );
+            connectionLog.error('ws.frame_failed', {
+              errorClass: error instanceof Error ? error.name : typeof error,
+            });
             liveContext.peer.close(1011, 'INTERNAL_ERROR');
           });
         return;
@@ -557,6 +617,7 @@ export function attachWebSocketServer(
       const liveContext = contextBySocket.get(ws);
       contextBySocket.delete(ws);
       if (liveContext === undefined) return;
+      loggerByContext.delete(liveContext);
       // The single teardown path: room membership, awareness removal + broadcast to
       // the peers that remain, context and timers all go through here. It is
       // idempotent, so a close racing the heartbeat's own termination cannot clean up
@@ -565,7 +626,8 @@ export function attachWebSocketServer(
     });
 
     ws.on('error', (error: Error) => {
-      console.error(`[ws] connection ${connectionId} error:`, error.message);
+      // The class only: an `Error` message here can carry frame bytes or a stack.
+      connectionLog.error('ws.socket_error', { errorClass: error.name });
     });
   });
 
@@ -614,9 +676,7 @@ export function attachWebSocketServer(
           resolve();
         };
         const watchdog = setTimeout(() => {
-          console.warn(
-            `[ws] shutdown waited 2000ms for ${wss.clients.size} socket(s) to close; resolving anyway`,
-          );
+          log.warn('ws.shutdown_timeout', { clients: wss.clients.size });
           settle();
         }, 2_000);
         // Reference-neutral: the stalled socket is what keeps the loop alive, so the watchdog
@@ -627,7 +687,9 @@ export function attachWebSocketServer(
           wss.close(() => settle());
         } catch (error: unknown) {
           // `wss.close()` throws if the server was never started; nothing to wait for.
-          console.warn(`[ws] shutdown: ${error instanceof Error ? error.message : 'close failed'}`);
+          log.warn('ws.shutdown_error', {
+            errorClass: error instanceof Error ? error.name : typeof error,
+          });
           settle();
         }
       }),

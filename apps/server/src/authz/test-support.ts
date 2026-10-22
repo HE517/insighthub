@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { createApp } from '../app.js';
 import type { ServerAiProvider } from '../ai/provider.js';
 import { type AuthMode, type ServerConfig } from '../config.js';
+import type { Logger } from '../logging/logger.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
 import { createAuthz, type AuthzService } from './authz.js';
@@ -44,6 +45,8 @@ export interface HarnessOptions {
   readonly verifier?: SessionVerifier | null;
   /** Injected AI provider (the same seam `createApp` exposes). `null` = not configured. */
   readonly aiProvider?: ServerAiProvider | null;
+  /** Injected structured logger (M4 B9), typically a capturing sink for assertions. */
+  readonly logger?: Logger;
 }
 
 export interface Harness {
@@ -99,7 +102,14 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const identity = createIdentityDeps(authMode, authz, identityOptions);
 
   const server: Server = createServer(
-    createApp(config, authz, options.aiProvider, identityOptions),
+    createApp(
+      config,
+      authz,
+      options.aiProvider,
+      identityOptions,
+      undefined,
+      options.logger === undefined ? {} : { logger: options.logger },
+    ),
   );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;

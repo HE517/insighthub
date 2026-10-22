@@ -226,7 +226,18 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   const identityOptions = { verifier, appUsers: isAppUserStore(store) ? store : null };
   const identity = createIdentityDeps(authMode, socketAuthz, identityOptions);
 
-  const server: Server = createServer(createApp(config, authz, undefined, identityOptions));
+  // M4 B9: when a test supplies a structured logger, both transports use it — the same wiring
+  // `index.ts` has — so an accepted upgrade can be traced back to the HTTP bootstrap request.
+  const server: Server = createServer(
+    createApp(
+      config,
+      authz,
+      undefined,
+      identityOptions,
+      undefined,
+      options.log === undefined ? {} : { logger: options.log },
+    ),
+  );
   const handle = attachWebSocketServer(server, config, {
     ...transportOptions,
     store,

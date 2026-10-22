@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { createApp } from '../app.js';
 import { createAuthz, type AuthzService } from '../authz/public.js';
 import { type ServerConfig } from '../config.js';
+import type { Logger } from '../logging/logger.js';
 import { AiLimits } from './limits.js';
 import type { ServerAiProvider } from './provider.js';
 
@@ -42,6 +43,8 @@ export interface AiTestHarnessOptions {
    * route still runs unchanged; only identity + the read decision are stubbed.
    */
   readonly authz?: AuthzService;
+  /** Injected structured logger (M4 B9), typically a capturing sink for assertions. */
+  readonly logger?: Logger;
 }
 
 /**
@@ -68,7 +71,16 @@ export async function startAiHarness(
 
   const authz = options.authz ?? (await createAuthz({ dataPath }));
   const aiLimits = options.aiLimits ?? new AiLimits();
-  const server: Server = createServer(createApp(config, authz, aiProvider, {}, aiLimits));
+  const server: Server = createServer(
+    createApp(
+      config,
+      authz,
+      aiProvider,
+      {},
+      aiLimits,
+      options.logger === undefined ? {} : { logger: options.logger },
+    ),
+  );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;

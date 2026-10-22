@@ -22,7 +22,7 @@
  */
 import path from 'node:path';
 
-import { createLogicalBackup, listBackups, pruneBackups } from './backup.js';
+import { createLogicalBackup, listBackups, pruneBackups, type LogicalBackup } from './backup.js';
 
 /** One day, the D-082 D2 cadence. */
 export const DEFAULT_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1_000;
@@ -43,6 +43,14 @@ export interface BackupSchedulerOptions {
   readonly now?: () => Date;
   /** Receives failures. The scheduler never throws. */
   readonly onError?: (error: unknown) => void;
+  /**
+   * Receives each created snapshot (M4 B9's `backup.completed {file,bytes}`).
+   *
+   * Called after the file is written and verified, before prune runs: the event is about the
+   * backup that now exists, not about retention. The payload is the `LogicalBackup` (path and
+   * byte count) — never document content.
+   */
+  readonly onCompleted?: (backup: LogicalBackup) => void;
   /**
    * Run the catch-up tick immediately (default). Tests that drive `tick()` themselves pass
    * `false` so a background tick cannot race the assertion.
@@ -75,6 +83,7 @@ export function startBackupScheduler(options: BackupSchedulerOptions): BackupSch
   const retentionDays = positiveOr(options.retentionDays, 7, 'retentionDays');
   const now = options.now ?? ((): Date => new Date());
   const onError = options.onError ?? ((): void => {});
+  const onCompleted = options.onCompleted ?? ((): void => {});
 
   let running = false;
   let stopped = false;
@@ -100,7 +109,14 @@ export function startBackupScheduler(options: BackupSchedulerOptions): BackupSch
 
     running = true;
     try {
-      await createLogicalBackup({ dataPath: options.dataPath, backupDir, now: at });
+      const created = await createLogicalBackup({
+        dataPath: options.dataPath,
+        backupDir,
+        now: at,
+      });
+      // Report the snapshot before pruning: the backup exists and is verified at this point,
+      // and a prune failure is a separate event (the `failed` catch below).
+      onCompleted(created);
       await pruneBackups({ backupDir, now: at, retentionDays });
       return 'backed-up';
     } catch (error: unknown) {
