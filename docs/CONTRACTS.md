@@ -1184,3 +1184,19 @@ must fail if demo auth is enabled. No production deployment may accept a caller-
 | `AUTH_MODE` | server | `clerk` (production) or `demo` (development/test only) |
 
 Missing required configuration in production is a **startup failure**, not a warning (§D-082 D2, M4 B3).
+**Production refusal codes (M4 B3, frozen).** With `NODE_ENV=production` the server refuses to start
+(exit code 1, stable code on stderr, no value ever printed) when:
+
+| Code | Condition |
+| --- | --- |
+| `DEMO_AUTH_IN_PRODUCTION` | `AUTH_MODE` unset/demo |
+| `AUTH_MODE_INVALID` | `AUTH_MODE` is not `clerk`/`demo` |
+| `CLERK_SECRET_KEY_MISSING` | `AUTH_MODE=clerk` and the secret is absent/blank |
+| `CORS_ORIGIN_INVALID` | missing, still `http://localhost:5173`, not `https://`, or malformed |
+| `DATA_PATH_INVALID` | data path missing, relative, or the development default |
+| `AI_PROVIDER_STUB_FORBIDDEN` | `AI_PROVIDER=stub` |
+| `OPENAI_API_KEY_MISSING` | `AI_PROVIDER=openai` and the key is absent/blank |
+| `AI_PROVIDER_INVALID` | any value other than `openai`/`disabled`/unset |
+
+Only the first refusal is reported; the gate runs before the store is opened and before `listen`.
+`AUTH_MODE` is matched case-sensitively.
