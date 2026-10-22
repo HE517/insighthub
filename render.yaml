@@ -13,9 +13,8 @@
 services:
   - type: web
     name: insighthub
-    # Render's current field name is `runtime`; `env` is its documented deprecated alias and the
-    # name this batch specifies. B11 should switch to `runtime` if the Blueprint validator warns.
-    env: node
+    # `runtime` is Render's current field name (`env` is the deprecated alias).
+    runtime: node
     region: oregon
     plan: starter
     buildCommand: pnpm install --frozen-lockfile && pnpm build

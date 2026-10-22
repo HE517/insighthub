@@ -726,6 +726,7 @@ re-sent.
 | `GET` | `/api/documents` | `200 { documents: DocumentMeta[] }` / `401` — §17.4 | M2 Phase 2 |
 | `GET` | `/api/documents/:id` | `200 DocumentMeta` / `401` / `403` / `404` — §17.4 | M2 Phase 2 |
 | `POST` | `/api/ai/suggest` | `200 AiSuggestionDraft` / `401` / `403` / `404` / `503` / `502` / `504` — §11.2 | M3 Round 2 |
+| `GET` | `/ready` | `200 { "status": "ready" }` / `503 { "status": "starting" }` — readiness, distinct from `/health` liveness | M4 B7 |
 
 Unknown paths return `404 { "error": "not_found" }`. The non-disclosure rule for
 `/api/documents/:id` (§17.4) governs which of `403` and `404` a caller may see.
@@ -1198,6 +1199,24 @@ must fail if demo auth is enabled. No production deployment may accept a caller-
 | `AUTH_MODE` | server | `clerk` (production) or `demo` (development/test only) |
 
 Missing required configuration in production is a **startup failure**, not a warning (§D-082 D2, M4 B3).
+### 18.8 Same-origin static hosting (M4 B7 — frozen)
+
+Production serves the built React app from the same origin as the API: `STATIC_DIR` (default
+`<repo>/apps/web/dist`) must exist with an `index.html` or startup fails with
+`STATIC_DIR_MISSING` (after store/authz, before `listen`). In production only, the app sets
+`trust proxy = 1` because Render terminates TLS; development/test keep it `false`.
+
+| Request | Behaviour |
+| --- | --- |
+| `GET` with `Accept: text/html`, path not starting with `/api`, `/ws`, `/health`, `/ready` | the SPA shell (`index.html`), so client routes survive a refresh |
+| `GET` under `/api` | unchanged API routing; an unknown path stays `404 {"error":"not_found"}` (JSON, non-disclosure) |
+| `/ws`, `/health`, `/ready` | reserved by path segment; never shadowed by the shell (`/apiary` is a client route) |
+| Any non-`GET` to a client route | not swallowed by the fallback; JSON `404` |
+| Build metadata (`.map`, `.ts`, `.tsx`, `.jsx`, style sources) | **not served in production** |
+
+`GET /ready` answers `200 {"status":"ready"}` once the process can serve (store and authz open, and
+in production the static build is mounted); `503 {"status":"starting"}` otherwise. `/health` remains
+the liveness probe.
 **Production refusal codes (M4 B3, frozen).** With `NODE_ENV=production` the server refuses to start
 (exit code 1, stable code on stderr, no value ever printed) when:
 
@@ -1211,6 +1230,7 @@ Missing required configuration in production is a **startup failure**, not a war
 | `AI_PROVIDER_STUB_FORBIDDEN` | `AI_PROVIDER=stub` |
 | `OPENAI_API_KEY_MISSING` | `AI_PROVIDER=openai` and the key is absent/blank |
 | `AI_PROVIDER_INVALID` | any value other than `openai`/`disabled`/unset |
+| `STATIC_DIR_MISSING` | production and the web build directory is absent or has no `index.html` (checked after store/authz, before `listen`) |
 
 Only the first refusal is reported; the gate runs before the store is opened and before `listen`.
 `AUTH_MODE` is matched case-sensitively.
