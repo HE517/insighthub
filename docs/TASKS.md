@@ -754,6 +754,19 @@ m1-closed (tag, f3c353e, immutable)
    `Awareness`。任一步跳过或颠倒都会留下"编辑器无法编译"或"调用方仍在写裸实例"的窗口。
 4. `m1-closed` tag 保持不动；M2 不动 `main`。
 
+## UI redesign（post-M2，非 milestone；D-074）
+
+状态：**INTEGRATED**（`9800612`）。**这不是新 milestone**：没有改 frozen architecture / contract / permission /
+persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
+
+| 项 | 值 |
+| --- | --- |
+| A2 | `b7dc286`：Topbar → Document Header → 单一画布；6 个白名单文件；禁区零改动 |
+| A6 | `38c41b5`：身份重挂载竞态的确定性修复 + `m3/0…m3/4` 证据；场景 **48 → 53** |
+| 最终门禁 | `9800612`：typecheck 0 / test 0（378 + 181）/ build 0 / browser **53/53** |
+| 已知残余 | **R9** remote cursor label 定位缺陷（pre-existing，**修复进行中**，A2）；**bootstrap 窗口内输入是否丢失 = 未验证**（A6 的推断，A2 正在测量；测量前不得写成事实） |
+| 结论 | UI 阶段可收口；不新增 milestone、不动任何 tag |
+
 ## M3 — AI suggestions (sketch)
 
 AI request pipeline, suggestion + diff generation, Diff Preview, Accept / Reject

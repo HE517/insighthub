@@ -2863,3 +2863,65 @@ browser 套件绿 + docs 与代码一致 + residuals 具名 + main clean + 无 u
 
 **后果。** A0 的调度权与停止条件从"每轮询问"变成"封闭清单 + 自动推进"，代价是 A0 必须自己承担
 更多判断；收益是负责人离席期间仓库仍按 Gate 前进，且回来后能从事务记录而不是聊天记录里恢复状态。
+
+---
+
+## D-074 · 2026-10-22 · accepted · UI Redesign 集成：53/53、身份重挂载竞态、两个后续项 (post-M2 UI phase)
+
+**背景。** 项目负责人在 M2 关闭后要求按冻结 prompt 做一轮低风险 UI redesign（Topbar → Document Header →
+单一画布），条件是不得改变协作/权限/协议/持久化实现。A2 交付 `b7dc286`，A0 复核后合入（`49e3f47`）。
+
+### 1. 结果
+
+| 项 | 值 |
+| --- | --- |
+| A2 | `b7dc286`：6 个白名单文件（5 改 + 新增 `DocumentHeader.tsx`），`collab/**`、`packages/shared/**`、`apps/server/**`、`tests/**`、`docs/**`、`package.json` **零改动** |
+| A0 复核 | 14 条 DOM 契约逐条在代码里确认；唯一 `connection-status`；`role: <role>` chip 仅已知角色渲染；`undo-state` 保留；按钮 `aria-label` + `readOnly \|\| !canUndo` + `runSessionHistory` |
+| A6 | `38c41b5`：只改 `tests/browser/**`，场景 **48 → 53**（新增 `m3/0…m3/4`） |
+| 集成 | `49e3f47`（A2）、`9800612`（A6） |
+| 最终门禁（`9800612`） | typecheck 0 / test 0（vitest **378** + server **181/181**）/ build 0 / browser **53/53**、0 failed、0 errored、端口释放、无遗留句柄 |
+
+### 2. 集成时抓到的竞态（既有潜在缺陷，不是 A2 引入）
+
+全量套件首次跑出 `indexeddb/B-offline-edits-survive-reopen` → `no element matches .cm-content`，但该场景
+单独跑 3/3 通过。机制（A6 用页面 instrumentation 实测，不是推测）：
+
+```text
+占位身份 session 建立 → editor mount（此时 topbar 还没有 session-identity）
+POST /api/session/bootstrap 返回 → presence user 的 id/name 变化
+useCollaborativeDocument 的 effect 依赖 userId/userName → 销毁并重建 session
+→ editor unmount → remount（这一次 mount 在 identity 之后）
+旧的 waitForSessionActive 只要求 .cm-editor + connection-status → 可在窗口内返回
+→ typeInEditor 点击 .cm-content 时元素已不存在
+```
+
+相关代码行在 A2 之前的**基线上完全相同**，所以这是被"更快首屏"放大的既有竞态。A6 的修复是**更严格的
+终态等待**（identity 已渲染 + bootstrap 结果已知 + 有 server identity 时必须等到 post-identity mount），
+**没有** retry、没有加大超时、没有 skip、没有放宽断言；并新增 `m3/0` 作为确定性回归（注入慢 bootstrap）。
+`tests/browser/README.md` 记录了"编辑器会因身份落地 remount 一次"这一**产品事实**。
+
+### 3. 三项裁定
+
+| # | 问题 | 裁定 |
+| --- | --- | --- |
+| 1 | Undo/Redo 按钮的测试选择器 | **用 `button[aria-label="Undo"]` / `"Redo"]`**，不新增 `data-testid`（避免把视觉改动扩散成测试契约）。A6 已按此实现 |
+| 2 | 是否接受 53/53 作为 UI 与后续 M3 的浏览器门 | **接受**：既有 48 场景断言零改动、新增 5 场景、A6 连续两次 53/53、A0 在 integrated HEAD 再跑一次 53/53 |
+| 3 | pre-existing 的 remote cursor label 定位缺陷 | **修**（不再只记录）。它是真实协作可用性缺陷，且可见；作为 A2 的小范围后续项，必须保留现有 `cursors/*` 场景并通过 |
+
+### 4. 一个**未验证**的产品说法（不得当成事实）
+
+A6 报告里有一句"bootstrap 慢时，用户在身份落地前输入的文字会随占位 session 销毁而丢失"。这是**推断，
+尚未测量**：占位 session 与新 session 共享同一个 `persistenceKey`（documentId），IndexedDB 里已有本地副本，
+文本很可能在新 session 加载时被重放回来；真正的风险窗口只是"teardown 前未 flush 的那几个 update"。
+因此：**在测量之前，不得把"会丢失"写进文档或发布说明**。已作为 A2 的测量项（用 A6 新增的
+`bootstrapDelayMs` 注入慢 bootstrap，在窗口内输入，再检查 durable 文本与新 session 的文本）。
+
+### 5. UI redesign 的定性
+
+这是 **presentation 阶段**，不是新 milestone：没有改任何 frozen architecture / contract / permission /
+persistence；`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。因此不新增 milestone 边界，也不关闭
+任何 milestone——M2 已 CLOSED（`m2-closed`），M3 尚未开始。
+
+**后果。** 页面从"M1/M2 诊断布局"变成三层低噪音编辑器，且这次变更**可被现有 53 个真实浏览器场景
+证伪**；代价是集成时暴露并修掉了一个既有的身份重挂载竞态，以及两个被如实记录的后续项
+（remote cursor label、bootstrap 窗口输入的去向）。
