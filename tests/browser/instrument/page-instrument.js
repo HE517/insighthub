@@ -79,11 +79,44 @@
   qa.bootstrapCalls = [];
 
   const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+  /**
+   * A compact log of the page's `/api/**` calls (M3 Round 2 remote-AI evidence).
+   *
+   * Additive and side-effect free: the wrapper still returns the **native** promise untouched,
+   * so the application observes exactly the same `Response` it would without the
+   * instrumentation. It exists so the browser evidence can state "this tab really POSTed
+   * `/api/ai/suggest` and the server really answered 200/503" instead of inferring the request
+   * from UI copy. Bounded, because a page that runs for minutes must not accumulate forever.
+   */
+  qa.apiCalls = [];
+  function apiPathOf(target) {
+    if (typeof target !== 'string') return null;
+    try {
+      return new URL(target, location.href).pathname;
+    } catch {
+      return null;
+    }
+  }
   if (nativeFetch !== null) {
     window.fetch = function qaFetch(input, init) {
       const target = typeof input === 'string' ? input : (input && input.url) || '';
       const isBootstrap =
         typeof target === 'string' && target.endsWith('/api/session/bootstrap');
+      const requestPath = apiPathOf(target);
+      const apiCall =
+        requestPath !== null && requestPath.startsWith('/api/')
+          ? {
+              method: String(init?.method ?? 'GET').toUpperCase(),
+              path: requestPath,
+              t: Date.now() - qa.startedAt,
+              status: null,
+              error: null,
+            }
+          : null;
+      if (apiCall !== null) {
+        if (qa.apiCalls.length >= 200) qa.apiCalls.shift();
+        qa.apiCalls.push(apiCall);
+      }
       if (isBootstrap) {
         qa.bootstrapCalls.push({ t: Date.now() - qa.startedAt, claimed: qa.demoIdentity });
         qa.bootstrap.calls += 1;
@@ -102,6 +135,19 @@
 
       const call = () => {
         const response = nativeFetch(input, init);
+        if (apiCall !== null) {
+          // Observe the outcome without touching the promise the application awaits. The
+          // rejection handler is mandatory: an unhandled derived rejection would surface as a
+          // page error the application never caused.
+          response.then(
+            (answer) => {
+              apiCall.status = answer.status;
+            },
+            (error) => {
+              apiCall.error = error?.name ?? 'Error';
+            },
+          );
+        }
         if (!isBootstrap) return response;
         // Record the outcome **without consuming the body the application reads**, using the
         // clone. `hasServerIdentity` mirrors `parseSessionIdentity`

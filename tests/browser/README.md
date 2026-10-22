@@ -66,6 +66,33 @@ and is never skipped. Results land in `artifacts/results.md` and
 The suite runs **serially** and owns ports `5173`/`3101`: it refuses to start when
 either is occupied, and its postflight prints whether both were released again.
 
+### Remote AI mode (M3 Round 2)
+
+The default run measures the **frozen default configuration**: `AI_PROVIDER` is not set, so
+`POST /api/ai/suggest` answers `503`, and `VITE_AI_PROVIDER` is not set, so the client uses the
+deterministic local provider. That is what the 68 default scenarios assert, so a globally remote
+Vite would invalidate them.
+
+The remote evidence is a separate group that exists only when asked for:
+
+```bash
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 72 = 68 + 4
+```
+
+`INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
+still exactly 68 scenarios and none of their assertions change. At the group boundary (the file
+sorts last) the first `m3r/*` scenario stops Vite, restarts the backend on a fresh durable store
+with `AI_PROVIDER=stub`, and starts Vite with `VITE_AI_PROVIDER=remote`; every scenario in the
+group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) works too.
+`lib/stack.mjs` owns the mechanism (`serverEnv` / `webEnv` options plus `setServerEnv` /
+`setWebEnv`; an `undefined` value deletes the key), and with no mode env the two children receive
+exactly the same environment as before.
+
+Why not start the whole run remote: the 68 scenarios measure the default configuration (intent
+chips, local copy), and one Vite process has one `VITE_AI_PROVIDER`. Why not a second stack: two
+servers on `127.0.0.1` share one browser cookie jar while sessions are process-scoped, and the
+ports would double.
+
 ### The runner must be able to exit (and now proves it)
 
 A suite that prints a summary and then never returns is not evidence of anything. The
@@ -206,6 +233,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
 | `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
 | `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
+| `33-m3-remote.mjs` | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
 
@@ -240,7 +268,17 @@ covering more than it does.
 | `m3/10-ai-viewer-cannot-accept` | F | a viewer opens the panel and generates (generation needs `canRead`), sees the proposal and diff, gets a `disabled` Accept with a title, and a programmatic `.click()` changes neither store **and emits no SYNC frame** |
 | `m3/11-ai-offline-accept-then-reconnect` | G (+ A5 P3-a) | **owner:** offline Accept changes local `Y.Text`, the durable store and a second browser profile still hold the old text, and after reconnect all three hold the expected text exactly once. **viewer who was offline:** `getRole()` is `null`, so the role chip disappears and Accept becomes clickable (R10/§17.9); the edit changes the local replica only, emits no SYNC frame, survives reconnect as a local divergence with **0 FORBIDDEN**, and is replayed by IndexedDB after a reload while the durable text never changes |
 
-Acceptance **H** is the gate itself: the scenario count is now 60, and the four commands in
+#### The remote chain and the directory (`m3r/*`, only in `INSIGHTHUB_E2E_AI_MODE=remote`)
+
+| Scenario id | What the browser + durable store actually prove |
+| --- | --- |
+| `m3r/1-remote-draft-preview-accept` | the panel has **no** `ai-intent` chips; Generate POSTs `/api/ai/suggest` and the page records `200`; the proposal's summary is the **server stub's** fixed sentence and its diff is non-empty; editor and durable text are unchanged before Accept; Accept persists the exact `toUpperCase()` result; Undo/Redo step over that one transaction |
+| `m3r/2-remote-provider-unconfigured` | with the backend on its default configuration (`AI_PROVIDER` unset) and the client still remote, Generate is answered `503`; `ai-status[data-provider-error="not-configured"]` is shown; there is no `ai-proposal`, no Accept, and neither editor nor durable text moves |
+| `m3r/3-ai-directory` | `ai-directory[data-state="ready"]` lists the server's readable documents; exactly one row carries `aria-current="true"` and it is the active document; selecting another readable row switches `active-document` and unmounts `ai-panel`; reopening marks the new document |
+| `m3r/4-ai-directory-offline` | CDP `Network.emulateNetworkConditions { offline: true }` + Refresh → `ai-directory[data-state="error"]`, `ai-directory-error[data-directory-error="network"]`, **zero** `ai-directory-item` elements; restoring the network + Refresh → `data-state="ready"` with rows, and the page recorded a real `200` |
+
+Acceptance **H** is the gate itself: the scenario count is now 68 (72 with
+`INSIGHTHUB_E2E_AI_MODE=remote`), and the four commands in
 `docs/TASKS.md` must all pass on the integrated HEAD.
 
 ### Re-aimed by D-067 §4: the UI gate removed the write, not the assertion
