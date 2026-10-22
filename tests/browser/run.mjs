@@ -275,6 +275,17 @@ async function main() {
   }
 
   const requiredPorts = [stack.webPort, stack.serverPort];
+  /**
+   * Provider configuration, reported (never asserted) so a report cannot be misread.
+   *
+   * The stack always starts with the frozen defaults: no `AI_PROVIDER` (the route answers
+   * `503`) and no `VITE_AI_PROVIDER` (the client is `local`). `INSIGHTHUB_E2E_AI_MODE=remote`
+   * only registers the `m3r/*` scenarios (`suite/33-m3-remote.mjs`), and that group switches the
+   * stack to `AI_PROVIDER=stub` + `VITE_AI_PROVIDER=remote` at its own boundary — it has to,
+   * because the other 68 scenarios are the measurements of the default configuration and must
+   * keep running against it.
+   */
+  const requestedAiMode = process.env.INSIGHTHUB_E2E_AI_MODE ?? 'default';
   const environment = {
     browser: undefined,
     headed: options.headed,
@@ -282,6 +293,11 @@ async function main() {
     node: process.version,
     appUrl: stack.appUrl,
     backendUrl: `http://127.0.0.1:${stack.serverPort}`,
+    aiMode: requestedAiMode,
+    aiProviderConfig:
+      requestedAiMode === 'remote'
+        ? 'default for the 68 default scenarios; suite/33 switches to AI_PROVIDER=stub + VITE_AI_PROVIDER=remote at the m3r group boundary'
+        : 'frozen defaults: AI_PROVIDER unset (503 path), VITE_AI_PROVIDER unset (local provider)',
     durableStore:
       'per-run temporary directory passed as INSIGHTHUB_DATA_PATH; a scenario that needs a ' +
       'clean store restarts the server on a new directory, and a restart scenario reuses the ' +

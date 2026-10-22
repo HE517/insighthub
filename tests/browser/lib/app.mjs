@@ -1160,6 +1160,18 @@ export function describeIndexedDb(report) {
  * Chaos controls
  * -------------------------------------------------------------------- */
 
+/**
+ * The `/api/**` calls this page made, as `{ method, path, status, error, t }`.
+ *
+ * Recorded by the page instrumentation (`instrument/page-instrument.js`) without changing the
+ * request the application performs. Used by the remote-AI evidence to prove the browser really
+ * called `POST /api/ai/suggest` and what the server answered (200 with the stub, 503 when the
+ * server has no provider) — UI copy alone cannot prove the request happened.
+ */
+export async function readApiCalls(page) {
+  return page.evaluate(() => (window.__qa?.apiCalls ?? []).map((call) => ({ ...call })));
+}
+
 export async function setOffline(page, value) {
   await page.evaluate((next) => {
     window.__qa.setOffline(next);

@@ -24,9 +24,28 @@
  * - `dispose()` removes every directory this stack created.
  *
  * The development default (`.insighthub-data`) is never used.
+ *
+ * ## Extra environment (M3 Round 2 remote-AI evidence)
+ *
+ * Both processes are configured entirely by environment variables, so a scenario group that
+ * needs a different configuration needs a different environment. `serverEnv` / `webEnv` are
+ * merged **after** the frozen defaults at construction, and {@link DevStack.setServerEnv} /
+ * {@link DevStack.setWebEnv} change them for the **next** start.
+ *
+ * The defaults do not change: with no `serverEnv`/`webEnv` the two children receive exactly the
+ * same variables as before (`PORT`, `HOST`, `INSIGHTHUB_*`). In particular:
+ *
+ * - `AI_PROVIDER` is **not** set, so `createServerAiProviderFromEnv` returns `null` and
+ *   `POST /api/ai/suggest` answers `503 ai_provider_not_configured`;
+ * - `VITE_AI_PROVIDER` is **not** set, so `readAiProviderMode()` returns `local`.
+ *
+ * An override whose value is `undefined` **removes** the key, including one inherited from the
+ * parent process. That is what lets a scenario prove the unconfigured-server path inside a run
+ * whose parent shell happens to export an AI variable.
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -49,7 +68,7 @@ const DEFAULT_WEB_PORT = Number(process.env.INSIGHTHUB_E2E_WEB_PORT ?? 5173);
 function run(command, args, { cwd, env } = {}) {
   const child = spawn(command, args, {
     cwd,
-    env: { ...process.env, ...env },
+    env: childEnvironment(env),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const log = { stdout: '', stderr: '' };
@@ -62,6 +81,22 @@ function run(command, args, { cwd, env } = {}) {
     if (log.stderr.length > 400_000) log.stderr = log.stderr.slice(-200_000);
   });
   return { child, log };
+}
+
+/**
+ * The environment a child process receives.
+ *
+ * `undefined` in the overrides deletes the variable instead of stringifying it to `"undefined"`:
+ * a caller that wants "AI_PROVIDER is really unset" must be able to override an inherited value.
+ * Every value that is present is passed as a string (spawn requires that).
+ */
+function childEnvironment(overrides) {
+  const environment = { ...process.env };
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    if (value === undefined) delete environment[key];
+    else environment[key] = String(value);
+  }
+  return environment;
 }
 
 /** Terminate a process and, on Windows, its whole tree. Graceful where possible. */
@@ -107,6 +142,40 @@ async function waitForHttp(url, { timeoutMs = READY_TIMEOUT_MS, label } = {}) {
   throw new Error(`${label ?? url} did not become ready within ${timeoutMs}ms: ${lastError}`);
 }
 
+/**
+ * True when a **TCP** connection to the port is refused.
+ *
+ * `isPortClosed` above probes `/health`, which is correct for the backend but wrong for the Vite
+ * port while the backend is up: Vite proxies `/health`, so the probe would report "open" even
+ * after Vite itself has exited. A restart with a different `VITE_*` environment needs the
+ * listener itself to be gone, so this asks the transport directly.
+ */
+function isTcpPortClosed(port, host = '127.0.0.1', timeoutMs = 500) {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host });
+    let settled = false;
+    const settle = (closed) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(closed);
+    };
+    socket.setTimeout(timeoutMs, () => settle(false));
+    socket.once('connect', () => settle(false));
+    socket.once('error', () => settle(true));
+  });
+}
+
+/** Wait until a TCP port refuses connections, or throw. */
+async function waitForTcpPortClosed(port, { host = '127.0.0.1', timeoutMs = 15_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isTcpPortClosed(port, host)) return;
+    await sleep(100);
+  }
+  throw new Error(`port ${port} is still accepting TCP connections`);
+}
+
 /** True when nothing accepts a TCP connection on the port. */
 export async function isPortClosed(port, host = '127.0.0.1') {
   try {
@@ -143,28 +212,89 @@ export class DevStack {
   #webPort;
   #server = null;
   #web = null;
-  #serverEnv;
-  #webEnv;
+  /**
+   * Extra variables merged **after** the frozen defaults (`PORT`, `HOST`, `INSIGHTHUB_*`).
+   *
+   * Kept as overrides rather than a resolved object so `setServerEnv({ AI_PROVIDER: undefined })`
+   * can mean "delete this key" instead of "set it to the string `undefined`".
+   */
+  #serverEnvOverrides;
+  #webEnvOverrides;
   #dataPath = null;
   /** Every temporary directory this stack created, so `dispose` can remove all of them. */
   #createdDataPaths = new Set();
   #restartCount = 0;
 
-  constructor({ repoRoot, serverPort = DEFAULT_SERVER_PORT, webPort = DEFAULT_WEB_PORT, dataPath = null }) {
+  constructor({
+    repoRoot,
+    serverPort = DEFAULT_SERVER_PORT,
+    webPort = DEFAULT_WEB_PORT,
+    dataPath = null,
+    serverEnv = {},
+    webEnv = {},
+  }) {
     this.#repoRoot = repoRoot;
     this.#serverPort = serverPort;
     this.#webPort = webPort;
-    // The Vite proxy reads `PORT` for its backend target, and the server reads the
-    // same variable for its listen port — one value keeps them in agreement.
-    this.#serverEnv = { PORT: String(serverPort), HOST: '127.0.0.1' };
+    this.#serverEnvOverrides = { ...serverEnv };
+    this.#webEnvOverrides = { ...webEnv };
+    this.#dataPath = dataPath;
+  }
+
+  /** The server environment the next start will use (defaults first, overrides last). */
+  #resolvedServerEnv() {
+    // The server reads `PORT` for its listen port; the Vite proxy reads the same variable for
+    // its backend target, so one value keeps them in agreement.
+    return { PORT: String(this.#serverPort), HOST: '127.0.0.1', ...this.#serverEnvOverrides };
+  }
+
+  /** The Vite environment the next start will use. */
+  #resolvedWebEnv() {
     // `INSIGHTHUB_WEB_PORT` is what `apps/web/vite.config.ts` listens on, so a second
     // worktree can run the suite without fighting the first one for 5173/3101.
-    this.#webEnv = {
-      PORT: String(serverPort),
+    return {
+      PORT: String(this.#serverPort),
       INSIGHTHUB_SERVER_HOST: '127.0.0.1',
-      INSIGHTHUB_WEB_PORT: String(webPort),
+      INSIGHTHUB_WEB_PORT: String(this.#webPort),
+      ...this.#webEnvOverrides,
     };
-    this.#dataPath = dataPath;
+  }
+
+  /**
+   * Change the extra server environment for the **next** server start.
+   *
+   * Takes effect on `startServer` / `restartServer`; a value of `undefined` deletes the key.
+   * Used by the M3 Round 2 remote-AI group to flip `AI_PROVIDER=stub` on and off without
+   * touching the default (unset) configuration every other scenario measures.
+   */
+  setServerEnv(overrides = {}) {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete this.#serverEnvOverrides[key];
+      else this.#serverEnvOverrides[key] = String(value);
+    }
+  }
+
+  /**
+   * Change the extra Vite environment for the **next** web start.
+   *
+   * `VITE_*` variables are inlined at module-transform time in dev, so a change only takes
+   * effect after `stopWeb()` + `startWeb()`; `undefined` deletes the key.
+   */
+  setWebEnv(overrides = {}) {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete this.#webEnvOverrides[key];
+      else this.#webEnvOverrides[key] = String(value);
+    }
+  }
+
+  /** Extra server variables currently staged for the next start (never includes port/host). */
+  get extraServerEnv() {
+    return { ...this.#serverEnvOverrides };
+  }
+
+  /** Extra Vite variables currently staged for the next start (never includes port/host). */
+  get extraWebEnv() {
+    return { ...this.#webEnvOverrides };
   }
 
   get serverPort() {
@@ -234,7 +364,7 @@ export class DevStack {
     );
     const { child, log } = run(process.execPath, [entry, 'src/index.ts'], {
       cwd: path.join(this.#repoRoot, 'apps', 'server'),
-      env: { ...this.#serverEnv, INSIGHTHUB_DATA_PATH: this.#dataPath },
+      env: { ...this.#resolvedServerEnv(), INSIGHTHUB_DATA_PATH: this.#dataPath },
     });
     this.#server = { child, log };
     this.#restartCount += 1;
@@ -263,7 +393,7 @@ export class DevStack {
     );
     const { child, log } = run(process.execPath, [entry], {
       cwd: path.join(this.#repoRoot, 'apps', 'web'),
-      env: this.#webEnv,
+      env: this.#resolvedWebEnv(),
     });
     this.#web = { child, log };
     try {
@@ -319,10 +449,18 @@ export class DevStack {
     return { before, after: this.serverPid, dataPath: this.#dataPath };
   }
 
+  /**
+   * Stop Vite and wait until its port is released.
+   *
+   * The wait is what makes a **restart with a different environment** safe: Vite runs with
+   * `strictPort`, so starting the replacement while the previous listener is still bound would
+   * fail (or, worse, be answered by the old process with the old `VITE_*` values).
+   */
   async stopWeb() {
     if (this.#web === null) return;
     await terminate(this.#web.child, { graceful: true });
     this.#web = null;
+    await waitForTcpPortClosed(this.#webPort);
   }
 
   serverLog() {
