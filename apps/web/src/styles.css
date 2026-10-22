@@ -97,6 +97,10 @@ body {
   height: 7px;
   border-radius: 50%;
   background: #fff;
+  /* The two dots drift apart by ~2px on hover and settle back on leave; no loop. */
+  transition:
+    transform 0.22s ease,
+    opacity 0.22s ease;
 }
 
 .brand__logo::before {
@@ -130,13 +134,15 @@ body {
   transition:
     background 0.18s ease,
     border-color 0.18s ease,
-    box-shadow 0.18s ease;
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .switcher:focus-within {
   background: var(--paper);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgb(57 119 233 / 10%);
+  transform: translateY(-1px);
 }
 
 .switcher__glyph {
@@ -146,7 +152,9 @@ body {
   height: 18px;
   border: 1.5px solid var(--muted);
   border-radius: 3px;
-  transition: border-color 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    transform 0.18s ease;
 }
 
 .switcher__glyph::after {
@@ -163,6 +171,16 @@ body {
 
 .switcher:focus-within .switcher__glyph {
   border-color: var(--accent);
+  transform: rotate(-3deg);
+}
+
+/*
+ * The dog-ear is an opaque notch, so it has to match the surface it sits on. The prototype
+ * hard-codes `--panel`; on focus the switcher becomes `--paper`, so the fold follows it here
+ * instead of leaving a small panel-coloured square behind.
+ */
+.switcher:focus-within .switcher__glyph::after {
+  background: var(--paper);
 }
 
 .switcher__input {
@@ -278,7 +296,8 @@ body {
   white-space: nowrap;
   transition:
     background 0.16s ease,
-    color 0.16s ease;
+    color 0.16s ease,
+    transform 0.16s ease;
 }
 
 .conn-pill__dot {
@@ -357,6 +376,14 @@ body {
 
 .collab:first-child {
   margin-left: 0;
+}
+
+/* Keyboard focus gets the same ring the buttons use; the tooltip opens via `:focus-within`.
+   `z-index` lifts the ring above the overlapping neighbour so the whole circle stays visible. */
+.collab:focus-visible {
+  z-index: 4;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .collab__avatar {
@@ -447,7 +474,9 @@ body {
 
 .doc-action:disabled {
   opacity: 0.38;
-  cursor: default;
+  /* A disabled control must not advertise itself as clickable, and no hover motion applies
+     (every hover/active rule above is scoped with `:not(:disabled)`). */
+  cursor: not-allowed;
 }
 
 .doc-action:focus-visible {
@@ -1053,6 +1082,79 @@ body {
   border-color: #f3b8b5;
   background: #fdeeee;
   color: #b3261e;
+}
+
+/* ------------------------------------------------------------------ *
+ * Micro-interactions (M3 visual fidelity)
+ *
+ * Presentation only; every value follows the interactive prototype. Two rules keep it honest:
+ * hover motion is scoped to a real fine pointer (a touch device must not get sticky hover), and
+ * nothing runs automatically — the only `infinite` animation is the Live dot, and only while a
+ * `connected` pill is hovered. `prefers-reduced-motion` below turns all of it off while leaving
+ * the states themselves visible.
+ * ------------------------------------------------------------------ */
+
+/* Notice entrance: a short, non-dismissing reveal. The notice itself stays until its state ends. */
+.offline-notice,
+.read-only-notice,
+.notice {
+  animation: ih-notice-in 0.18s ease-out;
+}
+
+@keyframes ih-notice-in {
+  from {
+    opacity: 0.65;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Hover-only pulse for the Live dot (prototype `@keyframes pulse`, green-tinted). */
+@keyframes ih-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(36 151 101 / 22%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* Logo: a small rotate/scale plus the two dots drifting apart; returns smoothly on leave. */
+  .brand:hover .brand__logo {
+    transform: rotate(-4deg) scale(1.04);
+  }
+
+  .brand:hover .brand__logo::before {
+    transform: translate(2px, -1px);
+  }
+
+  .brand:hover .brand__logo::after {
+    transform: translate(-2px, 2px);
+    opacity: 1;
+  }
+
+  /* Avatar: lift above its neighbours, grow slightly, cast a shadow; the tooltip opens too. */
+  .collab:hover {
+    z-index: 4;
+    transform: translateY(-4px) scale(1.08);
+    box-shadow: 0 8px 18px rgb(30 44 62 / 12%);
+  }
+
+  /* Only the connected ("Live") pill lifts and pulses. Offline / reconnecting / error stay still,
+     so the motion can never read as "saved" or "synced". */
+  .conn-pill[data-status='connected']:hover {
+    transform: translateY(-1px);
+  }
+
+  .conn-pill[data-status='connected']:hover .conn-pill__dot {
+    animation: ih-pulse 1.25s ease-out infinite;
+  }
 }
 
 /* ------------------------------------------------------------------ *
