@@ -22,9 +22,19 @@
  *
  * `generating` / `error` / *no proposal* are distinct, visible states (`data-phase` on the section,
  * `data-testid="ai-status"` text, and the `ai-empty` / `ai-stale` markers). "Empty suggestion" is
- * not a returned value in this design: the local provider throws a typed `no-change` error instead
- * of inventing an empty diff (see `features/ai/localProvider.ts`), so what the user sees is an
- * explanation, never a blank preview.
+ * not a returned value in this design: both providers throw/reject with a typed reason instead of
+ * inventing an empty diff (the local one `no-change`, see `features/ai/localProvider.ts`; the
+ * remote one a `RemoteProviderError`), so what the user sees is an explanation, never a blank
+ * preview.
+ *
+ * ## Two provider modes, one review surface (M3 round 2, D-080)
+ *
+ * `createAiProvider()` below selects the deterministic local provider by default, or the remote
+ * provider that calls `POST /api/ai/suggest` when `VITE_AI_PROVIDER=remote`. The proposal, diff,
+ * Accept/Reject and abort path are identical in both modes — only the source of the draft changes,
+ * and anchoring/diffing/validation are still local. Remote mode hides the local intent chips:
+ * `uppercase` / `add-todo` are the deterministic provider's private instruction syntax, not
+ * natural language, so leaving them on screen would seed an instruction the endpoint cannot honour.
  *
  * ## Cancellation (R9)
  *
@@ -61,26 +71,32 @@ import type {
 } from '@insighthub/shared';
 
 import { applySuggestion } from '../ai/apply.js';
-import { createLocalProvider, LOCAL_INTENTS, type LocalIntent } from '../ai/localProvider.js';
+import { createAiProvider, readAiProviderMode, type AiProviderMode } from '../ai/aiProvider.js';
+import { LOCAL_INTENTS, type LocalIntent } from '../ai/localProvider.js';
 import type { AiProvider, AiSuggestInput } from '../ai/provider.js';
+import { isRemoteAiProvider } from '../ai/remoteProvider.js';
 import { createLocalRevisionTracker, type LocalRevisionTracker } from '../ai/revision.js';
 import { readDocumentText } from '../ai/tools.js';
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
 import { AiDirectory } from './AiDirectory.js';
 import {
+  AI_PANEL_PROVIDER_COPY,
   APPLY_FAILURE_COPY,
   describeProviderFailure,
   type ProviderFailureCopy,
 } from './aiProposalCopy.js';
 
 /**
- * The stateless deterministic provider (`docs/DECISIONS.md` D-075 §4: no network, no model).
+ * The configured provider (`aiProvider.ts`, `docs/DECISIONS.md` D-080).
  *
- * A module-level instance is safe because `createLocalProvider()` holds no state: every output is a
- * function of the input, and the clock is only read for `createdAt`. The component also accepts a
- * `provider` prop, so a future real `AiProvider` replaces this one without touching the panel.
+ * `createAiProvider()` reads `VITE_AI_PROVIDER` and returns either the deterministic local
+ * provider (default) or the remote provider that calls `POST /api/ai/suggest`. The mode is read
+ * once at module load for the same reason: it is build-time configuration, not runtime state.
+ * The component also accepts a `provider`/`providerMode` pair, so a test or a future runtime
+ * switch can inject one without changing the default.
  */
-const localProvider = createLocalProvider();
+const defaultProviderMode = readAiProviderMode();
+const defaultProvider = createAiProvider({ mode: defaultProviderMode });
 
 /** Where the panel is in the generation/review lifecycle. Rendered as `data-phase`. */
 type PanelPhase =
@@ -118,8 +134,17 @@ export interface AiSuggestPanelProps {
    * action; the panel itself never dispatches and never owns routing.
    */
   onSelectDocument: (documentId: string) => void;
-  /** Test seam / future real provider. Defaults to the deterministic local provider. */
+  /** Test seam / future real provider. Defaults to the provider selected by the factory. */
   provider?: AiProvider;
+  /**
+   * Which provider the panel is talking to.
+   *
+   * Omitted means: infer remote from a provider created by `createRemoteProvider`, otherwise use
+   * the compile-time `VITE_AI_PROVIDER` mode. Remote mode hides the local intent chips (they are
+   * the deterministic provider's instruction syntax) and swaps the local-only copy; every testid
+   * and the abort discipline stay identical.
+   */
+  providerMode?: AiProviderMode;
 }
 
 export function AiSuggestPanel({
@@ -128,7 +153,8 @@ export function AiSuggestPanel({
   readSelection,
   onClose,
   onSelectDocument,
-  provider = localProvider,
+  provider = defaultProvider,
+  providerMode,
 }: AiSuggestPanelProps) {
   const [instruction, setInstruction] = useState('');
   const [proposal, setProposal] = useState<AiEditSuggestion | null>(null);
@@ -165,6 +191,12 @@ export function AiSuggestPanel({
   const canRead = gate.capabilities.canRead;
   const canEdit = gate.capabilities.canEdit;
   const generating = phase.kind === 'generating';
+  // Explicit mode wins; an injected provider from `createRemoteProvider` identifies itself; the
+  // remaining case is the build-time `VITE_AI_PROVIDER` selection.
+  const resolvedProviderMode =
+    providerMode ?? (isRemoteAiProvider(provider) ? 'remote' : defaultProviderMode);
+  const providerCopy = AI_PANEL_PROVIDER_COPY[resolvedProviderMode];
+  const showLocalIntents = resolvedProviderMode === 'local';
 
   const generate = useCallback((): void => {
     // The button is disabled until the counter exists; this guard covers a programmatic click.
@@ -282,10 +314,7 @@ export function AiSuggestPanel({
       <header className="ai-panel__head">
         <div className="ai-panel__heading">
           <h2 className="ai-panel__title">Ask AI</h2>
-          <p className="ai-panel__note">
-            Deterministic suggestion provider — no model. The document list is read from the server.
-            Nothing changes until you accept.
-          </p>
+          <p className="ai-panel__note">{providerCopy.note}</p>
         </div>
         <button
           type="button"
@@ -310,7 +339,7 @@ export function AiSuggestPanel({
               rows={2}
               spellCheck={false}
               value={instruction}
-              placeholder="e.g. uppercase"
+              placeholder={providerCopy.instructionPlaceholder}
               onChange={(event) => setInstruction(event.target.value)}
             />
           </label>
@@ -318,22 +347,27 @@ export function AiSuggestPanel({
           {/*
         The local provider is *not* a language model: an arbitrary sentence has no meaning to it.
         So the valid instructions are visible, clickable chips rather than documentation elsewhere.
+
+        In remote mode this intent vocabulary does not exist — the endpoint takes natural
+        language — so the chips are hidden rather than left as instructions that would fail.
       */}
-          <div className="ai-chips" role="group" aria-label="Supported instructions">
-            {LOCAL_INTENTS.map((intent) => (
-              <button
-                key={intent}
-                type="button"
-                className="ai-chip"
-                data-testid="ai-intent"
-                data-intent={intent}
-                title={INTENT_HINTS[intent]}
-                onClick={() => applyIntent(intent)}
-              >
-                {intent === 'replace-selection' ? 'replace-selection: <text>' : intent}
-              </button>
-            ))}
-          </div>
+          {showLocalIntents ? (
+            <div className="ai-chips" role="group" aria-label="Supported instructions">
+              {LOCAL_INTENTS.map((intent) => (
+                <button
+                  key={intent}
+                  type="button"
+                  className="ai-chip"
+                  data-testid="ai-intent"
+                  data-intent={intent}
+                  title={INTENT_HINTS[intent]}
+                  onClick={() => applyIntent(intent)}
+                >
+                  {intent === 'replace-selection' ? 'replace-selection: <text>' : intent}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <div className="ai-actions">
             <button
@@ -370,7 +404,7 @@ export function AiSuggestPanel({
 
           {proposal === null ? (
             <p className="ai-empty" data-testid="ai-empty">
-              {emptyCopyFor(phase)}
+              {emptyCopyFor(phase, resolvedProviderMode)}
             </p>
           ) : (
             <article
@@ -475,7 +509,7 @@ function statusTextFor(phase: PanelPhase): string {
 }
 
 /** The empty-preview copy: "nothing to review" has a reason, and the reason is shown. */
-function emptyCopyFor(phase: PanelPhase): string {
+function emptyCopyFor(phase: PanelPhase, providerMode: AiProviderMode): string {
   switch (phase.kind) {
     case 'generating':
       return 'Generating…';
@@ -490,6 +524,8 @@ function emptyCopyFor(phase: PanelPhase): string {
       return 'Nothing to review. Generate a new proposal.';
     case 'idle':
     case 'proposal':
-      return 'No proposal yet — pick a chip above (or type an instruction) and press Generate.';
+      // The idle hint points at the affordance that exists: chips in local mode, free-form text
+      // for a remote model. It never claims a chip the panel is not showing.
+      return AI_PANEL_PROVIDER_COPY[providerMode].idleEmpty;
   }
 }
