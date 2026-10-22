@@ -34,6 +34,17 @@ import { sleep } from './cdp.mjs';
 
 const READY_TIMEOUT_MS = 60_000;
 
+/**
+ * Default ports for the two real processes.
+ *
+ * Overridable so several worktrees can run the suite at the same time instead of
+ * queueing on 3101/5173: `INSIGHTHUB_E2E_SERVER_PORT=<n> INSIGHTHUB_E2E_WEB_PORT=<n>
+ * node tests/browser/run.mjs`. The Vite listen port is passed through
+ * `INSIGHTHUB_WEB_PORT` (see `webEnv` below and `apps/web/vite.config.ts`).
+ */
+const DEFAULT_SERVER_PORT = Number(process.env.INSIGHTHUB_E2E_SERVER_PORT ?? 3101);
+const DEFAULT_WEB_PORT = Number(process.env.INSIGHTHUB_E2E_WEB_PORT ?? 5173);
+
 /** Run a child, buffering its output so a failure can be explained. */
 function run(command, args, { cwd, env } = {}) {
   const child = spawn(command, args, {
@@ -139,14 +150,20 @@ export class DevStack {
   #createdDataPaths = new Set();
   #restartCount = 0;
 
-  constructor({ repoRoot, serverPort = 3101, webPort = 5173, dataPath = null }) {
+  constructor({ repoRoot, serverPort = DEFAULT_SERVER_PORT, webPort = DEFAULT_WEB_PORT, dataPath = null }) {
     this.#repoRoot = repoRoot;
     this.#serverPort = serverPort;
     this.#webPort = webPort;
     // The Vite proxy reads `PORT` for its backend target, and the server reads the
     // same variable for its listen port — one value keeps them in agreement.
     this.#serverEnv = { PORT: String(serverPort), HOST: '127.0.0.1' };
-    this.#webEnv = { PORT: String(serverPort), INSIGHTHUB_SERVER_HOST: '127.0.0.1' };
+    // `INSIGHTHUB_WEB_PORT` is what `apps/web/vite.config.ts` listens on, so a second
+    // worktree can run the suite without fighting the first one for 5173/3101.
+    this.#webEnv = {
+      PORT: String(serverPort),
+      INSIGHTHUB_SERVER_HOST: '127.0.0.1',
+      INSIGHTHUB_WEB_PORT: String(webPort),
+    };
     this.#dataPath = dataPath;
   }
 

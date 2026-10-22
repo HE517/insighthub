@@ -48,6 +48,17 @@ node tests/browser/run.mjs --headed               # watch the browser
 node tests/browser/run.mjs --keep-open            # leave the stack and browser up
 ```
 
+Running two worktrees at once: the stack binds 3101/5173 by default, which means one
+suite at a time. Override both ports instead of queueing:
+
+```bash
+INSIGHTHUB_E2E_SERVER_PORT=3401 INSIGHTHUB_E2E_WEB_PORT=5473 node tests/browser/run.mjs
+```
+
+The Vite listen port is forwarded as `INSIGHTHUB_WEB_PORT` (see
+`apps/web/vite.config.ts`); the backend port is `PORT`. Use distinct pairs per worktree
+and both suites release their own ports on exit.
+
 Exit code is `0` only when every scenario passes. A failing scenario is never retried
 and is never skipped. Results land in `artifacts/results.md` and
 `artifacts/results.json`; screenshots go to `artifacts/`.

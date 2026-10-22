@@ -13,6 +13,9 @@ import { defineConfig } from 'vite';
  */
 const backendHost = process.env.INSIGHTHUB_SERVER_HOST ?? '127.0.0.1';
 const backendPort = process.env.PORT ?? '3001';
+// The test stack can run several worktrees at once; it passes its listen port through
+// this variable so two suites never fight over 5173.
+const webPort = Number(process.env.INSIGHTHUB_WEB_PORT ?? 5173);
 const httpTarget = `http://${backendHost}:${backendPort}`;
 const wsTarget = `ws://${backendHost}:${backendPort}`;
 
@@ -23,7 +26,7 @@ export default defineConfig({
     // Windows, which makes http://127.0.0.1:5173 unreachable while the backend
     // listens on 127.0.0.1. One address family for the whole dev stack.
     host: '127.0.0.1',
-    port: 5173,
+    port: webPort,
     strictPort: true,
     proxy: {
       '/api': { target: httpTarget, changeOrigin: true },
