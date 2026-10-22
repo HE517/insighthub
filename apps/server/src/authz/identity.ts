@@ -76,7 +76,8 @@ export interface IdentityDeps {
  * A server that started in clerk mode without a verifier would answer `401` to everything —
  * indistinguishable from "nobody is signed in", and exactly the kind of wiring mistake that
  * takes hours to diagnose. Failing at construction turns it into a startup error. B2 supplies
- * the real verifier and removes the last missing piece.
+ * the real verifier (`createClerkSessionVerifier`); this guard stays because hand-built
+ * `IdentityDeps` or a future refactor must not silently drop it.
  */
 export function createIdentityDeps(
   mode: AuthMode,
@@ -86,7 +87,7 @@ export function createIdentityDeps(
   if (mode === 'clerk') {
     if (options.verifier === undefined || options.verifier === null) {
       throw new Error(
-        'AUTH_MODE=clerk requires a SessionVerifier; B2 provides createClerkSessionVerifier',
+        'AUTH_MODE=clerk requires a SessionVerifier; wire createClerkSessionVerifier at startup',
       );
     }
     if (options.appUsers === undefined || options.appUsers === null) {

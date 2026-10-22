@@ -37,8 +37,14 @@ import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
 
 import { createApp } from '../app.js';
-import { createAuthz, type AuthzService } from '../authz/public.js';
-import type { ServerConfig } from '../config.js';
+import {
+  createAuthz,
+  createIdentityDeps,
+  isAppUserStore,
+  type AuthzService,
+  type SessionVerifier,
+} from '../authz/public.js';
+import type { AuthMode, ServerConfig } from '../config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from '../persistence/document-meta.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
@@ -138,6 +144,16 @@ export interface TestServerOptions extends WebSocketServerOptions {
    * permissive.
    */
   authorization?: 'permissive' | 'enforced';
+  /**
+   * `AUTH_MODE` for **both** transports. Defaults to `demo`, so every pre-B2 caller keeps the
+   * demo-session behaviour it was written against.
+   */
+  authMode?: AuthMode;
+  /**
+   * The Clerk verifier for `authMode: 'clerk'` (a fake in tests — no network). Ignored in demo
+   * mode, where the existing session lookup is the identity source.
+   */
+  verifier?: SessionVerifier | null;
 }
 
 /**
@@ -154,6 +170,8 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     dataPath: requestedDataPath,
     store: injectedStore,
     authorization = 'permissive',
+    authMode = 'demo',
+    verifier = null,
     ...transportOptions
   } = options;
 
@@ -178,6 +196,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     host: '127.0.0.1',
     corsOrigin: 'http://localhost:5173',
     wsPath: '/ws',
+    authMode,
     // Present only when the harness opened the store, so `attachWebSocketServer`'s
     // fail-closed check (dataPath without a store) can never fire here.
     ...(dataPath === undefined ? {} : { dataPath }),
@@ -201,11 +220,18 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   // `TestServerOptions.authorization` for why the default is the permissive double.
   const socketAuthz = authorization === 'enforced' ? authz : new PermissiveTestAuthz();
 
-  const server: Server = createServer(createApp(config, authz));
+  // Both transports get the same identity seam, exactly as `index.ts` wires it. In demo mode the
+  // verifier is unused; in clerk mode the fake stands in for Clerk and the real `app_user`
+  // mapping runs against the harness store.
+  const identityOptions = { verifier, appUsers: isAppUserStore(store) ? store : null };
+  const identity = createIdentityDeps(authMode, socketAuthz, identityOptions);
+
+  const server: Server = createServer(createApp(config, authz, undefined, identityOptions));
   const handle = attachWebSocketServer(server, config, {
     ...transportOptions,
     store,
     authz: socketAuthz,
+    identity,
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 

@@ -16,12 +16,18 @@
  * - connection lifecycle: heartbeat, dead-socket termination, and one teardown path
  *   so a disappearing client cannot leave a zombie participant behind.
  *
+ * M4 B2 adds **upgrade authentication** (§18.4): the socket is established only after the
+ * same identity resolution the HTTP API uses — the demo session, or a Clerk session verified
+ * server-side and mapped to the internal `app_user` id. An unauthenticated upgrade gets a raw
+ * `401` and no socket; nothing about the identity comes from the query string or a frame.
+ *
  * This module owns **only** transport concerns: framing decisions, error delivery,
  * liveness and shutdown. Membership, Yjs state and awareness cleanup live in
  * `./rooms/**`.
  */
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 
 import {
   WS_ERROR_CODES,
@@ -37,8 +43,8 @@ import {
 } from '@insighthub/shared';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { AuthzService } from './authz/public.js';
-import type { ServerConfig } from './config.js';
+import { resolveAuthenticatedUser, type AuthzService, type IdentityDeps } from './authz/public.js';
+import type { AuthMode, ServerConfig } from './config.js';
 import { Heartbeat } from './rooms/heartbeat.js';
 import { RoomRegistry, type HydrationOutcome, type RoomRegistryOptions } from './rooms/registry.js';
 import type { SocketContext } from './rooms/context.js';
@@ -105,6 +111,16 @@ function hasKnownMessageType(raw: string): boolean {
  */
 export interface WebSocketServerOptions extends RoomRegistryOptions {
   heartbeat?: { intervalMs?: number; timeoutMs?: number };
+  /**
+   * Identity resolution for the upgrade, shared with the HTTP API (`docs/CONTRACTS.md` §18.4).
+   *
+   * The same `resolveAuthenticatedUser` the routes use decides who is opening the socket:
+   * `AUTH_MODE=demo` → the existing demo session; `AUTH_MODE=clerk` → the verified Clerk
+   * identity mapped to its internal `app_user` id. Required in clerk mode and optional in demo
+   * mode (where `authz.resolveSession` is the legacy seam when this is absent). `index.ts`
+   * supplies it in both modes, so production cannot run the two transports on different rules.
+   */
+  identity?: IdentityDeps;
 }
 
 /**
@@ -141,6 +157,26 @@ export function attachWebSocketServer(
     );
   }
 
+  const authMode: AuthMode = config.authMode ?? 'demo';
+  const identity: IdentityDeps | undefined = options.identity;
+
+  // A clerk-mode server without the shared identity resolver must not fall back to the demo
+  // session lookup: that would let a demo cookie open a production socket. Fail at construction,
+  // where the mistake is one line to fix, rather than at the upgrade, where it looks like a
+  // broken client (`docs/CONTRACTS.md` §18.4).
+  if (authMode === 'clerk' && identity === undefined) {
+    throw new Error(
+      'AUTH_MODE=clerk requires IdentityDeps for the WebSocket upgrade: ' +
+        'createIdentityDeps("clerk", authz, { verifier, appUsers }) and pass it as options.identity',
+    );
+  }
+  // The mirror image: demo deps on a clerk server would verify nothing Clerk-specific.
+  if (authMode === 'clerk' && identity !== undefined && identity.mode !== 'clerk') {
+    throw new Error(
+      'AUTH_MODE=clerk was given demo IdentityDeps; the upgrade would not verify a Clerk session',
+    );
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   const registry = new RoomRegistry(options);
   const authz: AuthzService | undefined = options.authz;
@@ -165,49 +201,113 @@ export function attachWebSocketServer(
   const userIdByUpgrade = new WeakMap<IncomingMessage, string>();
 
   /**
-   * Refuse an unauthenticated upgrade with HTTP `401` (`docs/CONTRACTS.md` §17.5).
+   * Refuse an upgrade with a raw HTTP response and **no** socket (`docs/CONTRACTS.md` §18.4).
    *
-   * Done at the HTTP level, before `handleUpgrade`, so **no WebSocket is established** — the
-   * contract's wording, and the difference between "the client is told it has no session" and
-   * "the client gets a socket that is then closed for reasons it must infer".
-   *
-   * The identity comes from the session cookie and from nowhere else: a `userId` in the query
-   * string, in a header or in a later payload is not consulted, not validated and not logged
-   * as a candidate (§17.1, §17.5).
+   * Used for the 404 (wrong path) and the 401 (no verified identity). Writing the response
+   * before `handleUpgrade` is what makes "no socket was established" true rather than "a socket
+   * opened and was then closed for reasons the client must infer".
    */
-  server.on('upgrade', (request, socket, head) => {
+  const refuseWithStatus = (socket: Duplex, response: string): void => {
+    if (socket.destroyed) return;
+    try {
+      socket.write(response);
+    } catch {
+      // The peer vanished while we were deciding; there is nothing left to tell it.
+    }
+    socket.destroy();
+  };
+
+  /**
+   * Refuse an unauthenticated upgrade with HTTP `401` (`docs/CONTRACTS.md` §17.5, §18.4).
+   *
+   * The body is the transport's counterpart of the HTTP API's: `session_required` in clerk mode
+   * (§18.3), `unauthenticated` in demo mode (§17.4). One client rule covers both transports,
+   * and a refusal never leaks why verification failed.
+   */
+  const refuseUpgrade = (socket: Duplex, mode: AuthMode): void => {
+    const body = JSON.stringify({
+      error: mode === 'clerk' ? 'session_required' : 'unauthenticated',
+    });
+    refuseWithStatus(
+      socket,
+      'HTTP/1.1 401 Unauthorized\r\n' +
+        'Connection: close\r\n' +
+        'Content-Type: application/json\r\n' +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        '\r\n' +
+        body,
+    );
+  };
+
+  /**
+   * Authenticate the upgrade, then (and only then) establish the socket.
+   *
+   * `async` because clerk mode awaits `authenticateRequest` (a network call in production).
+   * The identity is the **same** `resolveAuthenticatedUser` the HTTP routes use, so a socket can
+   * never speak for a user the API would refuse, and the value carried to the room is the
+   * mapped internal `userId` — never the Clerk `sub` (§18.1).
+   */
+  const handleUpgrade = async (
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ): Promise<void> => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
 
     if (pathname !== config.wsPath) {
-      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
-      socket.destroy();
+      refuseWithStatus(socket, 'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
 
-    if (authz !== undefined) {
-      const session = authz.resolveSession(request.headers.cookie);
-      if (session === null) {
-        // 401 with the same body shape the HTTP API uses for an unauthenticated caller
-        // (§17.4), so one client rule covers both transports.
-        const body = JSON.stringify({ error: 'unauthenticated' });
-        socket.write(
-          'HTTP/1.1 401 Unauthorized\r\n' +
-            'Connection: close\r\n' +
-            'Content-Type: application/json\r\n' +
-            `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-            '\r\n' +
-            body,
-        );
-        socket.destroy();
-        return;
+    let userId: string | undefined;
+    try {
+      if (identity !== undefined) {
+        const user = await resolveAuthenticatedUser({ cookie: request.headers.cookie }, identity);
+        if (user === null) {
+          refuseUpgrade(socket, identity.mode);
+          return;
+        }
+        userId = user.userId;
+      } else if (authz !== undefined) {
+        // Demo-only legacy seam: a caller that supplied `authz` but no identity deps. Production
+        // and the harness pass both; clerk mode is refused at construction above.
+        const session = authz.resolveSession(request.headers.cookie);
+        if (session === null) {
+          refuseUpgrade(socket, 'demo');
+          return;
+        }
+        userId = session.userId;
       }
-      // Carried to the socket's context below. The cookie is not retained: only the resolved
-      // identity is, so a token cannot leak into a room, a log line or an error message.
-      userIdByUpgrade.set(request, session.userId);
+    } catch (error) {
+      // `resolveAuthenticatedUser` already maps verifier failures to `null`; reaching here means
+      // the mapping store (or another dependency) failed. Fail closed and log only the class —
+      // never a cookie, token or SQL fragment.
+      console.warn(
+        '[ws] upgrade identity resolution failed:',
+        error instanceof Error ? error.name : 'unknown error',
+      );
+      refuseUpgrade(socket, identity?.mode ?? 'demo');
+      return;
     }
+
+    // Verification may have taken a network round trip; the client could have gone away.
+    if (socket.destroyed) return;
+
+    // Carried to the socket's context below. The cookie is not retained: only the resolved
+    // identity is, so a token cannot leak into a room, a log line or an error message.
+    if (userId !== undefined) userIdByUpgrade.set(request, userId);
 
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
+    });
+  };
+
+  server.on('upgrade', (request, socket, head) => {
+    void handleUpgrade(request, socket, head).catch((error: unknown) => {
+      // `handleUpgrade` handles its own refusals; a rejection here is a genuine fault (e.g. the
+      // HTTP parser rejecting `head`). Never leave the raw socket open.
+      console.error('[ws] upgrade failed:', error instanceof Error ? error.message : String(error));
+      socket.destroy();
     });
   });
 

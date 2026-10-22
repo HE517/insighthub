@@ -249,14 +249,12 @@ function mountAuthorizationRoutes(
 
   app.delete('/api/session', async (req: Request, res: Response) => {
     if (identityDeps.mode === 'clerk') {
-      // Clerk owns the authentication session (§18.2), so there is no server-side session to
-      // revoke here. The route still requires a verified session — it is not a public path —
-      // and clears any stale demo cookie. Actual sign-out/revocation is B2's client call.
-      const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
-      if (user === null) {
-        res.status(401).json(RESPONSE_BODIES.sessionRequired);
-        return;
-      }
+      // Clerk owns the authentication session (§18.2): there is nothing of ours to revoke.
+      // What this route does in clerk mode is **clear our own stale demo cookie**, which is not
+      // a privileged operation — the cookie is the caller's. It must therefore answer `204`
+      // even when no Clerk session is present: the client calls it right after `signOut()`, and
+      // a `401` there would leave the demo cookie behind forever (A2's B2 finding). Sign-out
+      // itself is the Clerk client call, not this route.
       res.clearCookie(SESSION_COOKIE_NAME, sessionCookieOptions(req));
       res.status(204).end();
       return;

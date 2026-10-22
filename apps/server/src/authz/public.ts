@@ -14,7 +14,7 @@
  *
  * | # | Need | Call | Semantics |
  * | --- | --- | --- | --- |
- * | 1 | upgrade: who is this? | `authz.resolveSession(request.headers.cookie)` | `AuthzSession \| null`. `null` ⇒ answer the upgrade with **HTTP 401** and establish no socket (§17.5). Never fall back to an identity from the payload/query. **M4 B1:** this is still the demo-session seam; B2 replaces the WS upgrade check with the Clerk `SessionVerifier`. |
+ * | 1 | upgrade: who is this? | **M4 B2:** `resolveAuthenticatedUser({ cookie }, identityDeps)` (`authz/identity.ts`) — the same resolver the HTTP routes use. `null` ⇒ answer the upgrade with **HTTP 401** and establish no socket (§17.5, §18.4). Never fall back to an identity from the payload/query. `authz.resolveSession` remains the demo-era seam used when no identity deps are supplied (tests only). |
  * | 2 | join: may this user read this room? | `authz.roleFor(documentId, userId)` then `authz.can(documentId, userId, 'canRead')` | `null` ⇒ **`ROOM_NOT_FOUND`** — the same code as an unknown document, because the non-disclosure rule needs one answer for both. |
  * | 3 | BINARY `SYNC`: may this user write? | `authz.can(documentId, userId, 'canEdit')` | `false` ⇒ reply **`FORBIDDEN`** (`WS_ERROR_CODES.FORBIDDEN`, non-fatal), do not apply, do not persist, do not broadcast, keep the socket open. |
  * | — | BINARY `AWARENESS` | `authz.can(documentId, userId, 'canRead')` | a viewer may publish its cursor; presence never requires `canEdit`. |
@@ -74,6 +74,21 @@ export {
   type SessionVerifier,
   type VerifiedIdentity,
 } from './session-verifier.js';
+
+/**
+ * M4 B2 — the real Clerk verifier.
+ *
+ * Exported through this surface because `index.ts` is the composition root and must not reach
+ * into `authz/**` directly (`apps/server/src/authz/public.ts` header rule). Tests inject the
+ * SDK call instead of constructing this one.
+ */
+export {
+  createClerkSessionVerifier,
+  type ClerkAuthenticateRequest,
+  type ClerkAuthObject,
+  type ClerkRequestState,
+  type ClerkSessionVerifierOptions,
+} from './clerk-session-verifier.js';
 
 export { isAppUserStore, type AppUser, type AppUserStore } from './app-user.js';
 
