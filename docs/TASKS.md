@@ -767,15 +767,29 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 | 已知残余 | **R9 remote cursor label 定位缺陷：已修复**（`95ea216`：label 改为 caret 子节点，caret 为 containing block；真实浏览器实测 label 从 `(192,128.3)` 移到 `(300.8,179.1)`、完整可见；旧实现下回归测试为红）。**残余收窄为边缘情形**：caret 距 scroller 右缘小于 label 宽度、或所在行滚到顶部时仍可能被裁（未做位置感知翻转）。**bootstrap 窗口输入丢失的推断已被测量否定**（见 D-074 §4 勘误），不列为缺陷 |
 | 结论 | UI 阶段可收口；不新增 milestone、不动任何 tag |
 
-## M3 — AI suggestions（Round 1 + 2 已实现；A7 round-2 GO WITH CONDITIONS，条件已关闭；milestone 关闭待负责人授权）
+## M3 — AI suggestions（**CLOSED — `m3-closed`**）
 
-**状态：实现与证据完整，A7 round-2 终审 GO WITH CONDITIONS（P1=0；P2=3 已关闭）。milestone 未 CLOSED，只差
-负责人一次 tag 授权。** 按 D-081 的最终 reconciliation：**12 项 DONE**（含 directory）+ **真实 provider
-= IMPLEMENTED / NOT LIVE-VERIFIED**（服务端适配器 + 失败矩阵 + 真实 HTTP via `AI_PROVIDER=stub`；**从未
-联网调用真实模型**）。已合入：`A1 锚定`（`0bb8af4`）、`A4 编排`（`987495c`）、`A2 Diff Preview`（`20c3470`）、
-`A5 权限复核`（`20a63ac`）、`A6 七个场景`（`990b9be`）、`A7 round-1`（`881dd0e`）、`A3 端点`（`37be2f0`）、
-`A2 directory`（`c18d24b`）、`A3 stub`（`5c72ae5`）、`A4 remote provider`（`860e6cd`）、`A6 remote
-证据`（`eaa55a4`）、`documentId 守卫 + 折叠光标修复`（`c335508`）。契约见 `docs/CONTRACTS.md` §11.1/§11.2。
+**状态：M3 CLOSED。** A7 round-2 终审 GO WITH CONDITIONS（P1=0，P2=3 已关闭，P3 已定级）；最终
+reconciliation 见 **D-081**：**12 项 DONE**（含 directory）+ **真实 provider = IMPLEMENTED /
+NOT LIVE-VERIFIED**（服务端适配器 + 失败矩阵 + 真实 HTTP via `AI_PROVIDER=stub`；**从未联网调用真实
+模型**）。**M3 CLOSED ≠ PRODUCTION READY**：demo bootstrap 不是真实认证、无 rate/cost 限制；生产启用
+`AI_PROVIDER=openai` 的硬门是 M4 D1/D3/D6。**16 条 residual 见 D-081 §5，不得从发布说明删除。**
+
+### M3 closure record
+
+| 项 | 值 |
+| --- | --- |
+| 终审 | A7 round-1（`881dd0e`，GO WITH CONDITIONS）+ round-2（`bb15ef8`，GO WITH CONDITIONS）；条件 C1–C6 关闭于 `3e1f7a8` |
+| 证据 | 默认浏览器 **68/68**、remote 模式 **73/73**（real Chrome + real backend + real durable store）；vitest **509**、server **229** |
+| 契约 | `SHARED_CONTRACT_VERSION` **8**、`PROTOCOL_VERSION` **2**（wire 未变）；§11.1 锚定、§11.2 draft 端点 |
+| 关闭 tag | **`m3-closed`**（annotated，指向本 closure commit；四门禁在打 tag 前于该 HEAD 重跑） |
+| 状态口径 | 12 DONE + 1 IMPLEMENTED/NOT LIVE-VERIFIED；**不宣称 production ready** |
+| 未动 refs | `m1-closed` / `m1-p0-baseline` / `m2-p0-gate` / `m2-closed`；remote 仍为 none |
+
+已合入：`A1 锚定`（`0bb8af4`）、`A4 编排`（`987495c`）、`A2 Diff Preview`（`20c3470`）、`A5 权限复核`
+（`20a63ac`）、`A6 七个场景`（`990b9be`）、`A7 round-1`（`881dd0e`）、`A3 端点`（`37be2f0`）、`A2
+directory`（`c18d24b`）、`A3 stub`（`5c72ae5`）、`A4 remote provider`（`860e6cd`）、`A6 remote 证据`
+（`eaa55a4`）、`documentId 守卫 + 折叠光标修复`（`c335508`）。契约见 `docs/CONTRACTS.md` §11.1/§11.2。
 
 ### M3 Round 2（D-078 §4）— 状态
 
