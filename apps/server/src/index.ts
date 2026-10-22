@@ -49,10 +49,15 @@ import { attachWebSocketServer } from './ws.js';
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  // The minimum M4 gate: a production process may not run on the demo fixture (B1), and clerk
-  // mode may not start without the secret key it verifies sessions with (B2). Printed as a
-  // code + a sentence, never a stack and never the value; B3 will extend this into the full
-  // production config validator.
+  // M4 B3 configuration gate (`docs/CONTRACTS.md` §18.6, D-082 D2/D3). In production every
+  // required setting is checked before anything is opened or a port is bound: demo auth, a
+  // clerk mode without its secret, a development CORS origin, a relative/ephemeral data path,
+  // the AI stub, and OpenAI with no key are all startup refusals. The gate returns a stable code
+  // and a sentence that never contains a value, so a secret cannot reach the log.
+  //
+  // It is printed here and the process exits with code 1 *before* `listen`. The exit status is
+  // set via `process.exitCode` (not `process.exit(1)`) so pending stderr writes are flushed on
+  // pipes — the observable contract is the same: no listener, exit code 1.
   const refusal = findStartupRefusal(config, process.env);
   if (refusal !== null) {
     console.error(`[server] refusing to start: ${refusal.code}`);
@@ -130,34 +135,32 @@ async function main(): Promise<void> {
   const identity = createIdentityDeps(authMode, authz, identityOptions);
 
   console.log(`[server] auth    ready  ${authMode === 'clerk' ? 'clerk' : 'demo'}`);
+  // The publishable key is a **public** value, so reporting its absence is safe. It is not a
+  // startup refusal (B3's gate covers the server-only secret); a clerk server without it fails
+  // closed per request instead.
   if (
     authMode === 'clerk' &&
     !isNonEmptyEnvironmentValue(
       process.env.CLERK_PUBLISHABLE_KEY ?? process.env.VITE_CLERK_PUBLISHABLE_KEY,
     )
   ) {
-    // Public key, not a secret — printing that it is absent is safe. `@clerk/backend` needs it
-    // to authenticate a session token; refusing to start over it is B3's configuration gate.
     console.warn(
       '[server] auth    WARNING: CLERK_PUBLISHABLE_KEY (or VITE_CLERK_PUBLISHABLE_KEY) is not set; Clerk session verification will fail closed',
     );
   }
 
   // Built here (rather than inside `createApp`) only so the startup log can say which provider
-  // is configured. A missing key is not a startup failure this round: the route answers
-  // `503 ai_provider_not_configured` (D-080 §3 puts fail-fast in M4 D3). The log prints only
-  // the provider class — never the key, the model or request material.
-  //
-  // `stub` is a development/evidence-only provider, selected only by an explicit
-  // `AI_PROVIDER=stub`. Production configuration validation (M4 D3) must reject it; until then
-  // the warning makes an accidentally stub-backed production server visible in the first lines
-  // of its log. It is never a default and never a fallback for a broken OpenAI configuration.
+  // is configured. A missing key is not a startup failure at runtime: the route answers
+  // `503 ai_provider_not_configured`. In **production** the config gate above already refuses
+  // `AI_PROVIDER=stub` and `openai` without a key, so the warning below can only appear in
+  // development/test. The log prints only the provider class — never the key, the model or
+  // request material.
   const aiKind = readServerAiProviderKind(process.env);
   const aiProvider = createServerAiProviderFromEnv(process.env);
   if (aiKind === 'stub') {
     console.log('[server] ai      ready  stub');
     console.log(
-      '[server] ai      WARNING: stub is for development/evidence only; production config validation (M4 D3) must reject AI_PROVIDER=stub',
+      '[server] ai      WARNING: stub is for development/evidence only; production rejects AI_PROVIDER=stub',
     );
   } else {
     console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
@@ -218,7 +221,8 @@ async function main(): Promise<void> {
  *
  * The publishable key is optional here: it is a **public** value (the browser already has it as
  * `VITE_CLERK_PUBLISHABLE_KEY`), but `@clerk/backend` needs it to authenticate session cookies,
- * so it is forwarded when the process has it. B3 owns making it a required production setting.
+ * so it is forwarded when the process has it. B3's production gate deliberately covers only the
+ * server-only secret; a missing publishable key stays a startup warning.
  */
 function createSessionVerifier(authMode: AuthMode, env: NodeJS.ProcessEnv): SessionVerifier | null {
   if (authMode !== 'clerk') return null;

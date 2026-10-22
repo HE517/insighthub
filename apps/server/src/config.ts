@@ -22,6 +22,15 @@ function readPort(value: string | undefined, fallback: number): number {
 export const DEFAULT_DATA_PATH = './.insighthub-data';
 
 /**
+ * Development default for `CORS_ORIGIN`, and the Vite dev-server origin.
+ *
+ * Exported so the production gate (`startup.ts`) refuses **the same string** this module would
+ * otherwise apply: duplicating the literal there would let the two drift apart and quietly stop
+ * detecting "production is still using the development default" (`docs/DECISIONS.md` D-082 D2).
+ */
+export const DEFAULT_CORS_ORIGIN = 'http://localhost:5173';
+
+/**
  * How a request becomes an identity (`docs/CONTRACTS.md` §18.6).
  *
  * `demo` is the development/test fixture (`POST /api/session/bootstrap`); `clerk` is the
@@ -34,9 +43,11 @@ export type AuthMode = 'clerk' | 'demo';
 /**
  * Parse `AUTH_MODE`.
  *
- * Unknown values resolve to `demo`, which is the safe direction for B1: in production that
- * combination is refused at startup, and in development it is the only mode that can run
- * without Clerk. Full configuration fail-fast is M4 B3 (`docs/DECISIONS.md` D-082 §5).
+ * Unknown values resolve to `demo`, which is the safe direction: in production `startup.ts`
+ * refuses that combination (and reports the unknown value as `AUTH_MODE_INVALID` from the raw
+ * environment), and in development `demo` is the only mode that can run without Clerk. The
+ * config layer stays permissive on purpose — the startup gate owns the fail-fast decision
+ * (`docs/DECISIONS.md` D-082 §5, M4 B3).
  */
 export function readAuthMode(value: string | undefined): AuthMode {
   return value === 'clerk' ? 'clerk' : 'demo';
@@ -77,7 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     port: readPort(env.PORT, 3001),
     host: env.HOST ?? '127.0.0.1',
-    corsOrigin: env.CORS_ORIGIN ?? 'http://localhost:5173',
+    corsOrigin: env.CORS_ORIGIN ?? DEFAULT_CORS_ORIGIN,
     wsPath: env.WS_PATH ?? '/ws',
     authMode: readAuthMode(env.AUTH_MODE),
     ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),

@@ -343,6 +343,19 @@ function baseConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   };
 }
 
+/**
+ * A production configuration that satisfies every M4 B3 rule, so a test can vary exactly one
+ * field. `dataPath` is only inspected textually (`isAbsolute`), never opened.
+ */
+function productionConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  return baseConfig({
+    nodeEnv: 'production',
+    corsOrigin: 'https://app.insighthub.example',
+    dataPath: join(tmpdir(), 'insighthub-production-data'),
+    ...overrides,
+  });
+}
+
 describe('startup guard', () => {
   it('reads AUTH_MODE from config, defaulting to demo', () => {
     assert.equal(loadConfig({}).authMode, 'demo');
@@ -367,18 +380,20 @@ describe('startup guard', () => {
   });
 
   it('refuses clerk mode without CLERK_SECRET_KEY, and accepts a configured secret', () => {
-    const clerk = baseConfig({ nodeEnv: 'production', authMode: 'clerk' });
+    const clerk = productionConfig({ authMode: 'clerk' });
 
     // B1's transitional `CLERK_VERIFIER_NOT_WIRED` guard is gone (B2 wires the verifier); the
-    // remaining rule is the configuration the verifier needs. An empty value counts as missing.
-    assert.equal(findStartupRefusal(clerk, {})?.code, 'AUTH_CONFIG_MISSING');
+    // remaining rule is the configuration the verifier needs. B3 named the refusal after the
+    // missing setting. An empty value counts as missing.
+    assert.equal(findStartupRefusal(clerk, {})?.code, 'CLERK_SECRET_KEY_MISSING');
     assert.equal(
       findStartupRefusal(clerk, { CLERK_SECRET_KEY: '   ' })?.code,
-      'AUTH_CONFIG_MISSING',
+      'CLERK_SECRET_KEY_MISSING',
     );
 
     // A fake (well-shaped) secret is enough for the startup rule: the real Clerk call is not
-    // made at startup, and this suite must never contact Clerk.
+    // made at startup, and this suite must never contact Clerk. The rest of this config is a
+    // complete production configuration, so no later B3 rule fires.
     assert.equal(findStartupRefusal(clerk, { CLERK_SECRET_KEY: 'sk_test_not_a_real_key' }), null);
   });
 
@@ -423,7 +438,7 @@ describe('startup guard', () => {
     });
 
     assert.equal(result.status, 1, `stdout=${result.stdout}\nstderr=${result.stderr}`);
-    assert.match(result.stderr, /refusing to start: AUTH_CONFIG_MISSING/);
+    assert.match(result.stderr, /refusing to start: CLERK_SECRET_KEY_MISSING/);
     assert.doesNotMatch(result.stdout, /http\s+ready/, 'the server must not have listened');
   });
 
@@ -473,7 +488,7 @@ describe('startup guard', () => {
 
       // The verifier was constructed and wired: startup reports the mode, not a refusal.
       assert.match(stdout, /auth\s+ready\s+clerk/);
-      assert.doesNotMatch(stderr, /AUTH_CONFIG_MISSING/);
+      assert.doesNotMatch(stderr, /CLERK_SECRET_KEY_MISSING/);
       // The secret is never logged, in either stream.
       assert.ok(!stdout.includes(secret), 'the secret reached stdout');
       assert.ok(!stderr.includes(secret), 'the secret reached stderr');
