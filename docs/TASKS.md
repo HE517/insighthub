@@ -769,8 +769,8 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 
 ## M3 — AI suggestions（FROZEN，见 D-075；NOT STARTED 实现）
 
-**状态：scope 已冻结（`docs/DECISIONS.md` D-075），实现尚未开始。** 契约见 `docs/CONTRACTS.md` §11.1
-（RelativePosition anchor + `expectedText` 三段校验，`SHARED_CONTRACT_VERSION` 7 → 8）。
+**状态：scope 已冻结（`docs/DECISIONS.md` D-075），实现进行中。** `A1 锚定/校验助手` 已交付并合入
+（`df16a73` → `0bb8af4`；`SHARED_CONTRACT_VERSION` **8**，`PROTOCOL_VERSION` 仍 2）。契约见 `docs/CONTRACTS.md` §11.1。
 
 | 项 | 内容 |
 | --- | --- |

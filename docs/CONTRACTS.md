@@ -6,7 +6,7 @@ implementing. Changing this file requires Supervisor approval (`AGENTS.md` §2).
 
 | Version | Value |
 | --- | --- |
-| Shared contract version | `SHARED_CONTRACT_VERSION = 7` |
+| Shared contract version | `SHARED_CONTRACT_VERSION = 8` |
 | WebSocket protocol version | `PROTOCOL_VERSION = 2` |
 
 Sources of truth:
@@ -560,7 +560,7 @@ the range).
 
 ```ts
 type AiOperationAnchor = {
-  /** Encoded Yjs RelativePosition (JSON of `RelativePosition.toJSON()`) for the operation start. */
+  /** Encoded Yjs RelativePosition: the JSON produced by `relativePositionToJSON` (see below). */
   start: string;
   /** Encoded RelativePosition for the end of the replaced range. Present iff `kind === 'replace'`. */
   end?: string;
@@ -572,6 +572,18 @@ type AiEditOperation =
   | { kind: 'replace'; index: number; length: number; text: string; anchor: AiOperationAnchor }
   | { kind: 'insert';  index: number; text: string; anchor: AiOperationAnchor };
 ```
+
+**Encoding (normative).** The canonical pair is Yjs's
+`relativePositionToJSON(position)` → `string` and `createRelativePositionFromJSON(string)` →
+`RelativePosition`. There is **no** instance `toJSON()` on `RelativePosition` in yjs 13.6.33;
+decoding must never throw (a malformed anchor is a validation failure, not an exception).
+
+**Boundary association (measured, yjs 13.6.33).** `start` is created with `assoc = 0` and the
+`replace` `end` with `assoc = -1`, so a peer insertion **exactly at either boundary stays outside
+the range**. With `assoc >= 0` at the end, a trailing insertion is absorbed into the range and an
+otherwise-applicable suggestion becomes falsely stale — which would violate the acceptance
+criterion "edits outside the region must still apply". The anchor module records the measurement
+table next to the constants; do not "fix" it back to `>= 0` without re-measuring.
 
 **Validation order (normative).** A suggestion is applicable only if all three hold; the first
 failure wins and the suggestion is `stale`, never partially applied:
