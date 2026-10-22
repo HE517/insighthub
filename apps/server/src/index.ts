@@ -28,6 +28,7 @@
 import { createServer } from 'node:http';
 
 import { createApp } from './app.js';
+import { createServerAiProviderFromEnv } from './ai/openai.js';
 import { createAuthz, type AuthzService } from './authz/public.js';
 import { loadConfig } from './config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
@@ -90,7 +91,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  const app = createApp(config, authz);
+  // Built here (rather than inside `createApp`) only so the startup log can say whether the
+  // AI endpoint is configured. A missing key is not a startup failure this round: the route
+  // answers `503 ai_provider_not_configured` (D-080 §3 puts fail-fast in M4 D3). The log
+  // prints only the enabled/disabled state — never the key, the model or request material.
+  const aiProvider = createServerAiProviderFromEnv(process.env);
+  console.log(`[server] ai      ${aiProvider === null ? 'disabled' : 'ready  openai'}`);
+
+  const app = createApp(config, authz, aiProvider);
   const server = createServer(app);
   // Both seams are supplied, so neither of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store or without authz is a wiring mistake, not a mode.
