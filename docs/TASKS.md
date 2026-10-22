@@ -767,7 +767,7 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 | 已知残余 | **R9 remote cursor label 定位缺陷：已修复**（`95ea216`：label 改为 caret 子节点，caret 为 containing block；真实浏览器实测 label 从 `(192,128.3)` 移到 `(300.8,179.1)`、完整可见；旧实现下回归测试为红）。**残余收窄为边缘情形**：caret 距 scroller 右缘小于 label 宽度、或所在行滚到顶部时仍可能被裁（未做位置感知翻转）。**bootstrap 窗口输入丢失的推断已被测量否定**（见 D-074 §4 勘误），不列为缺陷 |
 | 结论 | UI 阶段可收口；不新增 milestone、不动任何 tag |
 
-## M3 — AI suggestions（FROZEN，见 D-075；NOT STARTED 实现）
+## M3 — AI suggestions（FROZEN D-075；ROUND 1 已实现，A7 GO WITH CONDITIONS，milestone 未 CLOSED）
 
 **状态：scope 已冻结（`docs/DECISIONS.md` D-075），实现进行中。** `A1 锚定/校验助手` 已合入
 （`df16a73` → `0bb8af4`；`SHARED_CONTRACT_VERSION` **8**，`PROTOCOL_VERSION` 仍 2）；`A4 AI 编排层`

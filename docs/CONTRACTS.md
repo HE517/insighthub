@@ -607,7 +607,7 @@ failure wins and the suggestion is `stale`, never partially applied:
 | # | Check | Failure means |
 | --- | --- | --- |
 | 1 | `baseRevision === currentRevision` (existing `isSuggestionStale`) | the document moved on |
-| 2 | each anchor resolves against the **current** `Y.Text` (a deleted anchor resolves to nothing) | the anchored region no longer exists |
+| 2 | each anchor resolves against the **current** `Y.Text` | the anchored region can no longer be located (wrong document, or a different `Y.Text`). Note: a **deleted** region still *resolves* — Yjs keeps the position alive and maps it to a neighbouring index — so deletion is caught by check 3, not here |
 | 3 | the text at the resolved range equals `expectedText` (exact string compare) | the region moved **and** changed — the proposal's premise is gone |
 
 Checks 2 and 3 are why RelativePosition is not enough on its own: Yjs keeps a deleted position

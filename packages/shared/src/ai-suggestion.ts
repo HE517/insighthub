@@ -32,8 +32,10 @@ import { documentRoleSchema } from './permission.js';
  * The anchor of one operation (M3).
  *
  * `start` and `end` are JSON strings produced by Yjs's own
- * `relativePositionToJSON` — the same JSON shape `RelativePosition.toJSON()`
- * names in `docs/CONTRACTS.md` §11.1. They are not a private encoding.
+ * `relativePositionToJSON` and read back with `createRelativePositionFromJSON`
+ * (`docs/CONTRACTS.md` §11.1). `RelativePosition` has no instance `toJSON()` in
+ * yjs 13.6.33, so those two exported helpers are the canonical pair. This is not a
+ * private encoding.
  *
  * `end` is present **iff** the operation is a `replace`; an `insert` has no
  * replaced range. The per-operation schemas below enforce that with two

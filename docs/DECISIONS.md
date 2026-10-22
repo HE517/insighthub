@@ -2986,7 +2986,9 @@ autopilot 规则把"需要真实 credential / 外部付费服务"列为 owner de
 
 - 一个 **`AiProvider` seam**（A4 定义，客户端）；
 - 默认实现是**确定性本地 provider**（基于指令做可预测的改写/扩写/缩短，产出真实 diff 与锚点）；
-- **不新增运行时依赖、不新增 HTTP 端点、不发网络请求**；
+- **不新增运行时依赖、不新增 HTTP 端点、AI 生成本身不发网络请求**（provider 是纯函数式的本地变换）；
+- `features/ai/tools.ts` 里的 `listDocuments` 会调用**既有**的 `GET /api/documents`（M2 Phase 2 端点），
+  但 M3 round 1 的 UI **没有**接它——它是"directory 工具"的落点，等 round 2 接线或删除（F8）；
 - 换成真实模型（含服务端代理、API key、计费）属**单独 owner decision**，不在本轮。
 
 这不是"AI 功能缩水"的借口：M3 要验证的是**提案 → 审阅 → 应用 → 撤销**这条闭环与它的安全语义；
@@ -3071,9 +3073,75 @@ remote**，也不违反 R13（仍然只撤回本地/AI origin）。**不要**为
 实现；若将来确实需要更细的粒度，那是一次独立的、有证据的变更。
 
 **（b）服务端拒绝后的本地副本。** `applySuggestion` **不做**权限判定（A2 在 UI 上按
-`capabilityGate.canEdit` 门控 Accept，服务端在 WS 写路径仍是唯一权威）。已知角色为 `viewer` 但**离线**
-时点 Accept，会在本地写入并被 IndexedDB 持久化，重连后由服务端拒绝——这与"viewer 离线打字"是**同一类**
-既有本地分叉，不是 AI 新增的旁路。是否在 `applySuggestion` 加咨询性预检，由 A5 复核后裁决（见 A5 报告）。
+`capabilityGate.canEdit` 门控 Accept，服务端在 WS 写路径仍是唯一权威）。
+
+**勘误（A5/A7 实测纠正）。** 这里原先写"已知角色为 `viewer` 但离线时点 Accept"——**那个状态不存在**：
+离线时 `getRole()` 恒为 `null`（`document-session.ts`），所以离线能点 Accept 是"未知角色按可编辑处理"
+（R10 / §17.9），不是门控失效。真实行为（A5 实测、A6 的 `m3/11` phase 2 永久钉住）：未知角色离线点
+Accept → 本地写入 + IndexedDB 持久化 → **不出站**（非 editor 时服务端不发 `SyncStep1`，客户端永不被
+要求发 `SyncStep2`）→ 重连 **0 FORBIDDEN**、durable 不变 → reload 后本地分叉仍在（客户端持久化）。
+它与"离线打字"是**同一类**既有本地分叉，不是 AI 新增的旁路；**本地分叉不会自愈**。若该用户之后被提升为
+`editor` 并重新 join，这段分叉会作为普通 CRDT 更新补交落库（A5 已验证）。是否加咨询性预检见 D-077。
 
 **后果。** M3 的"提案 → 审阅 → 应用"闭环在 `20c3470` 上真实可运行，且三条最容易被写错的语义
 （锚点边界、revision 是本地量、undo 合并）都已在仓库里有据可查，而不是等着下一个人重新踩一遍。
+
+---
+
+## D-077 · 2026-10-22 · accepted · M3 round 1 终审：A7 GO WITH CONDITIONS、条件关闭、P3 处置 (M3 acceptance)
+
+**背景。** A7 对 M3 round 1 做了独立终审（`docs/agent-governance/A7-m3-final-review.md`，基线 `990b9be`）：
+**GO WITH CONDITIONS**，P1 = 0、P2 = 2、P3 = 10。它自己跑了四门禁（60/60）、21 个对抗性探针、
+以及"把 `expectedText` 比较改成恒真"的 mutation（3 文件 4 测试红、还原后绿）。本条记录条件的关闭与
+所有 P3 的处置。
+
+### 1. 两个 P2（已修，本轮 commit）
+
+| # | 问题 | 处理 |
+| --- | --- | --- |
+| F1 | `PROJECT.md` / `TASKS.md` 仍写 M3 "not started" | 改为"round 1 已实现并通过 A7 终审；milestone 尚未 CLOSED"，与 A6 的 60 场景一致 |
+| F2 | `ARCHITECTURE.md` §3 仍写"远端移动也 stale"，与 §11.1 及验收 D 冲突 | 改写为三段校验各自负责什么：revision 只抓**本地**改动、anchor 解决"位置"、`expectedText` 抓"区域内被改" |
+
+### 2. P3 逐条处置
+
+| # | 问题 | 处置 |
+| --- | --- | --- |
+| F3 | §11.1 第 2 行括号写"删除的 anchor 解析不到"（与机制相反） | **已修**：改为"删除的 anchor 仍会解析到相邻位置，由 check 3 抓" |
+| F4 | D-076 §4b 的"已知 viewer 但离线"状态不存在 | **已修**：离线 `getRole()` 为 `null`，走未知角色路径；补 A5 实测链条 |
+| F5 | D-075 §4 "不发网络请求"与 `listDocuments` 的 GET 不符 | **已修**：区分"AI 生成本身不发请求"与"directory 工具用既有端点、但 round 1 未接线" |
+| F6 | `revision.ts` 注释称 undo 会移动计数器（实测不会） | **已修注释**：undo 的 origin 是 UndoManager、不计数；后果是 fail-closed（由 anchor/expectedText 报 `text-mismatch`）。**不改行为** |
+| F7 | `ai-suggestion.ts` 注释仍提 `RelativePosition.toJSON()` | **已修**：明确该实例方法在 yjs 13.6.33 不存在，用 `relativePositionToJSON` 一对 |
+| F8 | `listDocuments` / `aiAcceptRequiredRole` 零消费者 | **记录**：前者是"directory 工具"的落点，round 2 要么接到面板、要么删除；后者是共享词表，等第一个服务端 AI 检查时使用。两者都**不得**在文档里说成"已启用" |
+| F9 | 面板未捕获 provider **同步**抛出 | **记录，不修**：唯一 provider 是 `async`，当前不可达；引入第二个 provider 时必须把 seam 收紧（`AiProvider.suggest` 实现必须是 async 或面板加 try） |
+| F10 | `applySuggestion` 在 `transact` 中途抛错无法回滚 | **记录**：Yjs `transact` 不抛业务错误；可达性为零，不在本轮加补偿逻辑 |
+| F11 | 大文本时 diff fallback 预览行数膨胀 | **记录**：只影响展示，apply 不读 diff（D-076 §4）；round 2 可加折叠 |
+| F12 | `anchor-unresolved` 与 `commenter` 无浏览器证据 | **记录**：前者有 Node 证据（A1），后者与 `viewer` 同走 `canEdit=false`（A5 代码级 + `p2` 服务端证据）。**不冒充浏览器证据** |
+
+### 3. A5 三项的书面裁定（A7 要求）
+
+| # | 问题 | 裁定 | 理由 |
+| --- | --- | --- | --- |
+| 1 | `applySuggestion` 加 `reason:'forbidden'` 咨询性预检？ | **不加** | 对离线窗口无效（`getRole()` 为 null，正是"未知角色可编辑"的语义）；在线窗口冗余（UI 已 disabled，服务端仍拒绝）；会增加第五种 reason 与文案，且**不能**声称它修复本地分叉。若将来加，必须同时写明"冗余护栏、不修复分叉"，且 `forbidden` 不得进 shared 的 `ValidationFailureReason` |
+| 2 | `aiAcceptRequiredRole` 零消费者 | **保留** | 它是共享 RBAC 词表的一部分；当前 `canEdit` 与它语义等价；删掉会让"accept 需 ≥ editor"这条契约失去可复用表达 |
+| 3 | commenter 的专用浏览器场景 | **本轮不加** | `capabilityGate` 对 commenter 与 viewer 走同一条 `canEdit=false` 路径；已有 viewer 场景 + 服务端 `p2` 证据。若 M3 round 2 引入按角色差异化的 AI 行为，再单独加 |
+
+### 4. M3 round 1 的 9 条已知限制（必须进发布说明，不得包装为"已完成"）
+
+1. provider 是**确定性本地 provider**，不是大模型；不接外部服务、无凭据、无网络生成。
+2. `anchor-unresolved` 只有 Node 证据（浏览器场景覆盖 `revision` 与 `text-mismatch`）。
+3. `commenter` 无专用浏览器场景（与 `viewer` 同路径）。
+4. 离线**未知角色**的 Accept 会产生本地分叉：不出站、不自愈、reload 后仍在；被提升为 editor 后才会补交。
+5. `Y.UndoManager.captureTimeout = 500 ms`：打字后立刻接受，可能与 AI 编辑合并成一个 undo item。
+6. `revision` 是**客户端本地**量；提案不可跨客户端共享其 `baseRevision` 语义。
+7. `listDocuments`（directory 工具）与 `aiAcceptRequiredRole` 目前无运行时消费者。
+8. diff 是行级近似（CRLF 归一、无 `\ No newline` 标记、大段有整体替换回退）；apply 不读 diff。
+9. 主 bundle 955 kB 未拆分（R7 继续）；Firefox/Safari 与跨平台未验证。
+
+### 5. 状态
+
+M3 **round 1 被接受**（A7 GO WITH CONDITIONS，条件已关闭）；**milestone 仍未 CLOSED**。
+按 D-053 §5 / D-073 §4，`m3-closed` 属新的 milestone tag，**必须由项目负责人明确授权**。
+R1–R10 与本节 9 条限制一并带入 round 2 / 发布说明，**不得因收口而删除**。
+
+**后果。** M3 的"AI 提案"从一句承诺变成一条有独立终审、有对抗性探针、有 mutation 证明、有 7 个永久浏览器
+场景的可证伪链路；代价是把"哪些事**没有**被验证"写成了 9 条具名限制，而不是留一句"基本完成"。

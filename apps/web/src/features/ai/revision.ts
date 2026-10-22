@@ -53,10 +53,15 @@ import { TRANSACTION_ORIGINS } from '@insighthub/shared';
  * that every applied update passes through, and it receives the origin — exactly the two pieces of
  * information the filter needs.
  *
- * Note that one `doc.transact(fn, origin)` call emits one `update` event, so a single user action,
- * a single undo step or one accepted suggestion moves the counter by exactly one. The counter is
- * monotonic (never decremented by undo): "the document moved on" is the question, not "is the
- * content equal".
+ * Note that one `doc.transact(fn, origin)` call emits one `update` event, so one accepted
+ * suggestion moves the counter by exactly one. An **undo does not**: `UndoManager.undo()`
+ * re-applies the change with the `UndoManager` itself as origin, which is not in
+ * `REVISION_COUNTED_ORIGINS`, so the counter stays put. That is fail-closed rather than a
+ * gap — the text did change, and the anchor + `expectedText` checks then reject a proposal
+ * that no longer matches it (a `text-mismatch`, which is the accurate reason). Do not
+ * "fix" this by counting the undo origin: it would report a local `revision` stale for an
+ * edit the author did not make either. The counter is monotonic (never decremented):
+ * "the document moved on" is the question, not "is the content equal".
  */
 
 /** Origins that count as **this client's own** document updates (`docs/CONTRACTS.md` §11.1). */

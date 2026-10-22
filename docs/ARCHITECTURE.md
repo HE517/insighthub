@@ -174,9 +174,18 @@ the M4 upgrade path (`docs/DECISIONS.md` D-004). **M3 upgrades the anchoring**
 (`docs/DECISIONS.md` D-075): each operation carries an encoded Yjs `RelativePosition`
 plus the `expectedText` it was generated from, and application requires all three
 checks — revision, anchor resolution, exact text match (`docs/CONTRACTS.md` §11.1).
-RelativePosition alone is not sufficient: a deleted range's anchor still resolves, so
-`expectedText` is what proves "this is still the text the user reviewed". Offsets
-remain in the shape for rendering the diff; they are not the authority for applying.
+
+Which check catches what matters, because they are not interchangeable:
+
+- `baseRevision` is a **client-local** counter of *this* client's own updates
+  (`local` / `ai` origins). It catches "the author changed the document since the
+  proposal" — it deliberately does **not** catch a remote peer's edit, because a
+  remote edit outside the anchored region must not invalidate a still-valid proposal.
+- A resolved anchor can point at **different text**: Yjs keeps a deleted position
+  alive and maps it to a neighbouring index. So resolution alone is not enough.
+- `expectedText` is what turns "resolved" into "still the text the user reviewed",
+  and it is what catches a peer editing *inside* the region. Offsets remain in the
+  shape for rendering the diff; they are not the authority for applying.
 
 ## 3.1 Collaborative undo rule (frozen by M1-A0)
 
