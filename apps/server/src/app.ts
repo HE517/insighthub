@@ -24,6 +24,12 @@
  * `GET /api/documents/:id` (`docs/CONTRACTS.md` §12 + §17.4). `GET /health` and `GET /api/meta`
  * are unchanged from M0.
  *
+ * ## M3 Round 2 surface
+ *
+ * `POST /api/ai/suggest` (`docs/CONTRACTS.md` §11.2) is mounted by `mountAiRoutes` with the
+ * injected provider. The route owns no authorization logic and no provider construction; both
+ * are passed in, which is what makes the failure matrix testable without a real model.
+ *
  * ## CORS
  *
  * The API is served on a different port than the Vite dev server, so the browser needs
@@ -42,6 +48,9 @@ import express, {
 
 import { PROTOCOL_VERSION, type DocumentCapability } from '@insighthub/shared';
 
+import { createServerAiProviderFromEnv } from './ai/openai.js';
+import { type ServerAiProvider } from './ai/provider.js';
+import { mountAiRoutes } from './ai/route.js';
 import {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
@@ -93,8 +102,23 @@ interface BootstrapBody {
  *
  * Absence is therefore no longer representable. `rooms/test-harness.ts` constructs a real
  * `createAuthz` (A0 integration exception, `docs/DECISIONS.md` D-062 §2).
+ *
+ * ## Why `aiProvider` is a nullable, injectable third parameter
+ *
+ * `POST /api/ai/suggest` needs a provider, and tests need to drive that route without a
+ * network (`docs/CONTRACTS.md` §11.2 "Test determinism"). The parameter is therefore an
+ * **injection seam**: `undefined` (the default) builds the provider from the environment,
+ * an explicit provider is used as-is, and an explicit `null` is "not configured". A missing
+ * `OPENAI_API_KEY` yields `null`, i.e. a runtime `503 ai_provider_not_configured`; it must
+ * not crash startup, because fail-fast configuration is M4 D3's decision
+ * (`docs/DECISIONS.md` D-080 §3). `index.ts` constructs the provider explicitly only so it
+ * can log whether AI is enabled.
  */
-export function createApp(config: ServerConfig, authz: AuthzService): Express {
+export function createApp(
+  config: ServerConfig,
+  authz: AuthzService,
+  aiProvider: ServerAiProvider | null = createServerAiProviderFromEnv(process.env),
+): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
     // rejects, and "fix it by dropping credentials" would silently turn cookies off.
@@ -121,6 +145,7 @@ export function createApp(config: ServerConfig, authz: AuthzService): Express {
   });
 
   mountAuthorizationRoutes(app, authz);
+  mountAiRoutes(app, authz, aiProvider);
 
   /* ---------------------------------------------------------------- *
    * Fallbacks
