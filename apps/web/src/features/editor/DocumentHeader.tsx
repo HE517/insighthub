@@ -23,6 +23,15 @@
  * The undo/redo buttons run the **session's** `Y.UndoManager` through `runSessionHistory`, never
  * `document.execCommand` and never a text snapshot (`AGENTS.md` R13). Disabled logic lives here so
  * a viewer can never trigger the local `Y.Text` write an undo would be.
+ *
+ * ## The "Ask AI" trigger (M3)
+ *
+ * The one new control. It toggles the proposal panel in `DocumentWorkspace`; it is a pure UI
+ * affordance and reads nothing itself. It is deliberately **not** disabled for a viewer: generating
+ * a proposal only needs `canRead` (`docs/DECISIONS.md` D-075 §3.7), and the Accept button inside
+ * the panel is what `canEdit` gates. `aria-expanded`/`aria-controls` describe the panel it owns,
+ * and no existing selector (`active-document`, `connection-status`, `role: …`,
+ * `collaborator-list`, `undo-state`, `markdown-editor`) changes shape or meaning.
  */
 import type { ConnectionStatus, CollaboratorInfo, UndoState } from '@insighthub/shared';
 
@@ -42,6 +51,10 @@ export interface DocumentHeaderProps {
   /** `runSessionHistory(readOnly, session, 'undo')` — supplied by the workspace. */
   onUndo: () => void;
   onRedo: () => void;
+  /** Whether the AI proposal panel is currently open (drives `aria-expanded`). */
+  aiOpen: boolean;
+  /** Toggle the AI proposal panel — supplied by the workspace, which owns the panel's state. */
+  onToggleAi: () => void;
 }
 
 export function DocumentHeader({
@@ -53,6 +66,8 @@ export function DocumentHeader({
   undoState,
   onUndo,
   onRedo,
+  aiOpen,
+  onToggleAi,
 }: DocumentHeaderProps) {
   const readOnly = gate.readOnly;
   const undoDisabled = readOnly || !undoState.canUndo;
@@ -74,6 +89,36 @@ export function DocumentHeader({
       )}
 
       <div className="doc-head__right">
+        {/*
+          Open/close the AI proposal panel. Labelled "Ask AI" for the human and for the browser
+          contract; enabled for every reader because generating needs only `canRead` (D-075 §3.7).
+        */}
+        <button
+          type="button"
+          className="doc-ai"
+          data-testid="ai-open"
+          aria-label="Ask AI"
+          aria-expanded={aiOpen}
+          aria-controls="ai-panel"
+          title={aiOpen ? 'Close the AI proposal panel' : 'Ask the local AI provider for an edit'}
+          onClick={onToggleAi}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M12 4l1.9 4.6L18.5 10.5l-4.6 1.9L12 17l-1.9-4.6L5.5 10.5l4.6-1.9z" />
+            <path d="M18 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" />
+          </svg>
+          <span className="doc-ai__label">Ask AI</span>
+        </button>
+
         <CollaboratorList collaborators={collaborators} localClientId={localClientId} />
 
         <div className="doc-actions" role="group" aria-label="Edit history">
