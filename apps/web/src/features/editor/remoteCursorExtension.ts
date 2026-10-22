@@ -52,14 +52,40 @@ const refreshRemoteCursors = StateEffect.define<readonly RemoteCursor[]>();
 export const CURSOR_ATTRIBUTE = 'data-insighthub-cursor';
 export const SELECTION_ATTRIBUTE = 'data-insighthub-selection';
 
-/** A zero-width, per-user-coloured caret. */
+/**
+ * A zero-width, per-user-coloured caret **with its name label as a child**.
+ *
+ * ## Why the label is nested inside the caret (DEFECT: label clipped at the top)
+ *
+ * The label is absolutely positioned, so it is placed relative to its nearest
+ * *positioned* ancestor. As a separate sibling widget it had none between itself and
+ * `.cm-scroller` (`position: relative` in CodeMirror's base theme): `left: -1px;
+ * top: -1.25em` therefore resolved against the **scroll container's** origin, not the
+ * caret's line, and the label was rendered at the editor's top-left corner and clipped
+ * by the scroller's `overflow` (~14px measured). It looked plausible in a one-line
+ * document and was wrong on every other line.
+ *
+ * Rendering the label as a child of `.cm-remote-caret` — which is itself
+ * `position: relative` (`styles.css`) — makes the caret the containing block. The label
+ * then follows the caret on every line, at every scroll offset, with no measuring and no
+ * per-update work. One decoration per peer also means the two pieces cannot drift apart
+ * when a line is re-rendered.
+ *
+ * The label is a *different* element with its own `data-insighthub-cursor="label"` (the
+ * A6 suite queries both), it is only nested, not merged into the caret's own contract.
+ */
 class CaretWidget extends WidgetType {
-  constructor(readonly color: string) {
+  constructor(
+    readonly color: string,
+    readonly name: string,
+  ) {
     super();
   }
 
   override eq(other: CaretWidget): boolean {
-    return other.color === this.color;
+    // The name participates in equality: a renamed collaborator must repaint the text,
+    // and CodeMirror reuses a widget's DOM whenever `eq` says nothing changed.
+    return other.color === this.color && other.name === this.name;
   }
 
   override toDOM(): HTMLElement {
@@ -67,35 +93,15 @@ class CaretWidget extends WidgetType {
     caret.className = 'cm-remote-caret';
     caret.setAttribute(CURSOR_ATTRIBUTE, 'caret');
     caret.style.borderLeftColor = this.color;
-    return caret;
-  }
 
-  override ignoreEvent(): boolean {
-    return false;
-  }
-}
-
-/** The name label shown at a remote caret. */
-class CursorLabelWidget extends WidgetType {
-  constructor(
-    readonly name: string,
-    readonly color: string,
-  ) {
-    super();
-  }
-
-  override eq(other: CursorLabelWidget): boolean {
-    return other.name === this.name && other.color === this.color;
-  }
-
-  override toDOM(): HTMLElement {
     const label = document.createElement('span');
     label.className = 'cm-remote-cursor-label';
     label.setAttribute(CURSOR_ATTRIBUTE, 'label');
     label.style.backgroundColor = this.color;
     // `textContent`, never `innerHTML`: the name is peer-supplied input.
     label.textContent = this.name;
-    return label;
+    caret.appendChild(label);
+    return caret;
   }
 
   override ignoreEvent(): boolean {
@@ -139,11 +145,13 @@ export function buildRemoteCursorDecorations(
     }
 
     const head = clamp(cursor.head, documentLength);
-    ranges.push(Decoration.widget({ widget: new CaretWidget(color), side: 1 }).range(head));
+    // One widget per peer: the caret owns its label (see `CaretWidget`), so the label
+    // can never be positioned against the scroller instead of the caret.
     ranges.push(
-      Decoration.widget({ widget: new CursorLabelWidget(cursor.user.name, color), side: 2 }).range(
-        head,
-      ),
+      Decoration.widget({
+        widget: new CaretWidget(color, cursor.user.name),
+        side: 1,
+      }).range(head),
     );
   }
 
