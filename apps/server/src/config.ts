@@ -5,6 +5,8 @@
  * browser can agree on ports without editing code. Defaults are intentionally
  * development-friendly and non-secret: no credentials are read here.
  */
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function readPort(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === '') return fallback;
@@ -36,6 +38,20 @@ export const DEFAULT_DATA_PATH = './.insighthub-data';
  * detecting "production is still using the development default" (`docs/DECISIONS.md` D-082 D2).
  */
 export const DEFAULT_CORS_ORIGIN = 'http://localhost:5173';
+
+/**
+ * Default directory of the built web client, served on the same origin in production
+ * (M4 B7, `docs/DECISIONS.md` D-082 D2).
+ *
+ * Derived from **this module's URL**, never from the process working directory: the deployed
+ * start command is `node apps/server/dist/index.js` from the repository root while a developer
+ * may start the server from `apps/server/`, and both must resolve to `<repo>/apps/web/dist` —
+ * the directory `apps/web/vite.config.ts` builds (`outDir: 'dist'`). The module sits at
+ * `apps/server/src|dist/`, so three parent steps reach the repository root identically in a
+ * source run (`tsx`) and in the compiled output.
+ */
+const REPOSITORY_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+export const DEFAULT_STATIC_DIR = join(REPOSITORY_ROOT, 'apps', 'web', 'dist');
 
 /**
  * How a request becomes an identity (`docs/CONTRACTS.md` §18.6).
@@ -107,6 +123,15 @@ export interface ServerConfig {
   aiRateLimitPerDay?: number;
   aiMaxConcurrentPerUser?: number;
   aiMaxConcurrentServer?: number;
+  /**
+   * Directory holding the built web client served on the same origin (M4 B7, `STATIC_DIR`).
+   *
+   * Optional at the type level only so a hand-built config (every test harness) can describe a
+   * transport without a web build. `loadConfig` always sets it — defaulting to
+   * {@link DEFAULT_STATIC_DIR} — and the production startup check refuses to listen when the
+   * directory or its `index.html` is absent (`STATIC_DIR_MISSING`).
+   */
+  staticDir?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -136,5 +161,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       env.INSIGHTHUB_DATA_PATH !== undefined && env.INSIGHTHUB_DATA_PATH.trim() !== ''
         ? env.INSIGHTHUB_DATA_PATH
         : DEFAULT_DATA_PATH,
+    // Same rule for the web client directory. The resolved value is what the production gate
+    // and the static handler use, so a test can point both at a temporary build directory
+    // through the ordinary environment variable.
+    staticDir:
+      env.STATIC_DIR !== undefined && env.STATIC_DIR.trim() !== ''
+        ? env.STATIC_DIR
+        : DEFAULT_STATIC_DIR,
   };
 }

@@ -14,6 +14,19 @@
  * same reasoning applies to authorization (M2 Phase 2): a server that cannot resolve roles would
  * answer `404` for everything, which looks like a data problem for hours.
  *
+ * M4 B3 added the production configuration gate as step 1, and M4 B7 adds the static-build check
+ * as the last step before `listen` (D-082 D2):
+ *
+ * ```text
+ * config gate  →  store  →  authz  →  static build check  →  listen
+ * ```
+ *
+ * The static check is last on purpose. It is the cheapest failure to fix, but it only matters
+ * once the process can actually serve data, and running it after the store has proved itself
+ * means the operator's log already says whether the durable layer opened. It is still before
+ * `listen`: a deployment whose web build is missing must not answer the Render health check as
+ * if it were serving the product.
+ *
  * The capability check itself lives in `persistence/sqlite-runtime.ts`, which is also why
  * this file awaits it: a static import of a missing built-in would throw during ESM
  * evaluation, before any diagnostic could be printed.
@@ -43,6 +56,7 @@ import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/documen
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
 import type { DocumentStore } from './persistence/types.js';
+import { resolveStaticAssets, type StaticAssets } from './static-hosting.js';
 import { findStartupRefusal } from './startup.js';
 import { attachWebSocketServer } from './ws.js';
 
@@ -118,6 +132,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  // M4 B7 (D-082 D2): production serves the React build from this process, so a build that is
+  // absent or has no `index.html` is a **startup refusal**, not a runtime 404. It runs after the
+  // store and authz are open — the order an operator debugs a failed deploy in — and before
+  // `listen`, so a process that cannot serve the product never looks healthy to Render.
+  //
+  // Outside production a missing build only disables static hosting: the Vite dev server serves
+  // the client, and every API test / browser-suite run must keep working without running the web
+  // build first. That is why the refusal is production-only rather than the check being skipped.
+  let staticAssets: StaticAssets | null = null;
+  const staticResolution = resolveStaticAssets(config.staticDir);
+  if (staticResolution.kind === 'available') {
+    staticAssets = staticResolution.assets;
+    console.log(`[server] static ready  ${staticAssets.directory}`);
+  } else if (config.nodeEnv === 'production') {
+    console.error(`[server] refusing to start: ${staticResolution.refusal.code}`);
+    console.error(`[server]   ${staticResolution.refusal.message}`);
+    authz.close();
+    await store.close();
+    process.exitCode = 1;
+    return;
+  } else {
+    console.warn('[server] static disabled: no web client build found (development/test only)');
+  }
+
   // The identity seam is built **once** and handed to both transports, so a socket and an HTTP
   // request cannot disagree about who a cookie denotes (`docs/CONTRACTS.md` §18.4). In demo mode
   // it is the pre-B1 session lookup; in clerk mode it is `createClerkSessionVerifier` plus the
@@ -166,7 +204,7 @@ async function main(): Promise<void> {
     console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
   }
 
-  const app = createApp(config, authz, aiProvider, identityOptions);
+  const app = createApp(config, authz, aiProvider, identityOptions, undefined, { staticAssets });
   const server = createServer(app);
   // All three seams are supplied, so none of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store, without authz, or a clerk-mode socket without an
@@ -183,6 +221,7 @@ async function main(): Promise<void> {
   console.log(`[server] http  ready  http://${config.host}:${port}`);
   console.log(`[server] ws    ready  ws://${config.host}:${port}${config.wsPath}`);
   console.log(`[server] health       http://${config.host}:${port}/health`);
+  console.log(`[server] ready        http://${config.host}:${port}/ready`);
 
   let shuttingDown = false;
 

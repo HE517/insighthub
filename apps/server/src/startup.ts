@@ -32,6 +32,15 @@
  * - What this gate does **not** do: reject an insecure-but-https CORS origin, validate the Clerk
  *   publishable key, enforce AI rate limits, or migrate data. Those are B4, B5 and B6.
  *
+ * ## B7 static check is a separate step, same vocabulary
+ *
+ * Whether the built web client exists (`STATIC_DIR` containing `index.html`) cannot be answered
+ * without touching the filesystem, so it is not part of this pure function. `static-hosting.ts`
+ * owns that check and returns the same `{ code, message }` shape; `index.ts` runs it **after**
+ * the store and authz are open and **before** `listen`, and reports `STATIC_DIR_MISSING` through
+ * the identical `refusing to start: <CODE>` line. The code is listed in
+ * {@link StartupRefusalCode} so there is one vocabulary rather than two.
+ *
  * ## Ordering
  *
  * Checks run in the order a reader would debug them: identity first (nothing else matters if the
@@ -59,7 +68,16 @@ export type StartupRefusalCode =
   | 'DATA_PATH_INVALID'
   | 'AI_PROVIDER_STUB_FORBIDDEN'
   | 'OPENAI_API_KEY_MISSING'
-  | 'AI_PROVIDER_INVALID';
+  | 'AI_PROVIDER_INVALID'
+  /**
+   * M4 B7. Produced by `static-hosting.ts`'s filesystem check rather than by
+   * {@link findStartupRefusal}, which stays pure: whether the built web client exists is an I/O
+   * question. The entrypoint runs that check as its own step after the store and authz are open
+   * and before `listen`, and reports the code with the same `refusing to start: <CODE>` shape
+   * asserted for every code above. It is in this vocabulary so operators and tests have exactly
+   * one list of startup refusal codes.
+   */
+  | 'STATIC_DIR_MISSING';
 
 export interface StartupRefusal {
   readonly code: StartupRefusalCode;
