@@ -501,14 +501,14 @@ describe('production entrypoint — STATIC_DIR_MISSING (M4 B7)', () => {
       );
 
       // Startup order: the store and authorization subsystem were already open when the static
-      // check refused, and the server never listened.
-      assert.match(result.stdout, /store\s+ready/);
-      assert.match(result.stdout, /authz\s+ready/);
-      assert.doesNotMatch(result.stdout, /http\s+ready/, 'the server must not have listened');
+      // check refused, and the server never listened. Startup logs are structured (M4 B9), so the
+      // assertion is on the event names, not on prose.
+      assert.match(result.stdout, /"event":"server\.store_ready"/);
+      assert.match(result.stdout, /"event":"server\.authz_ready"/);
       assert.doesNotMatch(
         result.stdout,
-        /\[server\] ready\s+http/,
-        'no readiness endpoint was announced',
+        /"event":"server\.listening"/,
+        'the server must not have listened',
       );
 
       // No configured value or secret may reach either stream.
@@ -530,7 +530,7 @@ describe('production entrypoint — STATIC_DIR_MISSING (M4 B7)', () => {
       const result = runProductionEntrypoint(staticDir, childDataPath);
       assert.equal(result.status, 1);
       assert.match(result.stderr, /refusing to start: STATIC_DIR_MISSING/);
-      assert.doesNotMatch(result.stdout, /http\s+ready/);
+      assert.doesNotMatch(result.stdout, /"event":"server\.listening"/);
     } finally {
       await rm(childDataPath, { recursive: true, force: true });
     }

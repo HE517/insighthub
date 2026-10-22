@@ -39,6 +39,7 @@
  * the join decision and every BINARY frame get the same answer the HTTP API gets.
  */
 import { createServer } from 'node:http';
+import { basename } from 'node:path';
 
 import { createApp } from './app.js';
 import { createServerAiProviderFromEnv, readServerAiProviderKind } from './ai/openai.js';
@@ -52,7 +53,10 @@ import {
   type SessionVerifier,
 } from './authz/public.js';
 import { loadConfig, type AuthMode } from './config.js';
+import { createLogger } from './logging/logger.js';
+import { logStartupSummary } from './logging/startup.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
+import { isBackupError } from './persistence/backup.js';
 import { startBackupScheduler } from './persistence/backup-scheduler.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
@@ -63,6 +67,11 @@ import { attachWebSocketServer } from './ws.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // M4 B9: one structured logger for the whole process. Level from `LOG_LEVEL` (default `info`);
+  // tests never run `index.ts` for request assertions — they inject a sink through
+  // `createApp`/`attachWebSocketServer` — so the process streams are the only sink here.
+  const log = createLogger();
 
   // M4 B3 configuration gate (`docs/CONTRACTS.md` §18.6, D-082 D2/D3). In production every
   // required setting is checked before anything is opened or a port is bound: demo auth, a
@@ -75,18 +84,31 @@ async function main(): Promise<void> {
   // pipes — the observable contract is the same: no listener, exit code 1.
   const refusal = findStartupRefusal(config, process.env);
   if (refusal !== null) {
-    console.error(`[server] refusing to start: ${refusal.code}`);
-    console.error(`[server]   ${refusal.message}`);
+    // Structured, with the stable code as a field and the operator sentence as `message` (the
+    // message is built by the gate and is documented never to contain a value). Exit code 1
+    // without `process.exit(1)` so pending stderr writes are flushed on pipes.
+    log.error('server.refused', {
+      code: refusal.code,
+      message: `refusing to start: ${refusal.code}`,
+    });
+    log.error('server.refused_detail', { code: refusal.code, detail: refusal.message });
     process.exitCode = 1;
     return;
   }
+
+  // The non-sensitive configuration this process is running with, plus credential **presence**
+  // (M4 B9). Emitted after the gate accepted the configuration and before anything is opened.
+  logStartupSummary(log, config, process.env);
 
   const dataPath = config.dataPath;
 
   if (dataPath === undefined) {
     // Unreachable through `loadConfig`, and it must not silently degrade if someone
     // changes that later.
-    console.error('[server] refusing to start: no INSIGHTHUB_DATA_PATH configured');
+    log.error('server.refused', {
+      code: 'DATA_PATH_MISSING',
+      message: 'refusing to start: no INSIGHTHUB_DATA_PATH configured',
+    });
     process.exitCode = 1;
     return;
   }
@@ -95,21 +117,34 @@ async function main(): Promise<void> {
   try {
     const opened = await openDocumentStore(dataPath);
     store = opened.store;
-    console.log(`[server] store  ready  ${opened.dataPath} (journal=${opened.journalMode})`);
+    log.info('server.store_ready', {
+      dataPath: opened.dataPath,
+      journalMode: opened.journalMode,
+    });
   } catch (error) {
     // Startup failure with a clear diagnostic. The message names the unmet runtime or
     // filesystem requirement; the hint says what to do. Never a stack trace on the
     // operator's console as the only clue, and never a memory-only fallback.
     if (isSqliteCapabilityError(error)) {
-      console.error(`[server] refusing to start: ${error.code}`);
-      console.error(`[server]   ${error.message}`);
-      console.error(`[server]   hint: ${error.hint}`);
-      if (error.cause instanceof Error) {
-        console.error(`[server]   cause: ${error.cause.message}`);
-      }
+      log.error('server.refused', {
+        code: error.code,
+        message: `refusing to start: ${error.code}`,
+      });
+      log.error('server.refused_detail', {
+        code: error.code,
+        detail: error.message,
+        hint: error.hint,
+        ...(error.cause instanceof Error ? { causeClass: error.cause.name } : {}),
+      });
     } else {
-      console.error('[server] refusing to start: the durable store could not be opened');
-      console.error(`[server]   ${error instanceof Error ? error.message : String(error)}`);
+      log.error('server.refused', {
+        code: 'STORE_OPEN_FAILED',
+        message: 'refusing to start: the durable store could not be opened',
+      });
+      log.error('server.refused_detail', {
+        code: 'STORE_OPEN_FAILED',
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
     }
     process.exitCode = 1;
     return;
@@ -122,12 +157,19 @@ async function main(): Promise<void> {
     // source can land here without touching `authz/**` (`docs/DECISIONS.md` D-062 §4).
     const documents = isDocumentMetaStore(store) ? new StoreDocumentCatalog(store) : undefined;
     authz = await createAuthz({ dataPath, ...(documents === undefined ? {} : { documents }) });
-    console.log(
-      `[server] authz  ready  ${authz.membershipCount} membership rows, sessions process-scoped`,
-    );
+    log.info('server.authz_ready', {
+      memberships: authz.membershipCount,
+      sessions: 'process-scoped',
+    });
   } catch (error) {
-    console.error('[server] refusing to start: authorization could not be initialised');
-    console.error(`[server]   ${error instanceof Error ? error.message : String(error)}`);
+    log.error('server.refused', {
+      code: 'AUTHZ_INIT_FAILED',
+      message: 'refusing to start: authorization could not be initialised',
+    });
+    log.error('server.refused_detail', {
+      code: 'AUTHZ_INIT_FAILED',
+      errorClass: error instanceof Error ? error.name : typeof error,
+    });
     await store.close();
     process.exitCode = 1;
     return;
@@ -145,16 +187,24 @@ async function main(): Promise<void> {
   const staticResolution = resolveStaticAssets(config.staticDir);
   if (staticResolution.kind === 'available') {
     staticAssets = staticResolution.assets;
-    console.log(`[server] static ready  ${staticAssets.directory}`);
+    log.info('server.static_ready', { directory: staticAssets.directory });
   } else if (config.nodeEnv === 'production') {
-    console.error(`[server] refusing to start: ${staticResolution.refusal.code}`);
-    console.error(`[server]   ${staticResolution.refusal.message}`);
+    log.error('server.refused', {
+      code: staticResolution.refusal.code,
+      message: `refusing to start: ${staticResolution.refusal.code}`,
+    });
+    log.error('server.refused_detail', {
+      code: staticResolution.refusal.code,
+      detail: staticResolution.refusal.message,
+    });
     authz.close();
     await store.close();
     process.exitCode = 1;
     return;
   } else {
-    console.warn('[server] static disabled: no web client build found (development/test only)');
+    log.warn('server.static_disabled', {
+      reason: 'no web client build found (development/test only)',
+    });
   }
 
   // The identity seam is built **once** and handed to both transports, so a socket and an HTTP
@@ -173,7 +223,7 @@ async function main(): Promise<void> {
   // without the mapping store fails here instead of silently admitting nobody.
   const identity = createIdentityDeps(authMode, authz, identityOptions);
 
-  console.log(`[server] auth    ready  ${authMode === 'clerk' ? 'clerk' : 'demo'}`);
+  log.info('server.auth_ready', { authMode });
   // The publishable key is a **public** value, so reporting its absence is safe. It is not a
   // startup refusal (B3's gate covers the server-only secret); a clerk server without it fails
   // closed per request instead.
@@ -183,9 +233,11 @@ async function main(): Promise<void> {
       process.env.CLERK_PUBLISHABLE_KEY ?? process.env.VITE_CLERK_PUBLISHABLE_KEY,
     )
   ) {
-    console.warn(
-      '[server] auth    WARNING: CLERK_PUBLISHABLE_KEY (or VITE_CLERK_PUBLISHABLE_KEY) is not set; Clerk session verification will fail closed',
-    );
+    log.warn('server.auth_warning', {
+      authMode,
+      reason:
+        'CLERK_PUBLISHABLE_KEY (or VITE_CLERK_PUBLISHABLE_KEY) is not set; Clerk session verification will fail closed',
+    });
   }
 
   // Built here (rather than inside `createApp`) only so the startup log can say which provider
@@ -197,15 +249,18 @@ async function main(): Promise<void> {
   const aiKind = readServerAiProviderKind(process.env);
   const aiProvider = createServerAiProviderFromEnv(process.env);
   if (aiKind === 'stub') {
-    console.log('[server] ai      ready  stub');
-    console.log(
-      '[server] ai      WARNING: stub is for development/evidence only; production rejects AI_PROVIDER=stub',
-    );
+    log.warn('server.ai_ready', {
+      aiProvider: aiKind,
+      reason: 'stub is for development/evidence only; production rejects AI_PROVIDER=stub',
+    });
   } else {
-    console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
+    log.info('server.ai_ready', { aiProvider: aiKind });
   }
 
-  const app = createApp(config, authz, aiProvider, identityOptions, undefined, { staticAssets });
+  const app = createApp(config, authz, aiProvider, identityOptions, undefined, {
+    staticAssets,
+    logger: log,
+  });
   const server = createServer(app);
 
   /*
@@ -221,20 +276,31 @@ async function main(): Promise<void> {
           ...(config.backupRetentionDays === undefined
             ? {}
             : { retentionDays: config.backupRetentionDays }),
+          // M4 B9 backup events: the file name and size are operationally useful and contain no
+          // document content. A failure is reported as its **stable code** (or the error class
+          // when the throw was not a `BackupError`), never as a message that could embed a path
+          // or SQL.
+          onCompleted: (backup) => {
+            log.info('backup.completed', { file: basename(backup.path), bytes: backup.bytes });
+          },
           onError: (error: unknown) => {
-            console.error(
-              `[server] backup  failed  ${error instanceof Error ? error.message : String(error)}`,
-            );
+            const typed = isBackupError(error);
+            log.error('backup.failed', {
+              code: typed ? error.code : 'BACKUP_UNEXPECTED',
+              ...(typed
+                ? {}
+                : { errorClass: error instanceof Error ? error.name : typeof error }),
+            });
           },
         })
       : null;
   if (backupScheduler !== null) {
-    console.log('[server] backup  scheduled  daily, 7-day retention');
+    log.info('server.backup_scheduled', { retentionDays: config.backupRetentionDays ?? 7 });
   }
   // All three seams are supplied, so none of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store, without authz, or a clerk-mode socket without an
   // identity resolver is a wiring mistake, not a mode.
-  const socket = attachWebSocketServer(server, config, { store, authz, identity });
+  const socket = attachWebSocketServer(server, config, { store, authz, identity, log });
 
   await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
 
@@ -243,17 +309,24 @@ async function main(): Promise<void> {
   // rather than guess.
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : config.port;
-  console.log(`[server] http  ready  http://${config.host}:${port}`);
-  console.log(`[server] ws    ready  ws://${config.host}:${port}${config.wsPath}`);
-  console.log(`[server] health       http://${config.host}:${port}/health`);
-  console.log(`[server] ready        http://${config.host}:${port}/ready`);
+  // One event instead of the four old lines: the listener is the moment the process can serve,
+  // so it is also the readiness signal the tests and a deploy dashboard wait for.
+  log.info('server.listening', {
+    host: config.host,
+    port,
+    httpUrl: `http://${config.host}:${port}`,
+    wsPath: config.wsPath,
+    wsUrl: `ws://${config.host}:${port}${config.wsPath}`,
+    healthUrl: `http://${config.host}:${port}/health`,
+    readyUrl: `http://${config.host}:${port}/ready`,
+  });
 
   let shuttingDown = false;
 
   async function shutdown(signal: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[server] ${signal} received, shutting down`);
+    log.info('server.shutdown', { signal });
 
     // Stop the backup timer first: a scheduled snapshot must not race a closing store.
     backupScheduler?.stop();

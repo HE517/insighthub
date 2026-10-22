@@ -92,6 +92,13 @@ import {
   type IdentityOptions,
 } from './authz/public.js';
 import { type AuthMode, type ServerConfig } from './config.js';
+import {
+  bindRequestDocument,
+  bindRequestUser,
+  requestLogging,
+  requestLogger,
+} from './logging/http.js';
+import { createLogger, type Logger } from './logging/logger.js';
 import { createOriginGuard } from './security/origin.js';
 import { FixedWindowRateLimiter } from './security/rate-limit.js';
 import { mountStaticHosting, type StaticAssets } from './static-hosting.js';
@@ -174,6 +181,12 @@ export interface AppOptions {
   readonly staticAssets?: StaticAssets | null;
   /** Readiness predicate; defaults to "true outside production, and in production only with a web build". */
   readonly isReady?: () => boolean;
+  /**
+   * The structured logger (M4 B9). Defaults to a process logger whose level comes from
+   * `LOG_LEVEL`, so a production process logs requests without extra wiring; tests inject a
+   * capturing sink here and assert on what was — and was not — emitted.
+   */
+  readonly logger?: Logger;
 }
 
 /** The only body a bootstrap request may carry (§17.3/§17.4). */
@@ -253,6 +266,18 @@ export function createApp(
   const app = express();
 
   app.disable('x-powered-by');
+
+  /*
+   * Structured request logging (M4 B9, D-082 §5) is the **first** middleware: a request refused
+   * by the origin guard, a body parser or a route must still produce its one `http.request` line,
+   * with the same `requestId` the handlers used. The middleware only reads method/path/status and
+   * the duration; it never touches the body, a cookie or an Authorization header.
+   *
+   * The default is a real process logger (level from `LOG_LEVEL`) so a hand-built app is never
+   * silently unlogged; tests inject `options.logger` with a capturing sink.
+   */
+  const logger = options.logger ?? createLogger();
+  app.use(requestLogging(logger));
 
   // Render terminates TLS in front of the process (D-082 D2), so exactly one proxy hop must be
   // trusted for `req.secure` — and therefore the `Secure` cookie attribute — to mean "the client
@@ -338,16 +363,18 @@ export function createApp(
   });
 
   // Last, and four-argument so Express recognises it as an error handler. Never a stack, a path
-  // or a SQL fragment on the wire (§7); the detail goes to the server log only.
+  // or a SQL fragment on the wire (§7). The detail goes to the **structured** log only as a
+  // class name plus the frozen `internal_error` code (M4 B9): an exception message can carry the
+  // user's document text or a SQL fragment, so it is deliberately not the log's payload.
   app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {
       next(error);
       return;
     }
-    console.error(
-      '[http] unhandled request failure:',
-      error instanceof Error ? error.message : String(error),
-    );
+    requestLogger(res).error('http.error', {
+      errorCode: 'internal_error',
+      errorClass: error instanceof Error ? error.name : typeof error,
+    });
     res.status(500).json(RESPONSE_BODIES.internalError);
   });
 
@@ -399,6 +426,9 @@ function mountAuthorizationRoutes(
       res.status(401).json(unauthorizedBody(identityDeps.mode));
       return;
     }
+    // M4 B9: the request log now carries the internal user id (`docs/CONTRACTS.md` §18.1), so
+    // request ↔ session correlation is a field lookup rather than a timestamp guess.
+    bindRequestUser(res, user.userId);
     res.status(200).json(sessionBody(user));
   });
 
@@ -436,6 +466,7 @@ function mountAuthorizationRoutes(
       res.status(401).json(unauthorizedBody(identityDeps.mode));
       return;
     }
+    bindRequestUser(res, user.userId);
     // The same decision core as before; only the identity's origin changed (§18.1).
     const decision = await authz.listReadableDocuments(user.userId);
     if (decision.kind === 'unauthenticated') {
@@ -479,6 +510,10 @@ export function createDocumentAccessHandler(
       return;
     }
     const documentId = readDocumentIdParameter(req.params);
+    bindRequestUser(res, user.userId);
+    // The id is bound even when the decision is `not_found`/`forbidden`: the operator log
+    // records what was asked for and what was answered, without exposing either to the client.
+    bindRequestDocument(res, documentId);
     const decision = await authz.authorizeDocument(documentId, user.userId, capability);
     respondToDocumentAccess(res, decision);
   };

@@ -96,6 +96,23 @@ describe('backup scheduler', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it('reports each created snapshot through onCompleted, before prune runs', async () => {
+    const { root, dataPath } = await fixture('completed');
+    const completed: { path: string; bytes: number }[] = [];
+    const scheduler = start({
+      dataPath,
+      now: () => new Date('2026-10-22T03:00:00.000Z'),
+      onCompleted: (backup) => completed.push(backup),
+    });
+
+    assert.equal(await scheduler.tick(), 'backed-up');
+    assert.equal(completed.length, 1, 'M4 B9 emits backup.completed once per snapshot');
+    const backup = completed[0] as { path: string; bytes: number };
+    assert.match(path.basename(backup.path), /^insighthub-2026-10-22.*\.db$/);
+    assert.ok(backup.bytes > 0, 'a verified snapshot is never zero bytes');
+    await rm(root, { recursive: true, force: true });
+  });
+
   it('reports a failure through onError instead of throwing', async () => {
     const { root, dataPath } = await fixture('fail');
     const errors: unknown[] = [];
