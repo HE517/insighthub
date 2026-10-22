@@ -849,6 +849,8 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 | B13 | deployed smoke | A6 | 登录/会话/协作/权限/AI 全链路/失败路径 | — |
 | B14 | A7 Production Readiness final review | A7 | GO/NO-GO + 条件关闭 | — |
 
+**批次状态：** B1 **DONE**（`151b8a1` → `adaefb4`：`SessionVerifier` seam、`app_user` 映射（幂等/唯一/持久化）、demo 生产门禁、启动守卫；server **229 → 250**，浏览器 **68/68**，**无 login-session 表**）。**B2 在 credential checkpoint 等待 Clerk 配置。** B3–B14 未开始。
+
 **Gate 纪律**：每批只跑最小 gate；完整浏览器套件只在 A6 evidence、批次收口、final HEAD 跑。
 **禁止**为省 token 省略功能结果、failure behavior、security result 或 Gate 数字。
 
