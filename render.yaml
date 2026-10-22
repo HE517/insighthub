@@ -1,0 +1,73 @@
+# Render Blueprint for InsightHub (M4 B7 — deployment packaging).
+#
+# The V1 topology is fixed by docs/DECISIONS.md D-082 D2: **one Render Web Service, one Node
+# process, one origin**. The React production build is served by the same Express process as the
+# API and the WebSocket (`apps/server/src/static-hosting.ts`), so there is no second frontend
+# origin and no cross-site cookie. Persistent data lives on the attached disk at an **absolute**
+# path; the ephemeral filesystem is never the store. No database, Redis, worker or second region
+# is introduced here (D-082 D2: no horizontal scaling in V1).
+#
+# B7 does not deploy. B11 creates the staging service from this file; real values for every
+# `sync: false` entry are supplied in the Render Dashboard and must never be committed here.
+
+services:
+  - type: web
+    name: insighthub
+    # Render's current field name is `runtime`; `env` is its documented deprecated alias and the
+    # name this batch specifies. B11 should switch to `runtime` if the Blueprint validator warns.
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node apps/server/dist/index.js
+    healthCheckPath: /health
+    # One disk, mounted at an absolute path. `INSIGHTHUB_DATA_PATH` below points at it, and the
+    # production startup gate refuses a relative path or the development default (B3), so a
+    # redeploy or restart cannot silently start with an empty store.
+    disk:
+      name: insighthub-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Production mode: enables the B3 config gate, `trust proxy` (Render terminates TLS), the
+      # static-build requirement and the absence of the demo bootstrap route.
+      - key: NODE_ENV
+        value: production
+      # Render routes traffic to the service's external interface, not to loopback. The server's
+      # development default is 127.0.0.1 (safe on a laptop); a deployment must bind 0.0.0.0 or
+      # the port is unreachable. `PORT` is injected by Render and read by `config.ts` unchanged.
+      - key: HOST
+        value: 0.0.0.0
+      # Production identity (D-082 D1): Clerk only. `AUTH_MODE=demo` is refused in production.
+      - key: AUTH_MODE
+        value: clerk
+      # The durable store lives on the mounted disk (absolute, persistent). The B3 gate refuses
+      # the development default and any relative path.
+      - key: INSIGHTHUB_DATA_PATH
+        value: /var/data
+      # Replace with the real deployed origin (custom domain or the Render hostname, exactly the
+      # scheme+host+port a browser sends). The same-origin build means this is normally also the
+      # page origin; the B3/B4 gates require an explicit https:// origin and refuse the
+      # development localhost default. `sync: false` keeps the value out of the repository.
+      - key: CORS_ORIGIN
+        value: https://<your-domain>
+        sync: false
+      # Server-only Clerk secret (session verification). Never committed; provided at blueprint
+      # creation. A clerk server refuses to start without it (B2/B3).
+      - key: CLERK_SECRET_KEY
+        sync: false
+      # Public Clerk publishable key. Consumed by the web build (Vite inlines VITE_* at build
+      # time) and by the server-side Clerk client, so Render must have it during `pnpm build`
+      # as well as at runtime. Not a secret, but environment-specific, so it is not committed.
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+      # Server-only OpenAI credential (D-082 D3). `AI_PROVIDER` is intentionally not set here:
+      # B7 packages the deployment without requiring a provider key. B12 enables AI by adding
+      # AI_PROVIDER=openai together with this key; without it AI stays disabled and starts.
+      - key: OPENAI_API_KEY
+        sync: false
+      # Model selection is server-side configuration (D-082 D3: production default is
+      # OPENAI_MODEL=gpt-5.6-luna, no automatic fallback to a pricier model). Left unset rather
+      # than pinned in the repo so the owner can change it without a code change.
+      - key: OPENAI_MODEL
+        sync: false

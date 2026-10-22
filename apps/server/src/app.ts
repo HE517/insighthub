@@ -55,6 +55,16 @@
  * {@link BOOTSTRAP_RATE_LIMIT} requests per {@link BOOTSTRAP_RATE_WINDOW_MS}, in process, with a
  * bounded bucket map (`security/rate-limit.ts`). The route only exists in development/test
  * (§18.5), so this protects the fixture rather than a production surface.
+ *
+ * ## Same-origin deployment and readiness (M4 B7, D-082 D2)
+ *
+ * Production serves the React build from this same process (`static-hosting.ts`): `/api/**`,
+ * `/health`, `/ready` and the WebSocket keep their frozen answers, everything else is a file from
+ * the build, and only a browser navigation (`Accept: text/html`) falls back to `index.html`. The
+ * `GET /ready` probe is added here; `/health` remains liveness. `trust proxy` is enabled **only**
+ * in production, where Render terminates TLS and the `Secure` cookie attribute depends on it.
+ * Both behaviours are configured through {@link AppOptions}, which (unlike {@link ServerConfig})
+ * carries process facts — the already-validated build and the readiness predicate.
  */
 import express, {
   type Express,
@@ -84,6 +94,7 @@ import {
 import { type AuthMode, type ServerConfig } from './config.js';
 import { createOriginGuard } from './security/origin.js';
 import { FixedWindowRateLimiter } from './security/rate-limit.js';
+import { mountStaticHosting, type StaticAssets } from './static-hosting.js';
 
 /**
  * Bootstrap limit: requests per client address per window (M4 B4). Fixed-window, in process —
@@ -133,7 +144,37 @@ const RESPONSE_BODIES = {
    * branch on; recorded in the task report as a documentation gap for A0.
    */
   internalError: { error: 'internal_error' },
+  /**
+   * `GET /ready` (M4 B7): the process is serving and — in production — the web build is mounted.
+   * A body of its own rather than reusing `{ status: "ok" }`: liveness (`/health`) and readiness
+   * answer different questions, and one probe body for both would let a deployment forget which
+   * one is wired to which URL.
+   */
+  ready: { status: 'ready' },
+  /** `GET /ready` before the process is ready: the standard 503 "try again" answer. */
+  starting: { status: 'starting' },
 } as const;
+
+/**
+ * The seam for the two M4 B7 concerns that are **not** in `ServerConfig`.
+ *
+ * Both are process facts rather than configuration, and both must be injectable so a test can
+ * build the production shape without a real checkout:
+ *
+ * - `staticAssets` is the already-validated web build (`static-hosting.ts`). Its presence also
+ *   decides the default readiness of a production app. `index.ts` performs the check and passes
+ *   the result; a hand-built app that omits it simply serves the API only, which is the pre-B7
+ *   behaviour every existing test harness relies on.
+ * - `isReady` overrides the readiness predicate. Production readiness is "the process is up and
+ *   the static build is mounted", which is true by construction once `listen` has happened —
+ *   the injection point exists so a test can prove the 503 transition without a second process.
+ */
+export interface AppOptions {
+  /** The verified web-client build to serve on the same origin, or `null`/absent for none. */
+  readonly staticAssets?: StaticAssets | null;
+  /** Readiness predicate; defaults to "true outside production, and in production only with a web build". */
+  readonly isReady?: () => boolean;
+}
 
 /** The only body a bootstrap request may carry (§17.3/§17.4). */
 interface BootstrapBody {
@@ -196,6 +237,7 @@ export function createApp(
       ? {}
       : { perServerConcurrent: config.aiMaxConcurrentServer }),
   }),
+  options: AppOptions = {},
 ): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
@@ -206,12 +248,23 @@ export function createApp(
   // Resolved once, not per request: the mode and the injected verifier are process-wide, and
   // constructing this at every request would let a caller observe a different mode mid-flight.
   const identityDeps = createIdentityDeps(config.authMode ?? 'demo', authz, identity);
-  const demoBootstrapEnabled =
-    identityDeps.mode === 'demo' && config.nodeEnv !== 'production';
+  const demoBootstrapEnabled = identityDeps.mode === 'demo' && config.nodeEnv !== 'production';
 
   const app = express();
 
   app.disable('x-powered-by');
+
+  // Render terminates TLS in front of the process (D-082 D2), so exactly one proxy hop must be
+  // trusted for `req.secure` — and therefore the `Secure` cookie attribute — to mean "the client
+  // spoke https". Only in production: in development the client connects directly, and trusting
+  // a caller-supplied `X-Forwarded-*` header would let a client decide whether its session cookie
+  // is marked Secure or which address the bootstrap limiter counts. The B4 limiter keeps using
+  // `req.ip` and production never mounts the demo bootstrap route (§18.5), so this does not
+  // widen an unauthenticated surface.
+  if (config.nodeEnv === 'production') {
+    app.set('trust proxy', 1);
+  }
+
   // Before every route: the CORS headers a browser needs, the preflight answer, and the CSRF
   // refusal for state-changing requests from a foreign origin (`security/origin.ts`).
   app.use(createOriginGuard(config.corsOrigin));
@@ -236,6 +289,24 @@ export function createApp(
     res.status(200).json({ status: 'ok' });
   });
 
+  /**
+   * Readiness probe (M4 B7). Distinct from `/health` on purpose: a Render health check must keep
+   * a live process from being restarted while it is still starting, whereas `/ready` may answer
+   * `503` until every dependency the process owns is open. The entrypoint only calls `listen`
+   * after the config gate, the store, authz and (in production) the web build have succeeded, so
+   * by the time this route can be reached the work is done — the predicate is injectable so the
+   * 503 branch is a tested state rather than an unreachable one.
+   */
+  const staticReady = options.staticAssets !== undefined && options.staticAssets !== null;
+  const isReady = options.isReady ?? (() => config.nodeEnv !== 'production' || staticReady);
+  app.get('/ready', (_req: Request, res: Response) => {
+    if (isReady()) {
+      res.status(200).json(RESPONSE_BODIES.ready);
+      return;
+    }
+    res.status(503).json(RESPONSE_BODIES.starting);
+  });
+
   /** Tiny discovery endpoint so a browser can find the WS URL without guessing. */
   app.get('/api/meta', (_req: Request, res: Response) => {
     res.status(200).json({
@@ -247,6 +318,15 @@ export function createApp(
 
   mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled, bootstrapLimiter);
   mountAiRoutes(app, authz, aiProvider, identityDeps, aiLimits);
+
+  // Same-origin hosting of the built web client (M4 B7, D-082 D2). Mounted after every API
+  // route so `/api/**` is never served a file or the SPA shell; the fallback excludes the API,
+  // socket and probe prefixes for the same reason (see `static-hosting.ts`).
+  if (options.staticAssets !== undefined && options.staticAssets !== null) {
+    mountStaticHosting(app, options.staticAssets, {
+      production: config.nodeEnv === 'production',
+    });
+  }
 
   /* ---------------------------------------------------------------- *
    * Fallbacks
@@ -372,10 +452,7 @@ function mountAuthorizationRoutes(
    * capability matrix uses with the other three capabilities, so the 403 mapping is exercised
    * through production code rather than through a mock.
    */
-  app.get(
-    '/api/documents/:id',
-    createDocumentAccessHandler(authz, 'canRead', identityDeps),
-  );
+  app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead', identityDeps));
 }
 
 /**
