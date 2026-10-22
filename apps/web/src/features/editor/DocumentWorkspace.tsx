@@ -56,12 +56,22 @@
  * Closing the panel unmounts it, which disposes its revision tracker and aborts any in-flight
  * generation (R9). A panel that is closed is absent from the DOM, not merely hidden, so
  * `[data-testid="ai-panel"]` always means "open".
+ *
+ * ## Directory switching (M3 round 2)
+ *
+ * The panel's read-only directory asks this component to open another document. It does so by
+ * dispatching the **existing** `documentSelected` action; `App.tsx` keys this workspace by
+ * `documentId`, so the switch destroys the old session and remounts the workspace (one socket,
+ * one room — §5.4). The AI panel closes as part of that remount. That is intended: a proposal's
+ * anchors belong to one replica and are never carried across documents (D-078 §4 R2-1).
  */
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import type { CollaborativeSession, CollaborativeSessionOptions } from '@insighthub/shared';
 
 import { useCollaborativeDocument } from '../../collab/public.js';
+import { documentActions } from '../../store/documentSlice.js';
+import { useAppDispatch } from '../../store/hooks.js';
 import { capabilityGate } from '../permissions/capabilityGate.js';
 import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
 import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
@@ -150,6 +160,16 @@ function ActiveDocument({
   // role is unknown the gate reports `readOnly: false`.
   const gate = capabilityGate(role);
 
+  // The directory's only write path: the same action the topbar switcher dispatches. No routing,
+  // no second switch mechanism, no cross-document AI state.
+  const dispatch = useAppDispatch();
+  const selectDocument = useCallback(
+    (nextDocumentId: string): void => {
+      dispatch(documentActions.documentSelected(nextDocumentId));
+    },
+    [dispatch],
+  );
+
   // The AI panel is a UI state, so it lives here: open/closed only, never the proposal (the panel
   // owns that) and never the document (the `Y.Text` owns that).
   const [aiOpen, setAiOpen] = useState(false);
@@ -227,6 +247,7 @@ function ActiveDocument({
           gate={gate}
           readSelection={() => selectionReader.current?.() ?? null}
           onClose={() => setAiOpen(false)}
+          onSelectDocument={selectDocument}
         />
       ) : null}
 

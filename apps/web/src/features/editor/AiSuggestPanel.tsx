@@ -33,6 +33,18 @@
  * signal, and this component re-checks `signal.aborted` before touching state, so a cancelled
  * request can never resurrect a proposal the user already dismissed.
  *
+ * ## The read-only directory (M3 round 2, `docs/DECISIONS.md` D-078 §4 R2-1)
+ *
+ * `AiDirectory` sits in a right rail beside the review surface and lists the documents the current
+ * identity may read. It calls the already-implemented `listDocuments(signal)` on mount (i.e.
+ * whenever the panel opens) and on Refresh, and aborts on unmount. Selecting another document
+ * calls `onSelectDocument`, which the workspace wires to the **existing** `documentSelected`
+ * action:
+ * no new route, no new action, and **no cross-document proposal/apply semantics**. The proposal
+ * below always belongs to the active document. Because `App.tsx` keys the workspace by
+ * `documentId`, the switch remounts the workspace and closes this panel — that is the intended
+ * lifecycle, not a bug to route around.
+ *
  * ## Why the panel is mounted only while open
  *
  * `[data-testid="ai-panel"]` therefore means "the panel is open", not "the panel exists but is
@@ -54,6 +66,7 @@ import type { AiProvider, AiSuggestInput } from '../ai/provider.js';
 import { createLocalRevisionTracker, type LocalRevisionTracker } from '../ai/revision.js';
 import { readDocumentText } from '../ai/tools.js';
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
+import { AiDirectory } from './AiDirectory.js';
 import {
   APPLY_FAILURE_COPY,
   describeProviderFailure,
@@ -100,6 +113,11 @@ export interface AiSuggestPanelProps {
   readSelection: () => { anchor: number; head: number } | null;
   /** Close the panel. The panel aborts any in-flight generation before calling this. */
   onClose: () => void;
+  /**
+   * Open another readable document. Wired by the workspace to the existing `documentSelected`
+   * action; the panel itself never dispatches and never owns routing.
+   */
+  onSelectDocument: (documentId: string) => void;
   /** Test seam / future real provider. Defaults to the deterministic local provider. */
   provider?: AiProvider;
 }
@@ -109,6 +127,7 @@ export function AiSuggestPanel({
   gate,
   readSelection,
   onClose,
+  onSelectDocument,
   provider = localProvider,
 }: AiSuggestPanelProps) {
   const [instruction, setInstruction] = useState('');
@@ -264,7 +283,8 @@ export function AiSuggestPanel({
         <div className="ai-panel__heading">
           <h2 className="ai-panel__title">Ask AI</h2>
           <p className="ai-panel__note">
-            Deterministic local provider — no network, no model. Nothing changes until you accept.
+            Deterministic suggestion provider — no model. The document list is read from the server.
+            Nothing changes until you accept.
           </p>
         </div>
         <button
@@ -279,132 +299,157 @@ export function AiSuggestPanel({
         </button>
       </header>
 
-      <label className="ai-field">
-        <span className="ai-field__label">Instruction</span>
-        <textarea
-          className="ai-instruction"
-          data-testid="ai-instruction"
-          aria-label="AI instruction"
-          rows={2}
-          spellCheck={false}
-          value={instruction}
-          placeholder="e.g. uppercase"
-          onChange={(event) => setInstruction(event.target.value)}
-        />
-      </label>
+      <div className="ai-panel__body">
+        <div className="ai-panel__main">
+          <label className="ai-field">
+            <span className="ai-field__label">Instruction</span>
+            <textarea
+              className="ai-instruction"
+              data-testid="ai-instruction"
+              aria-label="AI instruction"
+              rows={2}
+              spellCheck={false}
+              value={instruction}
+              placeholder="e.g. uppercase"
+              onChange={(event) => setInstruction(event.target.value)}
+            />
+          </label>
 
-      {/*
+          {/*
         The local provider is *not* a language model: an arbitrary sentence has no meaning to it.
         So the valid instructions are visible, clickable chips rather than documentation elsewhere.
       */}
-      <div className="ai-chips" role="group" aria-label="Supported instructions">
-        {LOCAL_INTENTS.map((intent) => (
-          <button
-            key={intent}
-            type="button"
-            className="ai-chip"
-            data-testid="ai-intent"
-            data-intent={intent}
-            title={INTENT_HINTS[intent]}
-            onClick={() => applyIntent(intent)}
+          <div className="ai-chips" role="group" aria-label="Supported instructions">
+            {LOCAL_INTENTS.map((intent) => (
+              <button
+                key={intent}
+                type="button"
+                className="ai-chip"
+                data-testid="ai-intent"
+                data-intent={intent}
+                title={INTENT_HINTS[intent]}
+                onClick={() => applyIntent(intent)}
+              >
+                {intent === 'replace-selection' ? 'replace-selection: <text>' : intent}
+              </button>
+            ))}
+          </div>
+
+          <div className="ai-actions">
+            <button
+              type="button"
+              className="ai-primary"
+              data-testid="ai-generate"
+              aria-label="Generate suggestion"
+              disabled={!canRead || tracker === null}
+              title={
+                !canRead
+                  ? 'Your role may not read this document'
+                  : tracker === null
+                    ? 'Preparing the revision counter…'
+                    : 'Generate a proposal from the current document and selection'
+              }
+              onClick={generate}
+            >
+              {generating ? 'Regenerating…' : 'Generate'}
+            </button>
+            <span className="ai-actions__hint">
+              Target: the current selection, or the whole document when nothing is selected.
+            </span>
+          </div>
+
+          <p
+            className="ai-status"
+            data-testid="ai-status"
+            role="status"
+            aria-live="polite"
+            {...(phase.kind === 'error' ? { 'data-provider-error': phase.failure.kind } : {})}
           >
-            {intent === 'replace-selection' ? 'replace-selection: <text>' : intent}
-          </button>
-        ))}
-      </div>
+            {statusTextFor(phase)}
+          </p>
 
-      <div className="ai-actions">
-        <button
-          type="button"
-          className="ai-primary"
-          data-testid="ai-generate"
-          aria-label="Generate suggestion"
-          disabled={!canRead || tracker === null}
-          title={
-            !canRead
-              ? 'Your role may not read this document'
-              : tracker === null
-                ? 'Preparing the revision counter…'
-                : 'Generate a proposal from the current document and selection'
-          }
-          onClick={generate}
-        >
-          {generating ? 'Regenerating…' : 'Generate'}
-        </button>
-        <span className="ai-actions__hint">
-          Target: the current selection, or the whole document when nothing is selected.
-        </span>
-      </div>
-
-      <p
-        className="ai-status"
-        data-testid="ai-status"
-        role="status"
-        aria-live="polite"
-        {...(phase.kind === 'error' ? { 'data-provider-error': phase.failure.kind } : {})}
-      >
-        {statusTextFor(phase)}
-      </p>
-
-      {proposal === null ? (
-        <p className="ai-empty" data-testid="ai-empty">
-          {emptyCopyFor(phase)}
-        </p>
-      ) : (
-        <article
-          className="ai-proposal"
-          data-testid="ai-proposal"
-          data-status={phase.kind === 'stale' ? 'stale' : 'pending'}
-          data-base-revision={proposal.baseRevision}
-        >
-          <h3 className="ai-proposal__summary" data-testid="ai-summary">
-            {proposal.summary}
-          </h3>
-          {/*
+          {proposal === null ? (
+            <p className="ai-empty" data-testid="ai-empty">
+              {emptyCopyFor(phase)}
+            </p>
+          ) : (
+            <article
+              className="ai-proposal"
+              data-testid="ai-proposal"
+              data-status={phase.kind === 'stale' ? 'stale' : 'pending'}
+              data-base-revision={proposal.baseRevision}
+            >
+              <h3 className="ai-proposal__summary" data-testid="ai-summary">
+                {proposal.summary}
+              </h3>
+              {/*
             The diff is rendered verbatim — it was computed by `unifiedDiff` inside the suggestion
             (A4). The panel must not recompute it: the authority for what gets applied is the
             operations + anchors, and a second diff could disagree with the preview.
           */}
-          <pre
-            className="ai-diff"
-            data-testid="ai-diff"
-            aria-label="Unified diff preview"
-            tabIndex={0}
-          >
-            {proposal.diff}
-          </pre>
+              <pre
+                className="ai-diff"
+                data-testid="ai-diff"
+                aria-label="Unified diff preview"
+                tabIndex={0}
+              >
+                {proposal.diff}
+              </pre>
 
-          {staleReason === null ? null : (
-            <p className="ai-stale" data-testid="ai-stale" data-reason={staleReason} role="alert">
-              {APPLY_FAILURE_COPY[staleReason]}
-            </p>
+              {staleReason === null ? null : (
+                <p
+                  className="ai-stale"
+                  data-testid="ai-stale"
+                  data-reason={staleReason}
+                  role="alert"
+                >
+                  {APPLY_FAILURE_COPY[staleReason]}
+                </p>
+              )}
+
+              <div className="ai-proposal__actions">
+                <button
+                  type="button"
+                  className="ai-accept"
+                  data-testid="ai-accept"
+                  aria-label="Accept suggestion"
+                  disabled={acceptDisabled}
+                  title={acceptTitle}
+                  onClick={accept}
+                >
+                  Accept
+                </button>
+                <button
+                  type="button"
+                  className="ai-reject"
+                  data-testid="ai-reject"
+                  aria-label="Reject suggestion"
+                  title="Dismiss this suggestion without changing the document"
+                  onClick={reject}
+                >
+                  Reject
+                </button>
+              </div>
+            </article>
           )}
+        </div>
 
-          <div className="ai-proposal__actions">
-            <button
-              type="button"
-              className="ai-accept"
-              data-testid="ai-accept"
-              aria-label="Accept suggestion"
-              disabled={acceptDisabled}
-              title={acceptTitle}
-              onClick={accept}
-            >
-              Accept
-            </button>
-            <button
-              type="button"
-              className="ai-reject"
-              data-testid="ai-reject"
-              aria-label="Reject suggestion"
-              title="Dismiss this suggestion without changing the document"
-              onClick={reject}
-            >
-              Reject
-            </button>
-          </div>
-        </article>
-      )}
+        {/*
+        Read-only directory (D-078 §4 R2-1), in a **right rail** beside the review surface.
+
+        Placement is load-bearing. The permanent browser suite clicks the panel's controls by
+        viewport coordinates; increasing the panel's height pushes the editor below the fold, so
+        typing schedules a page scroll that can race the next click (measured: the Accept click
+        landed on this section at `scrollY: 35`). A rail keeps the panel's outer height governed by
+        the main column — the same geometry the existing scenarios were written against — while the
+        directory still lists, refreshes and aborts independently.
+
+        It fetches on mount (when the panel opens) and aborts on unmount. Selecting a different
+        document goes through the existing switch action, which remounts the workspace — and
+        therefore closes this panel — by design.
+      */}
+        <AiDirectory activeDocumentId={session.documentId} onSelectDocument={onSelectDocument} />
+      </div>
     </section>
   );
 }
