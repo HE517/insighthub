@@ -15,6 +15,7 @@ It covers two milestones:
 | M2 Phase 2 authorization | `suite/20-m2-phase2-authz.mjs` | viewer/editor/owner enforcement, identity cannot be self-declared, non-disclosure, session revocation, token never reachable by JS |
 | M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
 | M3 redesign (UI evidence) | `suite/30-m3-ui-evidence.mjs` | the new Undo/Redo buttons (owner/editor reversible through the **durable** store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity-remount wait |
+| M3 AI proposal loop | `suite/31-m3-ai.mjs` | proposal → Diff Preview → Accept/Reject in the real panel: nothing changes before Accept, Accept is one Yjs transaction a peer sees, Undo reverts only the AI edit, Reject writes nothing, `revision` vs `text-mismatch` staleness, a viewer can review but not accept, an owner’s offline Accept reconnects **once**, and a viewer’s offline Accept stays a local-only divergence |
 
 ## Why there is no Playwright
 
@@ -193,6 +194,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `20-m2-phase2-authz.mjs` | M2 Phase 2: viewer cannot write (P2-1), identity cannot be self-declared (P2-2), non-disclosure 404 (P2-3), role/capability consistency (P2-4), role change + session revocation (P2-5), token invisible to JS (P2-9), what a restart really does to a session |
 | `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
 | `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
+| `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
 
@@ -210,6 +212,25 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `f1/2-owner-and-editor-have-no-regression` | F1 (2) | owner/editor: editable UI, typing persists, `Mod-z` still reverts through the session's `Y.UndoManager`, a remote edit merges, and a document switch still works (and stays isolated) |
 | `f1/3-unknown-role-does-not-lock-the-editor` | F1 (3) | `getRole() === null` in a real browser: offline from before the first frame, no `room-joined`, no membership row — the editor is editable, a real keystroke is accepted, a Yjs update appears in the local replica, and after an explicitly granted membership the server durably holds that text |
 | `f1/4-ui-gate-is-not-a-security-boundary` | F1 (4) | the page is fed a schema-valid forged `room-joined(role: 'owner')`: the UI becomes editable and the notice disappears — and the write it then produces (keystroke **and** an explicit SYNC frame) is answered `FORBIDDEN`, with nothing applied, persisted or broadcast, no reconnect, and the socket still receiving |
+
+### The M3 AI scenarios and the acceptance IDs they map to
+
+`docs/DECISIONS.md` D-075 §6 froze A–H for M3. The AI half is covered here and in the Node suites;
+this table says which browser scenario carries which claim, so a green run can never be read as
+covering more than it does.
+
+| Scenario id | D-075 | What the browser + durable store actually prove |
+| --- | --- | --- |
+| `m3/5-ai-proposal-and-accept` | A, E | the proposal renders a summary + unified diff while editor text, durable text and a real peer stay unchanged; Accept changes editor **and** durable **and** the peer; Undo reverts only the AI edit (the locally typed text survives); Redo restores it |
+| `m3/6-ai-reject-writes-nothing` | B | Reject reaches `data-phase="rejected"`, clears the proposal, and leaves editor text and durable text byte-for-byte identical |
+| `m3/7-ai-local-edit-invalidates` | C (revision) | Accept is still clickable after typing, and the click produces `ai-stale[data-reason="revision"]` with the exact frozen sentence; neither store moves and nothing is partially applied |
+| `m3/8-ai-remote-outside-applies` | C, D | a peer edit **outside** the selection-derived anchor leaves the proposal pending and `data-base-revision` at `0`; Accept applies and the durable text holds both the peer edit and the AI edit |
+| `m3/9-ai-remote-inside-stale` | C, D | a peer edit **inside** the anchor produces `data-reason="text-mismatch"` (explicitly not `revision`) with the exact frozen sentence; both stores are unchanged |
+| `m3/10-ai-viewer-cannot-accept` | F | a viewer opens the panel and generates (generation needs `canRead`), sees the proposal and diff, gets a `disabled` Accept with a title, and a programmatic `.click()` changes neither store **and emits no SYNC frame** |
+| `m3/11-ai-offline-accept-then-reconnect` | G (+ A5 P3-a) | **owner:** offline Accept changes local `Y.Text`, the durable store and a second browser profile still hold the old text, and after reconnect all three hold the expected text exactly once. **viewer who was offline:** `getRole()` is `null`, so the role chip disappears and Accept becomes clickable (R10/§17.9); the edit changes the local replica only, emits no SYNC frame, survives reconnect as a local divergence with **0 FORBIDDEN**, and is replayed by IndexedDB after a reload while the durable text never changes |
+
+Acceptance **H** is the gate itself: the scenario count is now 60, and the four commands in
+`docs/TASKS.md` must all pass on the integrated HEAD.
 
 ### Re-aimed by D-067 §4: the UI gate removed the write, not the assertion
 
