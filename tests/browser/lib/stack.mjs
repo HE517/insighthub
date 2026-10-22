@@ -256,6 +256,15 @@ export class DevStack {
       PORT: String(this.#serverPort),
       INSIGHTHUB_SERVER_HOST: '127.0.0.1',
       INSIGHTHUB_WEB_PORT: String(this.#webPort),
+      /*
+       * The suite always runs the **demo** web path. `apps/web/.env.local` may hold a real
+       * `VITE_CLERK_PUBLISHABLE_KEY` (the owner's Clerk instance); Vite would then render the
+       * Clerk sign-in gate and no scenario would ever reach `POST /api/session/bootstrap`.
+       * Process env wins over `.env` files in Vite, so an explicit empty value keeps the
+       * suite on the demo path. Clerk-mode browser evidence belongs to the staging smoke
+       * (B13), not to this local suite.
+       */
+      VITE_CLERK_PUBLISHABLE_KEY: '',
       ...this.#webEnvOverrides,
     };
   }

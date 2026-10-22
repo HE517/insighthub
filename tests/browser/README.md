@@ -77,6 +77,8 @@ The remote evidence is a separate group that exists only when asked for:
 
 ```bash
 INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 73 = 68 + 5
+
+The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
 ```
 
 `INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
