@@ -251,10 +251,12 @@ export function AiSuggestPanel({
     if (!canEdit) return;
 
     // `currentRevision` is *now*, not the revision the proposal was generated at: the gap between
-    // the two is exactly what check #1 measures. The port is the narrow `{ doc, transact }` slice,
-    // so this call cannot reach awareness, Redux or the session lifecycle.
+    // the two is exactly what check #1 measures. The port is the narrow `{ documentId, doc,
+    // transact }` slice, so this call cannot reach awareness, Redux or the session lifecycle; the
+    // `documentId` lets `applySuggestion` refuse a proposal generated for another document.
     const result = applySuggestion(
       {
+        documentId: session.documentId,
         doc: session.doc,
         transact: (fn, origin) => session.transact(fn, origin),
       },

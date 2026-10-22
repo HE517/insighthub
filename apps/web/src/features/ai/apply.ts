@@ -53,8 +53,14 @@ export type ApplyResult =
  *
  * Structural on purpose: the real `CollaborativeSession` satisfies it, and so does a test double
  * that wraps a real `Y.Doc` — no mock of Yjs is involved.
+ *
+ * `documentId` is part of the port because a proposal is **bound to one document**: an
+ * `insert` at the end of a document (or any insert into an empty one) anchors at a *type-level*
+ * position whose `expectedText` is `''`, so it can resolve against a different document and pass
+ * all three text checks. Comparing the id here refuses that at the write path instead of relying
+ * on the UI only ever passing the matching document.
  */
-export type AiApplyPort = Pick<CollaborativeSession, 'doc' | 'transact'>;
+export type AiApplyPort = Pick<CollaborativeSession, 'doc' | 'transact' | 'documentId'>;
 
 interface PlannedOperation {
   operation: AiEditSuggestion['operations'][number];
@@ -88,6 +94,10 @@ export function applySuggestion(
   suggestion: AiEditSuggestion,
   currentRevision: number,
 ): ApplyResult {
+  // A proposal belongs to the document it was generated for (see `AiApplyPort.documentId`).
+  // `malformed` is the honest reason: the request itself is inconsistent, not stale.
+  if (suggestion.documentId !== port.documentId) return { ok: false, reason: 'malformed' };
+
   const validation = validateSuggestionAgainstDocument(suggestion, port.doc, currentRevision);
   if (!validation.ok) return { ok: false, reason: validation.reason };
 

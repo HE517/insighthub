@@ -317,4 +317,19 @@ describe('applySuggestion: multiple operations', () => {
     });
     expect(docText(doc)).toBe('The QUICK brown fox');
   });
+
+  it('refuses a proposal generated for a different document', () => {
+    // A7's probe (A5 review, P3-1): an insert at the end of a document anchors at a **type-level**
+    // position whose expectedText is '', so it resolves against another document and passes all
+    // three text checks. The documentId comparison is what refuses it.
+    const { doc } = seeded('completely different ');
+    const insertAtEnd = insertOp(doc.getText(DOCUMENT_TEXT_KEY), docText(doc).length, 'FROM-A');
+    const suggestion = suggestionWith([insertAtEnd], { documentId: 'document-a' });
+
+    expect(applySuggestion(applyPort(doc, 'document-b'), suggestion, REVISION)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+    expect(docText(doc)).toBe('completely different ');
+  });
 });

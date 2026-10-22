@@ -100,9 +100,15 @@ export function suggestionWith(
  *
  * `transact` mirrors what `CollaborativeSession.transact` does (a Yjs transaction stamped with the
  * supplied origin, defaulting to `local`), which is what makes the undo-isolation test meaningful.
+ * `documentId` defaults to the id `suggestionWith` stamps; pass another one to prove that a
+ * proposal for one document is refused on another.
  */
-export function applyPort(doc: Y.Doc): Pick<CollaborativeSession, 'doc' | 'transact'> {
+export function applyPort(
+  doc: Y.Doc,
+  documentId = 'demo-document',
+): Pick<CollaborativeSession, 'doc' | 'transact' | 'documentId'> {
   return {
+    documentId,
     doc,
     transact(fn: (text: Y.Text) => void, origin: TransactionOrigin = TRANSACTION_ORIGINS.local) {
       doc.transact(() => fn(doc.getText(DOCUMENT_TEXT_KEY)), origin);
