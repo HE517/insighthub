@@ -769,17 +769,27 @@ persistence，`SHARED_CONTRACT_VERSION` 与 `PROTOCOL_VERSION` 未动。
 
 ## M3 — AI suggestions（FROZEN D-075；ROUND 1 已实现，A7 GO WITH CONDITIONS，milestone 未 CLOSED）
 
-**状态：scope 已冻结（`docs/DECISIONS.md` D-075），实现进行中。** `A1 锚定/校验助手` 已合入
-（`df16a73` → `0bb8af4`；`SHARED_CONTRACT_VERSION` **8**，`PROTOCOL_VERSION` 仍 2）；`A4 AI 编排层`
-已合入（`5826cc2` → `987495c`：provider seam + 确定性本地 provider + 无依赖 diff + 三段校验后单事务
-apply + tools）。契约见 `docs/CONTRACTS.md` §11.1（含 revision 语义：**客户端本地**计数器，只计
-`local`/`ai` origin，故远端编辑不由 check #1 判 stale，而由 anchor + `expectedText` 判）。
+**状态：round 1 已实现并通过 A7 独立终审（GO WITH CONDITIONS，条件已关闭），但 milestone 未 CLOSED。**
+按 D-078 的 original-scope reconciliation：11 项 DONE、**directory = PARTIAL**、**真实 LLM provider = NOT
+IMPLEMENTED**（`D-075 §4` 的确定性 provider 是 A0 的 round-1 边界，**不是**原始 scope 的终点）。
+`A1 锚定/校验助手`（`df16a73` → `0bb8af4`，v8）、`A4 AI 编排层`（`5826cc2` → `987495c`）、`A2 Diff
+Preview`（`5db7db1` → `20c3470`）、`A5 权限复核`（`f399c04` → `20a63ac`）、`A6 七个永久场景`
+（`ad73c3d` → `990b9be`）、`A7 终审`（`29bf467` → `881dd0e`）均已合入。契约见 `docs/CONTRACTS.md` §11.1。
+
+### M3 Round 2（关闭前必须完成，D-078 §4）
+
+| # | 事项 | 验收 |
+| --- | --- | --- |
+| R2-1 | **directory 工具接线**：AI 面板列出当前身份可读的文档（`GET /api/documents`，只读、标出当前文档），选中另一文档复用既有文档切换语义；不新增跨文档提案/应用 | 真实浏览器：目录可见、切换后提案针对新文档；无新写路径 |
+| R2-2 | **真实 provider**：`OpenAIProvider` 在**服务端**持有 `OPENAI_API_KEY`（browser 不接触 key），产出仍必须是 proposal（schema 校验 → 锚定 → 预览 → Accept → `ai` 事务）；失败一律 fail closed | 单测 + 失败注入（timeout/5xx/畸形 JSON/schema 不符/取消）；Gate 与 CI 仍只用确定性 provider；live smoke 仅 key 存在时 opt-in |
+| R2-3 | M3 integrated Gate + A7 复审 | 四门禁 + 60/60（或更多）；A7 独立复审 GO |
+| R2-4 | `m3-closed` | 满足后按 D-053 §5 请求**一次**负责人授权 |
 
 | 项 | 内容 |
 | --- | --- |
 | 目标 | AI tools（directory / read / selection / edit）→ proposal → Diff Preview → Accept / Reject；accepted change 走 `session.transact(..., TRANSACTION_ORIGINS.ai)` |
 | 范围 | 客户端 provider seam + 确定性本地 provider（**不接外部 AI 服务、无新端点、无新依赖**）；Diff Preview UI；stale 三段校验；undo 隔离；权限一致性 |
-| 非目标 | 真实大模型接入（需 owner 决定凭据/成本）、Redux 保存正文、绕过 Yjs、整篇 snapshot 替换、把 AI mutation 混同为 local/remote、绕过 permission、改坏 `CollaborativeSession` seam |
+| 非目标 | Redux 保存正文、绕过 Yjs、整篇 snapshot 替换、把 AI mutation 混同为 local/remote、绕过 permission、改坏 `CollaborativeSession` seam。**注意**：外部 provider 已由负责人定为 Round 2 必做（D-078 §4），不再是"非目标" |
 | DAG | `A0 冻结`（已完成）→ `A1 锚定/校验助手 + shared 版本 8` → `A4 provider/tools/proposal` ∥ `A2 Diff Preview UI` → `A5 权限一致性复核` → `A0 集成` → `A6 真实浏览器证据` → `A7 M3 final review` |
 | Acceptance | **A–H**（D-075 §6）：Yjs transaction / Reject 不改文本 / stale 三情形被拒 / 并发下 RelativePosition 正确 / undo 隔离 / viewer 不能绕过 / 离线不重复 apply / 既有 53 场景零回归 + 四门禁 |
 | 必带残留 | R1–R9（见下「M3 前置」），不得因开工而删除 |

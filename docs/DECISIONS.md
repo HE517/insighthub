@@ -3145,3 +3145,69 @@ R1–R10 与本节 9 条限制一并带入 round 2 / 发布说明，**不得因�
 
 **后果。** M3 的"AI 提案"从一句承诺变成一条有独立终审、有对抗性探针、有 mutation 证明、有 7 个永久浏览器
 场景的可证伪链路；代价是把"哪些事**没有**被验证"写成了 9 条具名限制，而不是留一句"基本完成"。
+
+---
+
+## D-078 · 2026-10-22 · accepted · M3 original-scope reconciliation：directory 是 PARTIAL、deterministic provider 不是原始 scope (M3 reconciliation)
+
+**背景。** 项目负责人要求：M3 不得因 A7 round-1 GO 就假定完成；必须从**最早的仓库事实**重建 M3
+Acceptance，逐项标 DONE / PARTIAL / NOT IMPLEMENTED / EXPLICITLY DEFERRED BY OWNER，并特别确认两件事：
+directory 是否原本是 required capability；deterministic local provider 究竟是"当前实现"还是"原始
+milestone 明确允许只做到这里"。
+
+### 1. 重建所用的仓库事实（不是记忆）
+
+以 `m2-closed`（`435c869`）为基线读取的原文：
+
+| 来源 | 原文 |
+| --- | --- |
+| `docs/PROJECT.md` M3 行 | "AI request pipeline, suggestion + diff, Diff Preview, Accept/Reject/Undo applied via Yjs transaction" |
+| `docs/TASKS.md` M3 sketch | "AI request pipeline, suggestion + diff generation, Diff Preview, Accept / Reject / Undo applied through a Yjs transaction. Owner: A4." |
+| `docs/ARCHITECTURE.md` §3 | Document → AI Request → Suggestion（proposal：summary + operations + diff）→ Diff Preview → Accept/Reject → Yjs Transaction |
+| `docs/CONTRACTS.md` §11 | `AiSuggestRequest { documentId, instruction, baseRevision, content }`，`content` ≤ 200 000 chars |
+
+**结论一：原始仓库口径里没有 "directory" 工具，也没有指定任何外部模型/供应商。**
+"directory / read / selection / edit" 这组 AI tools 来自负责人在 autopilot 指令中给出的 M3 任务描述
+（比仓库 sketch 更新、且属 owner-level scope），因此它**是 M3 现行 scope 的一部分**，但不属于最初的
+PROJECT/TASKS/ARCHITECTURE 文字。
+
+### 2. 逐项状态（以 `881dd0e` 为代码事实）
+
+| 能力 | 状态 | 证据 / 说明 |
+| --- | --- | --- |
+| directory | **PARTIAL** | `features/ai/tools.ts#listDocuments` 已实现（`GET /api/documents`，带 AbortSignal），但**没有任何 UI 消费者**（A7 F8）。不算 DONE |
+| read | **DONE** | `readDocumentText(session)` 实时读 `Y.Text`；`AiSuggestRequest.content` 即读取结果 |
+| selection | **DONE** | `selectionRef` → `AiSuggestInput.selection`；`m3/8` 用真实键盘选区（6..11）验证 |
+| edit | **DONE** | `replace` / `insert` 两类 operation，anchor 只经 `createOperationAnchor` 生成 |
+| Diff Preview | **DONE** | `ai-summary` / `ai-diff`；`m3/5` 断言 diff 非空且 Accept 前文本不变 |
+| Accept | **DONE** | `applySuggestion` 三段校验 → 单次 `ai` 事务；`m3/5` |
+| Reject | **DONE** | 只清提案、不碰 `Y.Text`；`m3/6` |
+| RelativePosition | **DONE** | `anchor{start,end?,expectedText}`，v8；A1 的 16 个测试 |
+| expectedText / original-text validation | **DONE** | 三段校验第 3 步；`m3/9` 的 `text-mismatch` |
+| Yjs transaction | **DONE** | `session.transact(fn, TRANSACTION_ORIGINS.ai)`；A7 用 `afterTransaction` 断言 |
+| AI-origin undo isolation | **DONE** | `UNDO_TRACKED_ORIGINS = [local, ai]`；`m3/5` + 既有 remote 不撤销场景 |
+| permission enforcement | **DONE** | UI `canEdit` 门控 + `accept()` 第二守卫 + 服务端 frame gate；`m3/10`、A5 复核 |
+| **真实 LLM provider** | **NOT IMPLEMENTED** | 只有确定性本地 provider |
+
+### 3. 结论二：deterministic provider 是**A0 的 round-1 边界**，不是原始 milestone 的允许范围
+
+必须把这句话写清楚，不能让"round 1 已 GO"被读成"原始 scope 本来就只要求本地 provider"：
+
+- 原始 PROJECT/TASKS/ARCHITECTURE **没有**对 provider 作任何规定（既没要求外部模型，也没说只能是本地实现）；
+- `D-075 §4` 把"确定性本地 provider、不接外部 AI 服务"冻结为 **round 1 的边界**，理由是 autopilot 期间
+  不能引入需要凭据/付费的外部依赖。这是 **A0 的约束**，**不是**原始 milestone 的终点；
+- 负责人随后明确"项目要真实上线、必须支持真实 production AI provider"（Part C）。因此
+  **真实 provider 属于 M3 未完成的部分**，不是"未来增强"。
+
+### 4. 处置（对应负责人 Part F 的顺序）
+
+| # | 事项 | 处置 |
+| --- | --- | --- |
+| 1 | directory（PARTIAL） | **最小 Round 2**：把 `listDocuments` 接进 AI 面板，作为**只读目录**（列出当前身份可读的文档、标出当前文档）；选中另一文档时复用既有 **文档切换** 语义（`documentSelected`），面板保持打开，随后生成/审阅/应用仍只针对当前文档。**不新增**跨文档提案或跨文档应用语义 |
+| 2 | 真实 provider | 按 Part C 实现 `OpenAIProvider`（**服务端**持有 `OPENAI_API_KEY`，browser 不接触 key）；`DeterministicProvider` 保留，Gate 与 CI 仍只用它；live smoke 仅在存在 key 时 opt-in |
+| 3 | `m3-closed` | **暂不请求**。先完成 1+2 → M3 integrated Gate → A7 复审 → 再按 D-053 §5 请求一次 tag 授权 |
+| 4 | 原始 scope 的边界 | **不改写**：M3 仍是"提案 → 审阅 → 应用 + stale + 权限 + undo 隔离"；真实 provider 是**补齐**，不是新 scope |
+
+**后果。** "M3 已完成"这句话被拆成了可核对的 13 行状态表：11 项 DONE、1 项 PARTIAL（directory）、
+1 项 NOT IMPLEMENTED（真实 provider）。代价是 M3 的关闭被推迟；收益是不会把"当前实现"说成"原始要求"，
+也不会让一个 required 能力从 milestone 里悄悄消失。
