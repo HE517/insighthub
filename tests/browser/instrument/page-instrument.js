@@ -752,7 +752,17 @@
       idbNames: [...new Set(qa.idbOpens.map((entry) => entry.name))],
       editorMounts: qa.editor.mounts,
       editorUnmounts: qa.editor.unmounts,
-      editorLive: qa.editor.live,
+      /*
+       * `editorLive` is the **DOM truth**, not the add/remove tally below. The MutationObserver
+       * only decrements when the *removed node itself* is `.cm-editor`; React often removes an
+       * ancestor wrapper instead (e.g. the one-time identity remount replaces a subtree), so the
+       * tally can sit one too high forever without anything actually being alive. Counting the
+       * attached `.cm-editor` elements is also the stronger assertion: a genuinely duplicated
+       * editor would still be caught. The tally stays available as `editorLiveTally` for
+       * diagnostics.
+       */
+      editorLive: document.querySelectorAll('.cm-editor').length,
+      editorLiveTally: qa.editor.live,
       editorMountLog: qa.editor.mountLog.map((mount) => ({ ...mount })),
       identity: {
         present: qa.identity.present,
