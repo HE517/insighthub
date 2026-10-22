@@ -21,14 +21,15 @@
  *    at ESM module-evaluation time, before any of our code could report it;
  * 2. verifies the API surface the design was verified against;
  * 3. creates and opens the configured data directory;
- * 4. sets `PRAGMA journal_mode = WAL` and checks the answer;
- * 5. round-trips a BLOB containing NUL bytes (byte-for-byte);
- * 6. exercises `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`.
+ * 4. checks the volume has enough free space to be worth starting on (M4 B6, `DATA_DISK_LOW`);
+ * 5. sets `PRAGMA journal_mode = WAL` and checks the answer;
+ * 6. round-trips a BLOB containing NUL bytes (byte-for-byte);
+ * 7. exercises `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`.
  *
  * Every step is part of the design's contract with the runtime, so a pass here is
  * evidence for all of them rather than for "the module exists".
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, statfsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { SQLITE_BUSY_TIMEOUT_MS } from './constants.js';
@@ -43,7 +44,10 @@ export type SqliteCapabilityFailure =
   | 'SQLITE_RUNTIME_UNAVAILABLE'
   | 'DATA_PATH_UNAVAILABLE'
   | 'SQLITE_PROBE_FAILED'
-  | 'STORE_OPEN_FAILED';
+  | 'STORE_OPEN_FAILED'
+  | 'DATA_DISK_LOW'
+  | 'DATA_INTEGRITY_FAILED'
+  | 'DATA_SCHEMA_TOO_NEW';
 
 /**
  * A startup-blocking capability failure.
@@ -118,14 +122,115 @@ export interface SqliteCapabilityReport {
 }
 
 /**
+ * Default free-space floor before the store is opened: **100 MiB** (M4 B6, `DATA_DISK_LOW`).
+ *
+ * Why a startup floor at all: a full disk does not make SQLite fail at open, it makes the
+ * **next keystroke's `append`** fail with `SQLITE_FULL` — i.e. it surfaces as an editor error
+ * for a user, long after the operator could have noticed. Refusing to start while there is
+ * still a meaningful amount of space turns an imminent runtime failure into a diagnosable
+ * startup refusal. 100 MiB is deliberately a floor, not a capacity plan.
+ */
+export const DEFAULT_DATA_MIN_FREE_BYTES = 100 * 1024 * 1024;
+
+/** The slice of `statfs(2)` this check reads; injectable so the check itself is testable. */
+export interface FileSystemSpace {
+  /** Blocks available to an unprivileged process. */
+  readonly bavail: number | bigint;
+  /** Block size in bytes. */
+  readonly bsize: number | bigint;
+}
+
+/** How the preflight measures free space. Defaults to `fs.statfsSync`. */
+export type StatfsProbe = (path: string) => FileSystemSpace;
+
+/** Optional injections for the capability check. Production passes nothing. */
+export interface CapabilityOptions {
+  /**
+   * Free-space probe. Tests pass a fake to exercise `DATA_DISK_LOW` without filling a disk;
+   * production omits it and gets `statfsSync`.
+   */
+  readonly statfs?: StatfsProbe;
+  /**
+   * Overrides `DATA_MIN_FREE_BYTES`. `0` disables the floor, so tests that are not about disk
+   * space can open a store without depending on the host volume.
+   */
+  readonly minFreeBytes?: number;
+}
+
+/**
+ * The configured free-space floor.
+ *
+ * `DATA_MIN_FREE_BYTES` follows the `INSIGHTHUB_DATA_PATH` precedent (§7.10): an environment
+ * override of an operational policy, not a protocol value. An empty, malformed or negative
+ * value falls back to {@link DEFAULT_DATA_MIN_FREE_BYTES}; an explicit `0` disables the check
+ * (used by tests and by an operator who accepts the risk on a deliberately tiny volume).
+ *
+ * Only a plain non-negative integer is accepted. A lenient `parseInt` would read
+ * `DATA_MIN_FREE_BYTES=100MiB` as 100 bytes and silently disable the floor — a typo must not
+ * turn a safety check off.
+ */
+export function readMinFreeBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DATA_MIN_FREE_BYTES?.trim();
+  if (raw === undefined || raw === '') return DEFAULT_DATA_MIN_FREE_BYTES;
+  if (!/^\d+$/.test(raw)) return DEFAULT_DATA_MIN_FREE_BYTES;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_DATA_MIN_FREE_BYTES;
+}
+
+/**
+ * Refuse to start when the data directory's volume is already nearly full.
+ *
+ * `bavail` (not `bfree`) is used because it is the space actually available to this process on
+ * a volume with reserved blocks. A `statfs` failure is a startup failure too: if free space
+ * cannot be measured, "assume it is fine" is the same silent-degradation mode this check
+ * exists to remove — and SQLite would find out at the first write instead.
+ */
+function assertMinimumFreeSpace(dataPath: string, options: CapabilityOptions): void {
+  const minFreeBytes = options.minFreeBytes ?? readMinFreeBytes();
+  if (minFreeBytes <= 0) return;
+
+  const probe = options.statfs ?? ((path: string): FileSystemSpace => statfsSync(path));
+
+  let freeBytes: number;
+  try {
+    const stats = probe(dataPath);
+    freeBytes = Number(stats.bavail) * Number(stats.bsize);
+  } catch (cause) {
+    throw new SqliteCapabilityError(
+      'SQLITE_PROBE_FAILED',
+      `the free space of the durable data directory could not be measured: ${dataPath}`,
+      'The server checks free space before opening the store so a full disk is a startup refusal rather than a failed keystroke later.',
+      cause,
+    );
+  }
+
+  if (!Number.isFinite(freeBytes)) {
+    throw new SqliteCapabilityError(
+      'SQLITE_PROBE_FAILED',
+      `the free space of the durable data directory was not a usable number: ${dataPath}`,
+      'The server checks free space before opening the store so a full disk is a startup refusal rather than a failed keystroke later.',
+    );
+  }
+
+  if (freeBytes < minFreeBytes) {
+    throw new SqliteCapabilityError(
+      'DATA_DISK_LOW',
+      `the durable data directory has ${Math.floor(freeBytes)} bytes free, below the ${minFreeBytes}-byte minimum: ${dataPath}`,
+      'Free space on the volume holding INSIGHTHUB_DATA_PATH, or lower DATA_MIN_FREE_BYTES if you accept that writes may fail with SQLITE_FULL.',
+    );
+  }
+}
+
+/**
  * Verify the runtime and the data directory, then throw away the probe database.
  *
- * Called by `openDocumentStore` before the real store is opened and by `index.ts` before
- * the server listens, so "refuses to start" happens before any socket is accepted.
+ * Called by `openDocumentStore` before the real store is opened, so "refuses to start"
+ * happens before any socket is accepted.
  */
 export function assertSqliteCapability(
   sqlite: SqliteModule,
   dataPath: string,
+  options: CapabilityOptions = {},
 ): SqliteCapabilityReport {
   // ---- 3. The data directory must exist and be writable. ----
   try {
@@ -139,10 +244,15 @@ export function assertSqliteCapability(
     );
   }
 
+  // ---- 4. The disk must have room for the store to actually work. ----
+  // Before the probe, so a nearly-full volume is refused without writing even a temporary
+  // database into it.
+  assertMinimumFreeSpace(dataPath, options);
+
   const probePath = join(dataPath, `.insighthub-capability-probe-${process.pid}-${Date.now()}.db`);
 
   try {
-    // ---- 4-6. A real database, real statements, real transaction. ----
+    // ---- 5-7. A real database, real statements, real transaction. ----
     const db = new sqlite.DatabaseSync(probePath);
     try {
       db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
