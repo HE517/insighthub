@@ -21,6 +21,14 @@
  * server-side and mapped to the internal `app_user` id. An unauthenticated upgrade gets a raw
  * `401` and no socket; nothing about the identity comes from the query string or a frame.
  *
+ * M4 B4 adds **origin hardening** (§18.3/§18.4): an upgrade whose `Origin` header exists and is
+ * not the configured origin is refused with `403 origin_not_allowed` before identity is even
+ * resolved, and no socket is established. The order is deliberate — the cheapest, most
+ * attacker-controlled fact is checked first, and a cross-site page cannot use the upgrade to
+ * learn whether a session cookie is valid. An upgrade with **no** `Origin` is allowed: that is a
+ * non-browser client, which has no ambient cookie and therefore no CSRF surface (the HTTP guard
+ * makes the same choice; see `security/origin.ts`).
+ *
  * This module owns **only** transport concerns: framing decisions, error delivery,
  * liveness and shutdown. Membership, Yjs state and awareness cleanup live in
  * `./rooms/**`.
@@ -45,6 +53,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { resolveAuthenticatedUser, type AuthzService, type IdentityDeps } from './authz/public.js';
 import type { AuthMode, ServerConfig } from './config.js';
+import { isAllowedOrigin, readOriginHeader } from './security/origin.js';
 import { Heartbeat } from './rooms/heartbeat.js';
 import { RoomRegistry, type HydrationOutcome, type RoomRegistryOptions } from './rooms/registry.js';
 import type { SocketContext } from './rooms/context.js';
@@ -203,9 +212,10 @@ export function attachWebSocketServer(
   /**
    * Refuse an upgrade with a raw HTTP response and **no** socket (`docs/CONTRACTS.md` §18.4).
    *
-   * Used for the 404 (wrong path) and the 401 (no verified identity). Writing the response
-   * before `handleUpgrade` is what makes "no socket was established" true rather than "a socket
-   * opened and was then closed for reasons the client must infer".
+   * Used for the 404 (wrong path), the 403 (foreign `Origin`, M4 B4) and the 401 (no verified
+   * identity). Writing the response before `handleUpgrade` is what makes "no socket was
+   * established" true rather than "a socket opened and was then closed for reasons the client
+   * must infer".
    */
   const refuseWithStatus = (socket: Duplex, response: string): void => {
     if (socket.destroyed) return;
@@ -240,6 +250,27 @@ export function attachWebSocketServer(
   };
 
   /**
+   * Refuse an upgrade whose `Origin` is not the configured one (M4 B4, §18.3/§18.4).
+   *
+   * The response is a raw HTTP `403` carrying the same body the HTTP guard uses, and the socket
+   * is destroyed **before** `handleUpgrade` — so "no socket was established" is a property of the
+   * handshake, not a socket that opened and was then closed. The body is a courtesy for logs and
+   * non-browser clients; the browser blocks reading it anyway because no CORS header is sent.
+   */
+  const refuseForbiddenOrigin = (socket: Duplex): void => {
+    const body = JSON.stringify({ error: 'origin_not_allowed' });
+    refuseWithStatus(
+      socket,
+      'HTTP/1.1 403 Forbidden\r\n' +
+        'Connection: close\r\n' +
+        'Content-Type: application/json\r\n' +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        '\r\n' +
+        body,
+    );
+  };
+
+  /**
    * Authenticate the upgrade, then (and only then) establish the socket.
    *
    * `async` because clerk mode awaits `authenticateRequest` (a network call in production).
@@ -256,6 +287,16 @@ export function attachWebSocketServer(
 
     if (pathname !== config.wsPath) {
       refuseWithStatus(socket, 'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      return;
+    }
+
+    // B4: Origin is checked **before** identity, on purpose. A cross-site page must not be able
+    // to open a socket at all, and it must not be able to use the upgrade as an oracle for
+    // whether the user's cookie is valid. A missing Origin means a non-browser client, which
+    // carries no ambient cookie — allowed, exactly as on the HTTP side.
+    const requestOrigin = readOriginHeader(request.headers.origin);
+    if (requestOrigin !== undefined && !isAllowedOrigin(config.corsOrigin, requestOrigin)) {
+      refuseForbiddenOrigin(socket);
       return;
     }
 

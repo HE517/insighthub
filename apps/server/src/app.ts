@@ -30,14 +30,25 @@
  * injected provider. The route owns no authorization logic and no provider construction; both
  * are passed in, which is what makes the failure matrix testable without a real model.
  *
- * ## CORS
+ * ## CORS and CSRF (M4 B4)
  *
  * The API is served on a different port than the Vite dev server, so the browser needs
  * `credentials: true` and an **explicit** origin — `Access-Control-Allow-Origin: *` is illegal
  * together with credentials, and would also mean "any site may call the API with the user's
- * cookie". A `*` configuration is therefore refused at startup rather than quietly weakened.
+ * cookie". A `*` configuration is therefore refused at construction rather than quietly weakened.
+ *
+ * `security/origin.ts` owns the allow-list, the preflight answer and the `403 origin_not_allowed`
+ * refusal for state-changing requests. It runs before any route, so a request from a foreign
+ * origin is refused before its body is parsed and before identity is resolved.
+ *
+ * ## Bootstrap rate limit (M4 B4)
+ *
+ * `POST /api/session/bootstrap` mints a session for a caller-supplied demo identity, so it is the
+ * one endpoint where guessing is cheap. It is limited per client address to
+ * {@link BOOTSTRAP_RATE_LIMIT} requests per {@link BOOTSTRAP_RATE_WINDOW_MS}, in process, with a
+ * bounded bucket map (`security/rate-limit.ts`). The route only exists in development/test
+ * (§18.5), so this protects the fixture rather than a production surface.
  */
-import cors from 'cors';
 import express, {
   type Express,
   type NextFunction,
@@ -63,6 +74,18 @@ import {
   type IdentityOptions,
 } from './authz/public.js';
 import { type AuthMode, type ServerConfig } from './config.js';
+import { createOriginGuard } from './security/origin.js';
+import { FixedWindowRateLimiter } from './security/rate-limit.js';
+
+/**
+ * Bootstrap limit: requests per client address per window (M4 B4). Fixed-window, in process —
+ * V1 is a single instance (D-082 D2), so a shared store would be infrastructure the deployment
+ * does not have.
+ */
+export const BOOTSTRAP_RATE_LIMIT = 10;
+
+/** Bootstrap rate-limit window: one minute, matching the requirement's "10 次/分钟". */
+export const BOOTSTRAP_RATE_WINDOW_MS = 60_000;
 
 /**
  * The frozen response bodies.
@@ -82,6 +105,17 @@ const RESPONSE_BODIES = {
   notFound: { error: 'not_found' },
   forbidden: { error: 'forbidden' },
   invalidDemoIdentity: { error: 'invalid_demo_identity' },
+  /**
+   * §B4's refusal for a cross-origin state-changing request (and for a preflight from a
+   * non-allowed origin). One body for both, so a caller cannot use the response to probe
+   * whether the endpoint exists before the origin decision.
+   */
+  originNotAllowed: { error: 'origin_not_allowed' },
+  /**
+   * §B4's refusal when the per-address bootstrap window is exhausted. Distinct from a 401/403:
+   * the caller is allowed to use the endpoint, just not this often.
+   */
+  rateLimited: { error: 'rate_limited' },
   /**
    * HTTP counterpart of `WS_ERROR_CODES.INTERNAL_ERROR`.
    *
@@ -158,7 +192,21 @@ export function createApp(
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(cors({ origin: config.corsOrigin, credentials: true }));
+  // Before every route: the CORS headers a browser needs, the preflight answer, and the CSRF
+  // refusal for state-changing requests from a foreign origin (`security/origin.ts`).
+  app.use(createOriginGuard(config.corsOrigin));
+
+  /**
+   * One limiter per application, not per process.
+   *
+   * A module-level singleton would make two servers in one process (every A3 harness, and the
+   * restart scenarios) share buckets, so a test suite could exhaust another test's window. The
+   * limiter belongs to the app instance, exactly like the routes it protects.
+   */
+  const bootstrapLimiter = new FixedWindowRateLimiter({
+    limit: BOOTSTRAP_RATE_LIMIT,
+    windowMs: BOOTSTRAP_RATE_WINDOW_MS,
+  });
 
   /** Liveness probe. Must return 200 for the M0 acceptance criteria. */
   app.get('/health', (_req: Request, res: Response) => {
@@ -174,7 +222,7 @@ export function createApp(
     });
   });
 
-  mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled);
+  mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled, bootstrapLimiter);
   mountAiRoutes(app, authz, aiProvider, identityDeps);
 
   /* ---------------------------------------------------------------- *
@@ -209,6 +257,7 @@ function mountAuthorizationRoutes(
   authz: AuthzService,
   identityDeps: IdentityDeps,
   demoBootstrapEnabled: boolean,
+  bootstrapLimiter: FixedWindowRateLimiter,
 ): void {
   /* ---------------------------------------------------------------- *
    * Session (§17.2, §17.4, §18)
@@ -220,6 +269,9 @@ function mountAuthorizationRoutes(
   if (demoBootstrapEnabled) {
     app.post(
       '/api/session/bootstrap',
+      // Rate limit before parsing: a caller over its window must not be able to make the server
+      // read a body. The origin guard already ran, so a CSRF refusal never consumes quota.
+      bootstrapRateLimit(bootstrapLimiter),
       parseBootstrapBody,
       (req: Request, res: Response) => {
         const demoUserId = readDemoUserId(req.body);
@@ -394,6 +446,48 @@ const parseBootstrapBody: RequestHandler = (req: Request, res: Response, next: N
     next();
   });
 };
+
+/**
+ * Per-client-address limiter for `POST /api/session/bootstrap` (M4 B4).
+ *
+ * ## Why the socket address, not `X-Forwarded-For`
+ *
+ * A forwarded header is caller-controlled unless a trusted proxy sets it, so honouring it here
+ * would let one client rotate a fake address per request and never be limited. `req.ip` is the
+ * Express resolution, which uses the socket address while `trust proxy` is off — the deliberate
+ * default in this app (see `sessionCookieOptions`). The route exists only in development/test
+ * (§18.5), where clients connect directly, so the socket address is the client address. A future
+ * deployment behind a TLS proxy would need `trust proxy` configured before **any** address-based
+ * limiter is meaningful; that is recorded as a handoff item, not assumed here.
+ *
+ * ## Why the key is normalised
+ *
+ * Node reports IPv4 clients on a dual-stack listener as `::ffff:127.0.0.1`. Stripping that
+ * prefix keeps one client in one bucket regardless of which stack accepted the connection.
+ */
+function rateLimitKey(req: Request): string {
+  const address = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  return address.startsWith('::ffff:') ? address.slice(7) : address;
+}
+
+/**
+ * Answer `429 rate_limited` once the per-address window is exhausted.
+ *
+ * `Retry-After` is the standard signal for "when may I try again"; the body stays the frozen
+ * `{"error":"rate_limited"}` so a client never has to parse a message. The limiter is consulted
+ * before the body is parsed, so a denied caller cannot make the server allocate a parse tree.
+ */
+function bootstrapRateLimit(limiter: FixedWindowRateLimiter): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const decision = limiter.check(rateLimitKey(req));
+    if (!decision.allowed) {
+      res.setHeader('Retry-After', String(decision.retryAfterSeconds));
+      res.status(429).json(RESPONSE_BODIES.rateLimited);
+      return;
+    }
+    next();
+  };
+}
 
 /**
  * Read `demoUserId` out of an untrusted body.
