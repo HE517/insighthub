@@ -26,13 +26,20 @@
  *
  * | Variable | Meaning |
  * | --- | --- |
- * | `AI_PROVIDER` | `openai` enables the adapter; anything else (including unset) means disabled |
+ * | `AI_PROVIDER` | `openai` enables this adapter; `stub` selects the development/evidence-only provider (`stub.ts`); anything else (including unset) means disabled |
  * | `OPENAI_API_KEY` | **required** when `AI_PROVIDER=openai`; absent ⇒ `503`, never a crash |
  * | `OPENAI_MODEL` | optional; defaults to {@link DEFAULT_OPENAI_MODEL} |
  *
  * There is deliberately no `VITE_OPENAI_API_KEY` path and no browser→OpenAI call. Missing
  * configuration is a runtime `503` (`ai_provider_not_configured`) this round; the startup
  * fail-fast contract belongs to M4 D3 (`docs/DECISIONS.md` D-080 §3).
+ *
+ * ## `stub` is explicit, and not a production mode
+ *
+ * `AI_PROVIDER=stub` is the only way to select `createStubProvider()`. It is never a default
+ * and never a fallback: an unset variable still yields `null` (the route answers `503`).
+ * Production configuration validation (M4 D3) must reject `AI_PROVIDER=stub`; until that
+ * lands, `index.ts` logs a development/evidence-only warning next to `ai ready stub`.
  *
  * ## Timeout and abort
  *
@@ -51,6 +58,7 @@ import {
   type ServerAiProvider,
   type ServerAiSuggestInput,
 } from './provider.js';
+import { createStubProvider } from './stub.js';
 
 /** OpenAI Chat Completions endpoint. Fixed: no base-URL configuration is in the contract. */
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
@@ -97,11 +105,16 @@ export interface OpenAiProviderConfig {
 }
 
 /**
- * Read the server-only provider configuration.
+ * Read the server-only **OpenAI** configuration.
  *
- * Returns `null` for any state in which no provider can be built. That is the whole
- * fail-closed policy for configuration: a missing key must produce `503`, not a startup
+ * Returns `null` for any state in which no OpenAI provider can be built. That is the whole
+ * fail-closed policy for OpenAI configuration: a missing key must produce `503`, not a startup
  * crash (M4 D3 owns fail-fast) and certainly not a browser-side fallback.
+ *
+ * `AI_PROVIDER=stub` also returns `null` here because no OpenAI configuration exists. That is
+ * not the same as "no provider": `createServerAiProviderFromEnv` checks the stub selector
+ * **before** calling this function, so the stub never accidentally inherits an OpenAI key and
+ * a stub with a key still runs the stub.
  */
 export function readOpenAiProviderConfig(env: NodeJS.ProcessEnv): OpenAiProviderConfig | null {
   const provider = (env['AI_PROVIDER'] ?? '').trim().toLowerCase();
@@ -114,15 +127,43 @@ export function readOpenAiProviderConfig(env: NodeJS.ProcessEnv): OpenAiProvider
   return { apiKey, model };
 }
 
+/** The provider class selected by configuration. `disabled` means the route answers `503`. */
+export type ServerAiProviderKind = 'openai' | 'stub' | 'disabled';
+
+/** `AI_PROVIDER=stub`, case/whitespace-insensitively. Never inferred from anything else. */
+function isStubSelected(env: NodeJS.ProcessEnv): boolean {
+  return (env['AI_PROVIDER'] ?? '').trim().toLowerCase() === 'stub';
+}
+
 /**
- * Build the production provider from the environment, or `null` when it is not configured.
+ * Which provider the environment selects, for the startup log.
+ *
+ * Kept in the same module as the factory so the logged state and the constructed provider
+ * cannot disagree about precedence. `stub` is an explicit development/evidence mode only;
+ * production configuration validation (M4 D3) must reject it.
+ */
+export function readServerAiProviderKind(
+  env: NodeJS.ProcessEnv = process.env,
+): ServerAiProviderKind {
+  if (isStubSelected(env)) return 'stub';
+  return readOpenAiProviderConfig(env) === null ? 'disabled' : 'openai';
+}
+
+/**
+ * Build the configured provider, or `null` when nothing is configured.
  *
  * The default parameter is the process environment; `index.ts` passes it explicitly only so
  * it can log whether AI is enabled. Nothing here throws on missing configuration.
+ *
+ * Precedence is deliberate and total: `AI_PROVIDER=stub` wins over every OpenAI variable,
+ * then `AI_PROVIDER=openai` plus a non-empty key, otherwise `null`. There is no fallback from
+ * a broken OpenAI configuration to the stub.
  */
 export function createServerAiProviderFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ServerAiProvider | null {
+  if (isStubSelected(env)) return createStubProvider();
+
   const config = readOpenAiProviderConfig(env);
   return config === null ? null : createOpenAiProvider(config);
 }

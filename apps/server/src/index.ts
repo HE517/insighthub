@@ -28,7 +28,7 @@
 import { createServer } from 'node:http';
 
 import { createApp } from './app.js';
-import { createServerAiProviderFromEnv } from './ai/openai.js';
+import { createServerAiProviderFromEnv, readServerAiProviderKind } from './ai/openai.js';
 import { createAuthz, type AuthzService } from './authz/public.js';
 import { loadConfig } from './config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
@@ -91,12 +91,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Built here (rather than inside `createApp`) only so the startup log can say whether the
-  // AI endpoint is configured. A missing key is not a startup failure this round: the route
-  // answers `503 ai_provider_not_configured` (D-080 §3 puts fail-fast in M4 D3). The log
-  // prints only the enabled/disabled state — never the key, the model or request material.
+  // Built here (rather than inside `createApp`) only so the startup log can say which provider
+  // is configured. A missing key is not a startup failure this round: the route answers
+  // `503 ai_provider_not_configured` (D-080 §3 puts fail-fast in M4 D3). The log prints only
+  // the provider class — never the key, the model or request material.
+  //
+  // `stub` is a development/evidence-only provider, selected only by an explicit
+  // `AI_PROVIDER=stub`. Production configuration validation (M4 D3) must reject it; until then
+  // the warning makes an accidentally stub-backed production server visible in the first lines
+  // of its log. It is never a default and never a fallback for a broken OpenAI configuration.
+  const aiKind = readServerAiProviderKind(process.env);
   const aiProvider = createServerAiProviderFromEnv(process.env);
-  console.log(`[server] ai      ${aiProvider === null ? 'disabled' : 'ready  openai'}`);
+  if (aiKind === 'stub') {
+    console.log('[server] ai      ready  stub');
+    console.log(
+      '[server] ai      WARNING: stub is for development/evidence only; production config validation (M4 D3) must reject AI_PROVIDER=stub',
+    );
+  } else {
+    console.log(`[server] ai      ${aiKind === 'disabled' ? 'disabled' : 'ready  openai'}`);
+  }
 
   const app = createApp(config, authz, aiProvider);
   const server = createServer(app);
