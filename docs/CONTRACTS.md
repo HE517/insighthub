@@ -1200,3 +1200,25 @@ Missing required configuration in production is a **startup failure**, not a war
 
 Only the first refusal is reported; the gate runs before the store is opened and before `listen`.
 `AUTH_MODE` is matched case-sensitively.
+### 18.7 Origin / CSRF hardening (M4 B4 — frozen)
+
+**Allow-list.** Exactly one browser origin: `config.corsOrigin`. A development convenience accepts
+the loopback aliases of the same scheme+port (`localhost` ↔ `127.0.0.1` ↔ `[::1]`); production
+requires an explicit `https://` origin (B3) and never enters that branch.
+
+| Request | Behaviour |
+| --- | --- |
+| Allowed `Origin` | `Access-Control-Allow-Origin: <origin>`, `Access-Control-Allow-Credentials: true`, `Vary: Origin`; `OPTIONS` preflight → `204` with `Allow-Methods`/`Allow-Headers` |
+| Disallowed `Origin`, state-changing method (`POST`/`PUT`/`PATCH`/`DELETE`) | **`403 {"error":"origin_not_allowed"}`** before routing, body parsing and identity resolution (even for unknown paths) |
+| Disallowed `Origin`, `GET`/`HEAD` | executes, but no CORS headers (a browser cannot read the response) |
+| **No** `Origin` | allowed: a non-browser client has no ambient cookie. This is a deliberate policy, not an oversight; the second layer is the `SameSite=Lax` session cookie |
+| WebSocket upgrade with a disallowed `Origin` | raw `403 {"error":"origin_not_allowed"}` then `socket.destroy()`; no socket is established (path 404 → Origin → identity) |
+
+Origin is **not** authentication: a non-browser client can forge it. Authentication stays §17/§18.
+
+**Bootstrap rate limit.** `POST /api/session/bootstrap` is limited per client address to
+`BOOTSTRAP_RATE_LIMIT_PER_MINUTE` (default **10**) in a fixed 60 s window; the next attempt is
+`429 {"error":"rate_limited"}` with `Retry-After`. It is in-process and bounded (expired buckets are
+swept, `maxKeys` cap), it does not trust `X-Forwarded-For`, and it runs before body parsing. The
+browser suite raises the value through that same configuration variable; the limiter code is not
+bypassed.

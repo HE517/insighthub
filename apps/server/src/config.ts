@@ -58,6 +58,15 @@ export interface ServerConfig {
   host: string;
   /** Origin allowed to call the HTTP API and open the WebSocket. */
   corsOrigin: string;
+  /**
+   * Bootstrap rate limit per client address, per minute (§18.7). Defaults to 10; the browser
+   * suite raises it because one run legitimately opens far more pages from one address. This is
+   * a configuration seam, not a test-only branch: the limiter itself is identical.
+   *
+   * Optional at the type level so a hand-built config (every test harness) keeps its shape;
+   * absent means the 10/min default.
+   */
+  bootstrapRateLimitPerMinute?: number;
   /** WebSocket upgrade path. */
   wsPath: string;
   /**
@@ -89,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port: readPort(env.PORT, 3001),
     host: env.HOST ?? '127.0.0.1',
     corsOrigin: env.CORS_ORIGIN ?? DEFAULT_CORS_ORIGIN,
+    bootstrapRateLimitPerMinute: readPort(env.BOOTSTRAP_RATE_LIMIT_PER_MINUTE, 10),
     wsPath: env.WS_PATH ?? '/ws',
     authMode: readAuthMode(env.AUTH_MODE),
     ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),

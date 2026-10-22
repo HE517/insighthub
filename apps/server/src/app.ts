@@ -204,7 +204,10 @@ export function createApp(
    * limiter belongs to the app instance, exactly like the routes it protects.
    */
   const bootstrapLimiter = new FixedWindowRateLimiter({
-    limit: BOOTSTRAP_RATE_LIMIT,
+    // The limit is configuration (`BOOTSTRAP_RATE_LIMIT_PER_MINUTE`, default 10): one suite run
+    // opens far more pages than a human ever would, and the limiter behaviour itself is what the
+    // tests pin. A hard-coded value would force the suite to bypass the guard it is meant to prove.
+    limit: config.bootstrapRateLimitPerMinute ?? BOOTSTRAP_RATE_LIMIT,
     windowMs: BOOTSTRAP_RATE_WINDOW_MS,
   });
 

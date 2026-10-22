@@ -245,7 +245,16 @@ export class DevStack {
   #resolvedServerEnv() {
     // The server reads `PORT` for its listen port; the Vite proxy reads the same variable for
     // its backend target, so one value keeps them in agreement.
-    return { PORT: String(this.#serverPort), HOST: '127.0.0.1', ...this.#serverEnvOverrides };
+    //
+    // One suite run opens far more pages from 127.0.0.1 than a human ever would, so the
+    // bootstrap guard (10/min by default) would answer 429 mid-run. The limit is configuration,
+    // not a test-only branch: raising it here keeps the guard itself under test.
+    return {
+      PORT: String(this.#serverPort),
+      HOST: '127.0.0.1',
+      BOOTSTRAP_RATE_LIMIT_PER_MINUTE: '10000',
+      ...this.#serverEnvOverrides,
+    };
   }
 
   /** The Vite environment the next start will use. */
