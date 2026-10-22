@@ -585,6 +585,19 @@ and missing tables are created with `IF NOT EXISTS`), and a *newer* version is r
 listening** — it never silently starts on an empty database. Runtime write failures
 (`SQLITE_FULL`, a read-only database) surface as errors from `append`; they are never swallowed.
 
+**Backups (M4 B8, D-082 D2).** `apps/server/src/persistence/backup.ts` takes a consistent online
+snapshot with `VACUUM INTO`, names it `insighthub-<UTC ISO>-<n>.db`, keeps seven days (never deleting
+the newest file) and restores by writing a temporary file next to the target and renaming it, so a
+restore is atomic. A **real restore drill** is part of the test suite: write a document, back up,
+delete the data directory, restore, reopen the store, read the same text back. The CLI
+(`backup` / `restore <file> [--force]`) is the operator interface; `restore` refuses to overwrite a
+live database without `--force`.
+
+The cadence is **in-process**: `BACKUP_ENABLED=true` starts a daily scheduler (unref'd timer) that
+catches up on start when the newest snapshot is stale and prunes beyond `BACKUP_RETENTION_DAYS`.
+A Render cron job cannot mount the web service's disk, so scheduling from inside the process is the
+simplest thing that satisfies D2. Backups live on the same persistent disk as the database: that is
+independent of a disk snapshot, but **not** an off-site copy — an operator task, not a code claim.
 Tests must pass a per-test temporary directory and must never touch a development database;
 the test harness creates and removes its own path per suite (D-041). The store refuses to
 start when the directory cannot be opened, rather than degrading to memory-only, because a

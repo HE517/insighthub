@@ -132,6 +132,12 @@ export interface ServerConfig {
    * directory or its `index.html` is absent (`STATIC_DIR_MISSING`).
    */
   staticDir?: string;
+  /** Take a daily logical backup from inside the server process (M4 B8). Disabled by default. */
+  backupEnabled?: boolean;
+  /** Where snapshots go; defaults to `<dataPath>/../backups`. */
+  backupDir?: string;
+  /** Retention in days; defaults to the frozen 7. */
+  backupRetentionDays?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -153,6 +159,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ...(readPositiveOrUndefined(env.AI_MAX_CONCURRENT_SERVER) === undefined
       ? {}
       : { aiMaxConcurrentServer: readPositiveOrUndefined(env.AI_MAX_CONCURRENT_SERVER) }),
+    ...(env.BACKUP_ENABLED === 'true' ? { backupEnabled: true } : {}),
+    ...(env.BACKUP_DIR === undefined || env.BACKUP_DIR.trim() === ''
+      ? {}
+      : { backupDir: env.BACKUP_DIR }),
+    ...(readPositiveOrUndefined(env.BACKUP_RETENTION_DAYS) === undefined
+      ? {}
+      : { backupRetentionDays: readPositiveOrUndefined(env.BACKUP_RETENTION_DAYS) }),
     authMode: readAuthMode(env.AUTH_MODE),
     ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),
     // An empty value is treated as unset: `INSIGHTHUB_DATA_PATH=` in a shell should not

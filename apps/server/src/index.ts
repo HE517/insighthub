@@ -53,6 +53,7 @@ import {
 } from './authz/public.js';
 import { loadConfig, type AuthMode } from './config.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
+import { startBackupScheduler } from './persistence/backup-scheduler.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
 import type { DocumentStore } from './persistence/types.js';
@@ -206,6 +207,30 @@ async function main(): Promise<void> {
 
   const app = createApp(config, authz, aiProvider, identityOptions, undefined, { staticAssets });
   const server = createServer(app);
+
+  /*
+   * Daily logical backups (M4 B8, D-082 D2). Disabled by default; a deployment turns it on with
+   * `BACKUP_ENABLED=true`. It runs in this process because a Render cron job cannot mount the
+   * web service's disk; the timer is unref'd so it can never keep the process alive.
+   */
+  const backupScheduler =
+    config.backupEnabled === true
+      ? startBackupScheduler({
+          dataPath,
+          ...(config.backupDir === undefined ? {} : { backupDir: config.backupDir }),
+          ...(config.backupRetentionDays === undefined
+            ? {}
+            : { retentionDays: config.backupRetentionDays }),
+          onError: (error: unknown) => {
+            console.error(
+              `[server] backup  failed  ${error instanceof Error ? error.message : String(error)}`,
+            );
+          },
+        })
+      : null;
+  if (backupScheduler !== null) {
+    console.log('[server] backup  scheduled  daily, 7-day retention');
+  }
   // All three seams are supplied, so none of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store, without authz, or a clerk-mode socket without an
   // identity resolver is a wiring mistake, not a mode.
@@ -230,6 +255,8 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[server] ${signal} received, shutting down`);
 
+    // Stop the backup timer first: a scheduled snapshot must not race a closing store.
+    backupScheduler?.stop();
     // Order matters: stop the transports first so no new mutation can enter the pipeline,
     // then flush and release the store. `registry.destroy()` inside `socket.close()` stops
     // every per-document queue, so nothing is left mid-append when the store closes.
