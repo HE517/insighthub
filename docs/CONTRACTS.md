@@ -671,7 +671,7 @@ repaired-by-guess output is forbidden:
 | provider 5xx / network | `502 provider_error` |
 | model output not parseable | `502 invalid_provider_output` |
 | model output fails the draft schema (unknown op, too many ops, summary too long, negative index, …) | `502 invalid_provider_output` |
-| rate limited | `429 rate_limited` (reserved; enforcement is M4 D6) |
+| rate limited by our budget | `429 rate_limited` + `Retry-After` (M4 B5; D-082 D3) |
 
 **Configuration (server only).** `OPENAI_API_KEY` (required when `AI_PROVIDER=openai`),
 `OPENAI_MODEL` (optional, default documented in the adapter), `AI_PROVIDER` (`openai` |
@@ -693,8 +693,22 @@ deterministic evidence.
 changed and the WebSocket wire is untouched, so `SHARED_CONTRACT_VERSION` stays **8** and
 `PROTOCOL_VERSION` stays **2**.
 
-**Upstream 429.** A 429 from the model provider is mapped to `provider` → `502` until M4 D6
-implements our own limits. The `429 rate_limited` row above is *our* budget, not the model's.
+**Budgets (M4 B5, frozen by D-082 D3).** Per user: **20 generations/hour**, **100/day**, **1 in
+flight**; per server: **4 provider requests in flight**. Exceeding any of them answers
+`429 rate_limited` with an integer `Retry-After` (seconds) and **does not call the provider**. A
+request that reached the provider counts against the budget even if it failed; a request refused by
+the budget counts for nothing. The budgets are in-process and bounded (V1 is a single instance), and
+the browser suite raises them through `AI_RATE_LIMIT_PER_HOUR` / `AI_RATE_LIMIT_PER_DAY` rather than
+bypassing the guard.
+
+**Provider policy.** `OPENAI_MODEL` defaults to `gpt-5.6-luna` (server-side configurable, no
+automatic fallback to a pricier model), `max_tokens` defaults to **4096**
+(`OPENAI_MAX_OUTPUT_TOKENS`), the provider timeout defaults to **30 s** (`AI_PROVIDER_TIMEOUT_MS`),
+and automatic retry is **0**: a 5xx, timeout, network error or abort is reported once and never
+re-sent.
+
+**Upstream 429.** A 429 from the model provider is mapped to `provider` → `502`. The
+`429 rate_limited` above is *our* budget, not the model's.
 
 **Production gate (not optional).** Enabling `AI_PROVIDER=openai` in production requires M4 D1
 (real authentication), M4 D3 (config validation that **rejects `stub`** and fails fast) and M4 D6

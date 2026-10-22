@@ -78,6 +78,15 @@ const SWEEP_INTERVAL_MS = 1_000;
 /** Default cap on tracked users. Well above a real V1 population for a single instance. */
 const DEFAULT_MAX_KEYS = 10_000;
 
+/** A configured budget override must be a positive integer; anything else is a programming error. */
+function positiveOr(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`AiLimits: ${name} must be a positive integer`);
+  }
+  return value;
+}
+
 /** Why a request was refused. The route does not expose this: the body is only `{ error }`. */
 export type AiLimitDenialReason = 'hourly' | 'daily' | 'user_concurrency' | 'server_concurrency';
 
@@ -95,6 +104,16 @@ export interface AiLimitsOptions {
   readonly now?: () => number;
   /** Hard cap on tracked users. Defaults to {@link DEFAULT_MAX_KEYS}. */
   readonly maxKeys?: number;
+  /**
+   * Budget overrides. Absent means the frozen D-082 D3 number; the browser suite raises the
+   * hour/day budgets through the same configuration the production path reads, because one run
+   * legitimately performs far more generations than a human ever would. The limiter itself is
+   * unchanged — this is a seam, not a bypass.
+   */
+  readonly perHour?: number;
+  readonly perDay?: number;
+  readonly perUserConcurrent?: number;
+  readonly perServerConcurrent?: number;
 }
 
 interface UserBudget {
@@ -118,6 +137,10 @@ interface UserBudget {
 export class AiLimits {
   readonly #now: () => number;
   readonly #maxKeys: number;
+  readonly #perHour: number;
+  readonly #perDay: number;
+  readonly #perUserConcurrent: number;
+  readonly #perServerConcurrent: number;
   readonly #users = new Map<string, UserBudget>();
   #activeServerGenerations = 0;
   #lastSweepAt = Number.NEGATIVE_INFINITY;
@@ -129,6 +152,18 @@ export class AiLimits {
     }
     this.#now = options.now ?? Date.now;
     this.#maxKeys = maxKeys;
+    this.#perHour = positiveOr(options.perHour, AI_LIMIT_PER_USER_PER_HOUR, 'perHour');
+    this.#perDay = positiveOr(options.perDay, AI_LIMIT_PER_USER_PER_DAY, 'perDay');
+    this.#perUserConcurrent = positiveOr(
+      options.perUserConcurrent,
+      AI_MAX_CONCURRENT_PER_USER,
+      'perUserConcurrent',
+    );
+    this.#perServerConcurrent = positiveOr(
+      options.perServerConcurrent,
+      AI_MAX_CONCURRENT_SERVER,
+      'perServerConcurrent',
+    );
   }
 
   /** Number of tracked users, for the boundedness test and operational introspection. */
@@ -175,25 +210,25 @@ export class AiLimits {
 
     // Rate budgets first: their Retry-After is the meaningful wait. The 21st request in an
     // hour is refused by the hourly budget even though the day budget still has room.
-    if (budget.hourCount >= AI_LIMIT_PER_USER_PER_HOUR) {
+    if (budget.hourCount >= this.#perHour) {
       return {
         allowed: false,
         reason: 'hourly',
         retryAfterSeconds: retryAfterSeconds(budget.hourResetAt, now),
       };
     }
-    if (budget.dayCount >= AI_LIMIT_PER_USER_PER_DAY) {
+    if (budget.dayCount >= this.#perDay) {
       return {
         allowed: false,
         reason: 'daily',
         retryAfterSeconds: retryAfterSeconds(budget.dayResetAt, now),
       };
     }
-    if (budget.activeGenerations >= AI_MAX_CONCURRENT_PER_USER) {
+    if (budget.activeGenerations >= this.#perUserConcurrent) {
       // A slot can free as soon as the in-flight generation settles; 1 s is the honest floor.
       return { allowed: false, reason: 'user_concurrency', retryAfterSeconds: 1 };
     }
-    if (this.#activeServerGenerations >= AI_MAX_CONCURRENT_SERVER) {
+    if (this.#activeServerGenerations >= this.#perServerConcurrent) {
       return { allowed: false, reason: 'server_concurrency', retryAfterSeconds: 1 };
     }
 

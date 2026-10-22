@@ -253,6 +253,10 @@ export class DevStack {
       PORT: String(this.#serverPort),
       HOST: '127.0.0.1',
       BOOTSTRAP_RATE_LIMIT_PER_MINUTE: '10000',
+      // One suite run performs far more AI generations for demo-ada than the 20/hour budget
+      // allows; raising it through the same configuration keeps the limiter code under test.
+      AI_RATE_LIMIT_PER_HOUR: '10000',
+      AI_RATE_LIMIT_PER_DAY: '100000',
       ...this.#serverEnvOverrides,
     };
   }

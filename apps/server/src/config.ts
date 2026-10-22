@@ -12,6 +12,13 @@ function readPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
 }
 
+/** A positive integer override, or `undefined` so the module's frozen default applies. */
+function readPositiveOrUndefined(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /**
  * Default durable-storage directory, relative to the process working directory.
  *
@@ -91,6 +98,15 @@ export interface ServerConfig {
    * (`docs/DECISIONS.md` D-051).
    */
   dataPath?: string;
+  /**
+   * AI budget overrides (D-082 D3). Absent means the frozen numbers in `ai/limits.ts`
+   * (20/hour, 100/day, 1 per user, 4 per server). They exist so the browser suite can raise
+   * the budgets through the same code path production reads.
+   */
+  aiRateLimitPerHour?: number;
+  aiRateLimitPerDay?: number;
+  aiMaxConcurrentPerUser?: number;
+  aiMaxConcurrentServer?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -100,6 +116,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     corsOrigin: env.CORS_ORIGIN ?? DEFAULT_CORS_ORIGIN,
     bootstrapRateLimitPerMinute: readPort(env.BOOTSTRAP_RATE_LIMIT_PER_MINUTE, 10),
     wsPath: env.WS_PATH ?? '/ws',
+    ...(readPositiveOrUndefined(env.AI_RATE_LIMIT_PER_HOUR) === undefined
+      ? {}
+      : { aiRateLimitPerHour: readPositiveOrUndefined(env.AI_RATE_LIMIT_PER_HOUR) }),
+    ...(readPositiveOrUndefined(env.AI_RATE_LIMIT_PER_DAY) === undefined
+      ? {}
+      : { aiRateLimitPerDay: readPositiveOrUndefined(env.AI_RATE_LIMIT_PER_DAY) }),
+    ...(readPositiveOrUndefined(env.AI_MAX_CONCURRENT_PER_USER) === undefined
+      ? {}
+      : { aiMaxConcurrentPerUser: readPositiveOrUndefined(env.AI_MAX_CONCURRENT_PER_USER) }),
+    ...(readPositiveOrUndefined(env.AI_MAX_CONCURRENT_SERVER) === undefined
+      ? {}
+      : { aiMaxConcurrentServer: readPositiveOrUndefined(env.AI_MAX_CONCURRENT_SERVER) }),
     authMode: readAuthMode(env.AUTH_MODE),
     ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),
     // An empty value is treated as unset: `INSIGHTHUB_DATA_PATH=` in a shell should not

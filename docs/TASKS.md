@@ -849,7 +849,7 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 | B13 | deployed smoke | A6 | 登录/会话/协作/权限/AI 全链路/失败路径 | — |
 | B14 | A7 Production Readiness final review | A7 | GO/NO-GO + 条件关闭 | — |
 
-**批次状态：** B1 **DONE**（`151b8a1` → `adaefb4`：`SessionVerifier` seam、`app_user` 映射（幂等/唯一/持久化）、demo 生产门禁、启动守卫；server **229 → 250**，浏览器 **68/68**，**无 login-session 表**）。**B2 DONE**（`fab3441` web `20210c0` → 合入 `c56399e`/`9200e37`：真实 `createClerkSessionVerifier`（cookie 载体）、**WS upgrade 认证**（未认证 401 且无 socket）、clerk 模式 `DELETE /api/session` 无认证也 204 清 demo cookie、demo 回归零变化；vitest **542**、server **277**、浏览器 **68/68**）。**B3 DONE**（`2611245` → `b6bab86`：production 启动 gate，8 个拒绝码、不打印值、exit 1；server **297**、浏览器 smoke 通过）。**B4 DONE**（`587db1e` → `ed38b68`：CORS 单源、状态变更 Origin 403、WS Origin 403、bootstrap 10/min（配置 seam）；server **337**）。**B5 未开始。**
+**批次状态：** B1 **DONE**（`151b8a1` → `adaefb4`：`SessionVerifier` seam、`app_user` 映射（幂等/唯一/持久化）、demo 生产门禁、启动守卫；server **229 → 250**，浏览器 **68/68**，**无 login-session 表**）。**B2 DONE**（`fab3441` web `20210c0` → 合入 `c56399e`/`9200e37`：真实 `createClerkSessionVerifier`（cookie 载体）、**WS upgrade 认证**（未认证 401 且无 socket）、clerk 模式 `DELETE /api/session` 无认证也 204 清 demo cookie、demo 回归零变化；vitest **542**、server **277**、浏览器 **68/68**）。**B3 DONE**（`2611245` → `b6bab86`：production 启动 gate，8 个拒绝码、不打印值、exit 1；server **297**、浏览器 smoke 通过）。**B4 DONE**（`587db1e` → `ed38b68`：CORS 单源、状态变更 Origin 403、WS Origin 403、bootstrap 10/min（配置 seam）；server **337**）。**B5 DONE**（`2cc64c8` → `4c67ac4`：AI 预算 20/h、100/d、1 用户并发、4 服务并发、30s、0 重试、4096 tokens、默认 `gpt-5.6-luna`；429 + Retry-After；server **361**）。**B6 未开始。**
 
 **Gate 纪律**：每批只跑最小 gate；完整浏览器套件只在 A6 evidence、批次收口、final HEAD 跑。
 **禁止**为省 token 省略功能结果、failure behavior、security result 或 Gate 数字。

@@ -184,7 +184,18 @@ export function createApp(
   authz: AuthzService,
   aiProvider: ServerAiProvider | null = createServerAiProviderFromEnv(process.env),
   identity: IdentityOptions = {},
-  aiLimits: AiLimits = new AiLimits(),
+  aiLimits: AiLimits = new AiLimits({
+    // The frozen D-082 D3 numbers are the defaults; the suite raises the budgets through the
+    // same configuration so it can exercise the route without being the thing that hits 429.
+    ...(config.aiRateLimitPerHour === undefined ? {} : { perHour: config.aiRateLimitPerHour }),
+    ...(config.aiRateLimitPerDay === undefined ? {} : { perDay: config.aiRateLimitPerDay }),
+    ...(config.aiMaxConcurrentPerUser === undefined
+      ? {}
+      : { perUserConcurrent: config.aiMaxConcurrentPerUser }),
+    ...(config.aiMaxConcurrentServer === undefined
+      ? {}
+      : { perServerConcurrent: config.aiMaxConcurrentServer }),
+  }),
 ): Express {
   if (config.corsOrigin.trim() === '*') {
     // Fail closed and loudly: `*` plus `credentials: true` is a configuration the browser
