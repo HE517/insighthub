@@ -45,6 +45,9 @@ import type { AppUser, AppUserStore } from '../authz/app-user.js';
 import type { VerifiedIdentity } from '../authz/session-verifier.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from './constants.js';
 import { defaultDocumentTitle, type DocumentMetaStore } from './document-meta.js';
+import { assertDatabaseIntegrity, assertSchemaSupported, ensureSchema } from './schema.js';
+import { isSqliteCapabilityError, toUint8Array, type SqliteModule } from './sqlite-runtime.js';
+import { runInTransaction } from './transaction.js';
 import {
   StoreClosedError,
   StoreOperationError,
@@ -52,7 +55,6 @@ import {
   type StoredDocument,
   type StoredUpdate,
 } from './types.js';
-import { toUint8Array, type SqliteModule } from './sqlite-runtime.js';
 
 /** File name of the durable database inside `INSIGHTHUB_DATA_PATH`. */
 export const DATABASE_FILE_NAME = 'insighthub.db';
@@ -157,6 +159,17 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
   /**
    * Open (or create) the store in `dataPath`.
    *
+   * Order matters, and it is the M4 B6 order:
+   *
+   * ```text
+   * busy_timeout  →  quick_check  →  schema-supported  →  WAL/durability  →  create/migrate
+   * ```
+   *
+   * The integrity check runs **before** the first write so a corrupt file is refused instead of
+   * being "repaired" into an empty store; the version check runs before WAL because WAL is a
+   * write and a newer file must not be touched at all. Create/migrate is one transaction, so a
+   * crash leaves either the old version or the new one, never a half-written schema.
+   *
    * Synchronous because `DatabaseSync` is; the public seam is still `Promise`-returning so
    * an async adapter can replace this one without changing a caller (`docs/CONTRACTS.md`
    * §14.6).
@@ -168,6 +181,17 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
     try {
       // Busy timeout first: everything after it can wait on a lock instead of failing.
       db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+
+      // M4 B6: verify the file before touching it. A corrupt database is a startup refusal
+      // (`DATA_INTEGRITY_FAILED`), never an empty store — hydrating from a corrupt file and
+      // then persisting that state would overwrite the only recoverable copy (D-051).
+      assertDatabaseIntegrity(db, dataPath);
+
+      // Refuse a file written by a newer binary **before** the first write. Establishing WAL
+      // below is a write, and a version-2 file must not be modified by a binary that cannot
+      // understand it (`DATA_SCHEMA_TOO_NEW`).
+      assertSchemaSupported(db, dataPath);
+
       // WAL is what makes compaction's replace-snapshot-and-truncate-log atomic across a
       // crash. If a filesystem refuses it, that is a startup-level problem, so it is not
       // silently tolerated here — `assertSqliteCapability` already proved it works.
@@ -176,52 +200,9 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       db.exec('PRAGMA synchronous = NORMAL');
       db.exec('PRAGMA foreign_keys = ON');
 
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS document (
-          document_id TEXT PRIMARY KEY,
-          snapshot BLOB NOT NULL,
-          snapshot_seq INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `);
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS document_update (
-          document_id TEXT NOT NULL,
-          seq INTEGER NOT NULL,
-          update_bytes BLOB NOT NULL,
-          created_at INTEGER NOT NULL,
-          PRIMARY KEY (document_id, seq)
-        )
-      `);
-      // Metadata is a separate table rather than extra columns on `document` (M2 Phase 2):
-      // `document` is the *content* seam's row and is written by `append`/`compact` inside the
-      // mutation pipeline, while metadata is written once at creation and read by the HTTP
-      // document API. Keeping them apart means a metadata change can never take part in a
-      // content transaction, and `append` keeps its narrow `(documentId, update)` shape.
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS document_meta (
-          document_id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          owner_id TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `);
-      // The internal user mapping (`docs/CONTRACTS.md` §18.1). It lives in the same file as the
-      // documents on purpose: it is the mapping every membership row is keyed by, not a second
-      // database and not a session store — there is no token, expiry or password column here.
-      // `clerk_user_id` is UNIQUE, which is what makes "the same Clerk user is one internal
-      // user" a storage invariant rather than a convention. Schema versioning is M4 B6.
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS app_user (
-          id TEXT PRIMARY KEY,
-          clerk_user_id TEXT NOT NULL UNIQUE,
-          email TEXT,
-          display_name TEXT,
-          created_at INTEGER,
-          updated_at INTEGER
-        )
-      `);
+      // M4 B6: create a new schema or migrate a pre-B6 one in a single transaction. The object
+      // definitions live in `schema.ts`, shared by creation and migration.
+      ensureSchema(db, dataPath);
     } catch (error) {
       // Release the handle before propagating. A corrupt database makes the first *statement*
       // fail (not the constructor, `docs/DECISIONS.md` D-041), so without this the opened file
@@ -232,6 +213,9 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       } catch {
         // Already unusable; the original error is the one worth reporting.
       }
+      // A schema/integrity/capability refusal already carries the stable startup code the
+      // entrypoint prints; wrapping it in `StoreOperationError` would hide the code.
+      if (isSqliteCapabilityError(error)) throw error;
       throw new StoreOperationError('open', error);
     }
 
@@ -500,24 +484,12 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
   /**
    * One `BEGIN IMMEDIATE` … `COMMIT` with a guaranteed `ROLLBACK` on failure.
    *
-   * `IMMEDIATE` (rather than the default deferred) takes the write lock up front, so the
-   * read inside `append` (MAX(seq)) cannot race a writer that would invalidate it.
+   * The primitive lives in `transaction.ts` because schema migration uses the same one; it is
+   * `IMMEDIATE` (rather than the default deferred) so it takes the write lock up front, and the
+   * read inside `append` (`MAX(seq)`) cannot race a writer that would invalidate it.
    */
   #transaction<T>(body: () => T): T {
-    this.#db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = body();
-      this.#db.exec('COMMIT');
-      return result;
-    } catch (error) {
-      try {
-        this.#db.exec('ROLLBACK');
-      } catch {
-        // The transaction may already be gone (e.g. SQLite rolled it back itself); the
-        // original error is the one worth reporting.
-      }
-      throw error;
-    }
+    return runInTransaction(this.#db, body);
   }
 }
 

@@ -59,7 +59,10 @@ describe('startup capability check', () => {
           `expected a capability error, got ${String(error)}`,
         );
         if (!isSqliteCapabilityError(error)) return false;
-        assert.equal(error.code, 'STORE_OPEN_FAILED');
+        // M4 B6: a corrupt file is classified as an *integrity* failure (`PRAGMA quick_check`
+        // rejects it), which is the code the entrypoint prints. It is still a refusal to start,
+        // never an empty store.
+        assert.equal(error.code, 'DATA_INTEGRITY_FAILED');
         return true;
       },
     );

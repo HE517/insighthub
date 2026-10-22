@@ -7,7 +7,7 @@
  * one implementation. The order is deliberate and is the whole point of the function:
  *
  * ```text
- * load node:sqlite  →  capability probe  →  open the real database
+ * load node:sqlite  →  capability + free-space probe  →  open the real database
  * ```
  *
  * A failure at any step throws `SqliteCapabilityError`, and `index.ts` turns that into a
@@ -20,6 +20,7 @@ import {
   assertSqliteCapability,
   isSqliteCapabilityError,
   loadSqliteModule,
+  type CapabilityOptions,
 } from './sqlite-runtime.js';
 import { SqliteDocumentStore } from './sqlite-store.js';
 import type { DocumentStore } from './types.js';
@@ -38,20 +39,28 @@ export interface OpenedDocumentStore {
  * Async only because the `node:sqlite` import is dynamic (see `sqlite-runtime.ts`): a
  * static import of a missing built-in would throw during ESM evaluation, before any of
  * this could produce a diagnostic.
+ *
+ * `options` exists for the M4 B6 tests: the free-space probe and the floor are injected so
+ * `DATA_DISK_LOW` can be exercised without filling a real volume. Production passes nothing,
+ * which means the real `statfsSync` and the `DATA_MIN_FREE_BYTES` override.
  */
-export async function openDocumentStore(dataPath: string): Promise<OpenedDocumentStore> {
+export async function openDocumentStore(
+  dataPath: string,
+  options: CapabilityOptions = {},
+): Promise<OpenedDocumentStore> {
   const sqlite = await loadSqliteModule();
-  const report = assertSqliteCapability(sqlite, dataPath);
+  const report = assertSqliteCapability(sqlite, dataPath, options);
 
   let store: DocumentStore;
   try {
     store = SqliteDocumentStore.open(sqlite, dataPath);
   } catch (error) {
     if (isSqliteCapabilityError(error)) throw error;
-    // The capability probe proved the *runtime* is fine, so a failure here is about the data
-    // itself — a corrupt or unreadable database file. It still has to be a startup failure
-    // with a diagnostic rather than a stack trace, and it must never be converted into "start
-    // empty" (`docs/DECISIONS.md` D-051, D-043 point 6).
+    // Corruption, a newer schema and a full disk have already been classified inside the store
+    // (`DATA_INTEGRITY_FAILED` / `DATA_SCHEMA_TOO_NEW` / `DATA_DISK_LOW`), so this is the
+    // catch-all for the rest — an unreadable file, a permissions problem, a foreign file. It
+    // still has to be a startup failure with a diagnostic rather than a stack trace, and it must
+    // never be converted into "start empty" (`docs/DECISIONS.md` D-051, D-043 point 6).
     throw new SqliteCapabilityError(
       'STORE_OPEN_FAILED',
       `the durable database could not be opened in ${dataPath}`,
