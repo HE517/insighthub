@@ -124,6 +124,64 @@ export const aiSuggestRequestSchema = z.object({
 
 export type AiSuggestRequest = z.infer<typeof aiSuggestRequestSchema>;
 
+/**
+ * What a **server-side** provider may return (M3 Round 2, `docs/CONTRACTS.md` §11.2).
+ *
+ * A draft is deliberately *not* an `AiEditSuggestion`: it has plain offsets into the
+ * `content` the caller submitted, and **no anchors**. Anchors are Yjs
+ * `RelativePosition`s, which are replica-specific — only the client that minted them
+ * can resolve them against its own `Y.Text`. The client re-reads its live text,
+ * mints the anchors itself (`createOperationAnchor`), computes the diff and only
+ * then builds an `AiEditSuggestion`.
+ *
+ * Because this shape crosses the web/server boundary it lives here (R1), and the
+ * server validates the model's output against these schemas before replying: a
+ * malformed or partial draft is an error (`invalid_provider_output`), never a
+ * "repaired" proposal.
+ */
+export const aiOperationDraftSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('replace'),
+    index: z.number().int().nonnegative(),
+    length: z.number().int().nonnegative(),
+    text: z.string(),
+  }),
+  z.object({
+    kind: z.literal('insert'),
+    index: z.number().int().nonnegative(),
+    text: z.string().min(1),
+  }),
+]);
+
+export type AiOperationDraft = z.infer<typeof aiOperationDraftSchema>;
+
+export const AI_MAX_DRAFT_OPERATIONS = 32;
+
+export const aiSuggestionDraftSchema = z.object({
+  /** Short human-readable explanation shown in the Diff Preview header. */
+  summary: z.string().min(1).max(500),
+  operations: z.array(aiOperationDraftSchema).min(1).max(AI_MAX_DRAFT_OPERATIONS),
+  /** Which model produced it; never a credential. */
+  model: z.string().min(1).max(200).optional(),
+});
+
+export type AiSuggestionDraft = z.infer<typeof aiSuggestionDraftSchema>;
+
+/** Optional selection in `AiSuggestRequest` (UTF-16, same space as `index`). */
+export const aiSelectionSchema = z.object({
+  from: z.number().int().nonnegative(),
+  to: z.number().int().nonnegative(),
+});
+
+export type AiSelection = z.infer<typeof aiSelectionSchema>;
+
+/** The request body accepted by `POST /api/ai/suggest` (`docs/CONTRACTS.md` §11.2). */
+export const aiSuggestHttpRequestSchema = aiSuggestRequestSchema.extend({
+  selection: aiSelectionSchema.optional(),
+});
+
+export type AiSuggestHttpRequest = z.infer<typeof aiSuggestHttpRequestSchema>;
+
 /** Who may accept an AI edit. Reuses the shared RBAC vocabulary. */
 export const aiAcceptRequiredRole = documentRoleSchema.exclude(['viewer', 'commenter']);
 
