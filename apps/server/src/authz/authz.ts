@@ -93,7 +93,10 @@ export type DocumentListDecision =
   | { readonly kind: 'unauthenticated' };
 
 export interface AuthzOptions {
-  /** Directory holding `authz.db` — the same `INSIGHTHUB_DATA_PATH` the document store uses. */
+  /**
+   * Directory holding `insighthub.db`. Since schema 2 (D-084 method C) the membership table
+   * lives in that file, so this is the same `INSIGHTHUB_DATA_PATH` the document store uses.
+   */
   readonly dataPath: string;
   /**
    * Document metadata source. Defaults to the demo catalog; the durable source is A3's and is

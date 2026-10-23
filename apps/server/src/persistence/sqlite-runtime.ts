@@ -47,7 +47,13 @@ export type SqliteCapabilityFailure =
   | 'STORE_OPEN_FAILED'
   | 'DATA_DISK_LOW'
   | 'DATA_INTEGRITY_FAILED'
-  | 'DATA_SCHEMA_TOO_NEW';
+  | 'DATA_SCHEMA_TOO_NEW'
+  /**
+   * M4 B12.5 (D-084 method C): the v1 → v2 membership migration failed and was rolled back.
+   * The database still reports schema 1 and the new table was never left behind; the legacy
+   * `authz.db` is untouched and remains the recoverable copy.
+   */
+  | 'MEMBERSHIP_MIGRATION_FAILED';
 
 /**
  * A startup-blocking capability failure.

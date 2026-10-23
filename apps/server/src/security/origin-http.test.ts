@@ -3,7 +3,7 @@
  * (`docs/CONTRACTS.md` §18.3/§18.4/§18.6; D-082 D1/D2).
  *
  * Everything here runs through the **production** `createApp` on a real HTTP server with a real
- * `authz.db`; no middleware is stubbed. The claims:
+ * `insighthub.db` (membership included since schema 2, D-084); no middleware is stubbed. The claims:
  *
  * | # | Claim | Observable |
  * | --- | --- | --- |

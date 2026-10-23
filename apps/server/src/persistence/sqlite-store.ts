@@ -44,6 +44,11 @@ import type { DocumentMeta } from '@insighthub/shared';
 import type { AppUser, AppUserStore } from '../authz/app-user.js';
 import type { VerifiedIdentity } from '../authz/session-verifier.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from './constants.js';
+import {
+  isValidDocumentTitle,
+  type CreateDocumentInput,
+  type DocumentCreationStore,
+} from './document-creation.js';
 import { defaultDocumentTitle, type DocumentMetaStore } from './document-meta.js';
 import { assertDatabaseIntegrity, assertSchemaSupported, ensureSchema } from './schema.js';
 import { isSqliteCapabilityError, toUint8Array, type SqliteModule } from './sqlite-runtime.js';
@@ -65,7 +70,9 @@ const EMPTY = new Uint8Array(0);
 type Db = InstanceType<SqliteModule['DatabaseSync']>;
 type Stmt = ReturnType<Db['prepare']>;
 
-export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, AppUserStore {
+export class SqliteDocumentStore
+  implements DocumentStore, DocumentMetaStore, AppUserStore, DocumentCreationStore
+{
   readonly #db: Db;
   readonly #statements: {
     selectDocument: Stmt;
@@ -73,17 +80,20 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
     selectMaxSequence: Stmt;
     selectSnapshotSequence: Stmt;
     insertDocumentIfMissing: Stmt;
+    insertDocument: Stmt;
     replaceSnapshot: Stmt;
     insertUpdate: Stmt;
     deleteUpdatesThrough: Stmt;
     deleteUpdates: Stmt;
     deleteDocument: Stmt;
     insertMetaIfMissing: Stmt;
+    insertMeta: Stmt;
     selectMeta: Stmt;
     listMeta: Stmt;
     touchMeta: Stmt;
     deleteMeta: Stmt;
     selectHighestSequence: Stmt;
+    insertMembership: Stmt;
     selectAppUserByClerkId: Stmt;
     selectAppUserById: Stmt;
     insertAppUser: Stmt;
@@ -107,6 +117,11 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       insertDocumentIfMissing: db.prepare(
         'INSERT OR IGNORE INTO document (document_id, snapshot, snapshot_seq, updated_at) VALUES (?, ?, 0, ?)',
       ),
+      // D-084: creation is an ordinary INSERT, not `OR IGNORE`. A duplicate id is a server bug
+      // (UUID collision) and must abort the whole transaction rather than silently reuse a row.
+      insertDocument: db.prepare(
+        'INSERT INTO document (document_id, snapshot, snapshot_seq, updated_at) VALUES (?, ?, 0, ?)',
+      ),
       replaceSnapshot: db.prepare(
         'UPDATE document SET snapshot = ?, snapshot_seq = ?, updated_at = ? WHERE document_id = ?',
       ),
@@ -124,6 +139,11 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       insertMetaIfMissing: db.prepare(
         'INSERT OR IGNORE INTO document_meta (document_id, title, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
       ),
+      // Creation writes exactly one metadata row; a conflict means the id was reused and must
+      // roll the transaction back (see `insertDocument`).
+      insertMeta: db.prepare(
+        'INSERT INTO document_meta (document_id, title, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ),
       selectMeta: db.prepare(
         'SELECT document_id, title, owner_id, created_at, updated_at FROM document_meta WHERE document_id = ?',
       ),
@@ -136,6 +156,13 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
         `SELECT
            COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0) AS log_seq,
            COALESCE((SELECT snapshot_seq FROM document WHERE document_id = ?), 0) AS snapshot_seq`,
+      ),
+      // ---- document creation (M4 B12.5, D-084 method C) ----
+      // The owner row is intentionally a plain INSERT: the primary key is the "one role per
+      // user per document" invariant, and a conflict inside the creation transaction must abort
+      // it rather than quietly grant a second role.
+      insertMembership: db.prepare(
+        'INSERT INTO authz_document_membership (document_id, user_id, role) VALUES (?, ?, ?)',
       ),
       // ---- app_user (M4 B1) ----
       // `clerk_user_id` is UNIQUE in the schema, so this lookup is the idempotency key.
@@ -200,9 +227,10 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       db.exec('PRAGMA synchronous = NORMAL');
       db.exec('PRAGMA foreign_keys = ON');
 
-      // M4 B6: create a new schema or migrate a pre-B6 one in a single transaction. The object
+      // M4 B6/B12.5: create or migrate the schema in a single transaction. The migration needs
+      // the SQLite module to open a legacy `authz.db` read-only (D-084 method C). The object
       // definitions live in `schema.ts`, shared by creation and migration.
-      ensureSchema(db, dataPath);
+      ensureSchema(db, dataPath, sqlite);
     } catch (error) {
       // Release the handle before propagating. A corrupt database makes the first *statement*
       // fail (not the constructor, `docs/DECISIONS.md` D-041), so without this the opened file
@@ -361,6 +389,37 @@ export class SqliteDocumentStore implements DocumentStore, DocumentMetaStore, Ap
       // pre-Phase-2 store can be in, and inventing an owner here would be worse than leaving it
       // to `ensureDocumentMeta`, which has a real identity to record.
       this.#statements.touchMeta.run(Date.now(), documentId);
+    });
+  }
+
+  /* ---------------------------------------------------------------- *
+   * document creation (M4 B12.5, D-084 method C)
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Create a document, its metadata and its owner membership in **one** transaction.
+   *
+   * Three rows on one connection, one `BEGIN IMMEDIATE … COMMIT` (`#transaction`). If the third
+   * insert fails — a real constraint failure, a trigger, a disk error — the primitive rolls back
+   * the first two, so there is no state in which a document exists without an owner. This is the
+   * property D-084 method B could not provide across two databases.
+   *
+   * The caller supplies an id/title/owner that the HTTP layer derived from the session and the
+   * validated body; this method validates the title again and refuses an unusable id/owner so
+   * the store cannot be used to write a row the read API could not represent.
+   */
+  async createDocumentWithOwner(input: CreateDocumentInput): Promise<void> {
+    await this.#guard('append', () => {
+      if (input.documentId.length === 0) throw new Error('document id must not be empty');
+      if (input.ownerUserId.length === 0) throw new Error('owner user id must not be empty');
+      if (!isValidDocumentTitle(input.title)) throw new Error('document title is not valid');
+
+      this.#transaction(() => {
+        const now = Date.now();
+        this.#statements.insertDocument.run(input.documentId, EMPTY, now);
+        this.#statements.insertMeta.run(input.documentId, input.title, input.ownerUserId, now, now);
+        this.#statements.insertMembership.run(input.documentId, input.ownerUserId, 'owner');
+      });
     });
   }
 

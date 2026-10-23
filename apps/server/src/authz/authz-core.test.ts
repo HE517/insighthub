@@ -32,8 +32,8 @@ import {
 } from './demo-fixture.js';
 import { DemoDocumentCatalog } from './documents.js';
 import { openMembershipStore } from './membership-store.js';
+import { DATABASE_FILE_NAME } from '../persistence/sqlite-store.js';
 import { loadSqliteModule } from '../persistence/sqlite-runtime.js';
-import { AUTHZ_DATABASE_FILE_NAME } from './membership-store.js';
 
 const CAPABILITIES: readonly DocumentCapability[] = [
   'canRead',
@@ -222,9 +222,10 @@ describe('membership durability (P2-5, Node half)', () => {
       const seed = await createAuthz({ dataPath: directory });
       seed.close();
 
-      // Corrupt exactly one row, the way a hand edit or a future vocabulary would.
+      // Corrupt exactly one row, the way a hand edit or a future vocabulary would. Since
+      // schema 2 membership lives in `insighthub.db` (D-084 method C).
       const sqlite = await loadSqliteModule();
-      const db = new sqlite.DatabaseSync(join(directory, AUTHZ_DATABASE_FILE_NAME));
+      const db = new sqlite.DatabaseSync(join(directory, DATABASE_FILE_NAME));
       try {
         db.prepare('UPDATE authz_document_membership SET role = ? WHERE document_id = ? AND user_id = ?').run(
           'wizard',

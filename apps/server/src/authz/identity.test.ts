@@ -14,7 +14,8 @@
  * - `AUTH_MODE=demo`: the pre-B1 session flow is unchanged;
  * - `NODE_ENV=production`: `POST /api/session/bootstrap` is absent (404), and the real
  *   entrypoint exits non-zero before listening;
- * - the schema has no login-session table — only `document*` and `app_user`.
+ * - the schema has no login-session table — only `document*`, `app_user` and the B12.5
+ *   `authz_document_membership` table that now lives beside them.
  */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -26,7 +27,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { createAuthz } from './authz.js';
 import { isAppUserStore } from './app-user.js';
-import { AUTHZ_DATABASE_FILE_NAME, openMembershipStore } from './membership-store.js';
+import { openMembershipStore } from './membership-store.js';
 import { createFakeSessionVerifier, type VerifiedIdentity } from './session-verifier.js';
 import {
   bootstrap,
@@ -519,8 +520,8 @@ describe('startup guard', () => {
  * Schema — mapping only, no second session
  * ---------------------------------------------------------------- */
 
-describe('database schema (M4 B1)', () => {
-  it('contains document tables and app_user, and no login-session table', async () => {
+describe('database schema (M4 B1, membership moved in M4 B12.5)', () => {
+  it('contains document tables, app_user and membership, and no login-session table', async () => {
     const directory = await tempDirectory('insighthub-schema-');
     const opened = await openDocumentStore(directory);
     const authz = await createAuthz({ dataPath: directory });
@@ -541,7 +542,14 @@ describe('database schema (M4 B1)', () => {
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .all() as Array<Record<string, unknown>>
         ).map((row) => String(row['name']));
-        assert.deepEqual(tables, ['app_user', 'document', 'document_meta', 'document_update']);
+        // D-084 method C: membership now lives in `insighthub.db` so creation can be atomic.
+        assert.deepEqual(tables, [
+          'app_user',
+          'authz_document_membership',
+          'document',
+          'document_meta',
+          'document_update',
+        ]);
 
         const columns = (
           documentDb.prepare('PRAGMA table_info(app_user)').all() as Array<Record<string, unknown>>
@@ -558,25 +566,17 @@ describe('database schema (M4 B1)', () => {
         for (const forbidden of ['token', 'expires_at', 'password', 'session']) {
           assert.ok(!columns.includes(forbidden), `app_user must not have a ${forbidden} column`);
         }
+
+        // Neither table may have grown a session column: demo sessions stay in the
+        // process-scoped `Map`.
+        const membershipColumns = (
+          documentDb
+            .prepare('PRAGMA table_info(authz_document_membership)')
+            .all() as Array<Record<string, unknown>>
+        ).map((row) => String(row['name']));
+        assert.deepEqual(membershipColumns, ['document_id', 'user_id', 'role']);
       } finally {
         documentDb.close();
-      }
-
-      // The membership database is the other durable file; it must not have grown a session
-      // table either (demo sessions stay in the process-scoped `Map`).
-      const authzDb = new sqlite.DatabaseSync(join(directory, AUTHZ_DATABASE_FILE_NAME));
-      try {
-        const tables = (
-          authzDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<
-            Record<string, unknown>
-          >
-        ).map((row) => String(row['name']));
-        assert.ok(tables.length > 0, 'the membership table exists');
-        for (const table of tables) {
-          assert.ok(!/session/i.test(table), `unexpected session-like table: ${table}`);
-        }
-      } finally {
-        authzDb.close();
       }
     } finally {
       await rm(directory, { recursive: true, force: true });

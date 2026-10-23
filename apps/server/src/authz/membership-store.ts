@@ -2,19 +2,27 @@
  * The one durable thing authorization owns: **document membership** (`documentId`, `userId`,
  * `role`).
  *
- * ## Why this is a second SQLite file rather than a table in the document store
+ * ## Where it lives now (M4 B12.5, `docs/DECISIONS.md` D-084 method C)
  *
- * `docs/DECISIONS.md` D-061 §5 says membership is persisted in an **A5-owned table**. Two
- * candidate homes were considered:
+ * Membership used to live in its own SQLite file, `authz.db` (D-061 §5). That decision has been
+ * **overturned** for one concrete reason: B12.5 requires "document row + metadata row + owner
+ * membership" to commit atomically, and SQLite has no cross-database transaction in WAL mode.
+ * The table therefore lives in `insighthub.db` as `authz_document_membership`, and
+ * `SqliteDocumentStore.createDocumentWithOwner` writes all three rows in one
+ * `BEGIN IMMEDIATE … COMMIT`.
  *
- * | Option | Why it was rejected / chosen |
- * | --- | --- |
- * | a table inside `insighthub.db` (A3's `DocumentStore`) | the store's schema, migrations and lifecycle belong to A3 (`apps/server/src/persistence/**` is theirs, and `authz/**` must not edit it). Adding tables to somebody else's database file also puts membership writes on the same connection as every keystroke's `append`. |
- * | its own file, `authz.db` | **chosen.** No schema coupling, no write contention with the hot document path, and "delete the document store" cannot silently orphan an authorization decision. |
+ * Consequences, stated plainly rather than hidden:
  *
- * The consequence is stated plainly instead of hidden: `DocumentStore.delete(documentId)` does
- * **not** cascade into these rows. That is recorded as an integration note for A3 in the task
- * report; with a demo fixture and no deletion endpoint in Phase 2 it cannot be reached today.
+ * - The table is still **owned by the authorization domain** (name prefix `authz_`), even though
+ *   its file is the document database. `persistence/schema.ts` owns the DDL/migration because it
+ *   owns the file; `authz/**` owns every decision made from the rows.
+ * - The runtime opens `insighthub.db` here on a **separate read connection**, so an authorization
+ *   check stays a single synchronous decision and does not wait behind the document write path.
+ *   SQLite's WAL mode allows one writer plus concurrent readers; both connections use the same
+ *   busy timeout.
+ * - **`authz.db` is never opened at runtime.** It is read only by the v1 → v2 migration inside
+ *   `schema.ts`, read-only, and is kept for audit/recovery. There is no dual-write or dual-read:
+ *   a row that remains only in the legacy file grants nothing.
  *
  * ## Why the seam is synchronous while the document store's is not
  *
@@ -38,10 +46,9 @@ import { join } from 'node:path';
 import { isDocumentRole, type DocumentRole } from '@insighthub/shared';
 
 import { SQLITE_BUSY_TIMEOUT_MS } from '../persistence/constants.js';
+import { assertSchemaSupported, ensureSchema } from '../persistence/schema.js';
 import { loadSqliteModule, type SqliteModule } from '../persistence/sqlite-runtime.js';
-
-/** File name of the A5-owned authorization database inside `INSIGHTHUB_DATA_PATH`. */
-export const AUTHZ_DATABASE_FILE_NAME = 'authz.db';
+import { DATABASE_FILE_NAME } from '../persistence/sqlite-store.js';
 
 /** One membership row. The durable unit of the authorization decision. */
 export interface MembershipRow {
@@ -99,32 +106,32 @@ export class SqliteMembershipStore implements MembershipStore {
   }
 
   /**
-   * Open (or create) the membership database in `dataPath`.
+   * Open a membership read connection against `insighthub.db` in `dataPath`.
    *
    * Synchronous for the same reason the seam is: the table is tiny and a read must not be
    * deferred behind an `await` in an authorization path.
+   *
+   * `ensureSchema` runs here as well as in `SqliteDocumentStore.open`, for the callers that
+   * build authorization without opening the document store first (the authz unit suites and
+   * `createAuthz` itself). It is idempotent: on an already-current file it only verifies the
+   * objects and returns.
    */
   static open(sqlite: SqliteModule, dataPath: string): SqliteMembershipStore {
     mkdirSync(dataPath, { recursive: true });
-    const db = new sqlite.DatabaseSync(join(dataPath, AUTHZ_DATABASE_FILE_NAME));
+    const db = new sqlite.DatabaseSync(join(dataPath, DATABASE_FILE_NAME));
 
     try {
       db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+      // Version before WAL: establishing WAL is a write, and a future schema must not be touched.
+      assertSchemaSupported(db, dataPath);
       // WAL keeps a crash from leaving a half-written table. `synchronous = NORMAL` matches the
       // rest of the server: a committed row survives process death, and no stronger claim is
       // made (`docs/CONTRACTS.md` §14.2, D-060 §2).
       db.exec('PRAGMA journal_mode = WAL');
       db.exec('PRAGMA synchronous = NORMAL');
-      // The table name carries the word "authz" and the fixture is labelled demo data; nothing
-      // here models a general-purpose user or membership-management product (§17.3).
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS authz_document_membership (
-          document_id TEXT NOT NULL,
-          user_id TEXT NOT NULL,
-          role TEXT NOT NULL,
-          PRIMARY KEY (document_id, user_id)
-        )
-      `);
+      // The v1 → v2 migration (including the read-only legacy `authz.db` import) runs inside
+      // `ensureSchema`; it is a no-op on a schema-2 file.
+      ensureSchema(db, dataPath, sqlite);
     } catch (error) {
       // Release the handle before propagating: on Windows a leaked handle keeps the file
       // locked, which turns "failed to start" into "cannot even move the bad file aside".
@@ -203,6 +210,8 @@ export class SqliteMembershipStore implements MembershipStore {
     if (this.#closed) return;
     this.#closed = true;
     try {
+      // Best effort: another connection may be using the WAL at shutdown, in which case a
+      // checkpoint is simply skipped. Committed rows are not affected either way.
       this.#db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch {
       // A failed checkpoint does not invalidate committed rows.
