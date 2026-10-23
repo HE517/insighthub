@@ -25,18 +25,22 @@
  * signed-out branch does render Clerk's own `<SignIn />`, which is why the view is only ever
  * mounted under `ClerkProvider`.
  */
-import type { ReactNode } from 'react';
-import { SignIn, useAuth } from '@clerk/clerk-react';
+import { useSyncExternalStore, type ReactNode } from 'react';
+import { SignIn, SignUp, useAuth } from '@clerk/clerk-react';
+
+import { authSurfaceFor, type AuthSurface } from './authSurface.js';
 
 export type AuthGateStatus = 'loading' | 'signed-out' | 'signed-in';
 
 export interface AuthGateViewProps {
   readonly status: AuthGateStatus;
+  /** Which Clerk widget to mount while signed out. Defaults to sign-in. */
+  readonly surface?: AuthSurface;
   readonly children?: ReactNode;
 }
 
 /** The gate markup. Pure of hooks and network; the signed-out branch renders Clerk's widget. */
-export function AuthGateView({ status, children }: AuthGateViewProps) {
+export function AuthGateView({ status, surface = 'sign-in', children }: AuthGateViewProps) {
   if (status === 'signed-in') return <>{children}</>;
 
   return (
@@ -52,10 +56,14 @@ export function AuthGateView({ status, children }: AuthGateViewProps) {
       </div>
 
       {status === 'signed-out' ? (
-        <div className="auth-gate__card" data-testid="clerk-sign-in">
+        <div
+          className="auth-gate__card"
+          data-testid={surface === 'sign-up' ? 'clerk-sign-up' : 'clerk-sign-in'}
+        >
           {/* Hash routing: this app has no router, and path routing would rewrite the URL the
-              document switcher refreshes into. */}
-          <SignIn routing="hash" />
+              document switcher refreshes into. Clerk's SignIn links to #/sign-up, so that hash
+              must mount SignUp or a new user gets a blank page and cannot create an account. */}
+          {surface === 'sign-up' ? <SignUp routing="hash" /> : <SignIn routing="hash" />}
         </div>
       ) : (
         <p className="auth-gate__status" role="status">
@@ -67,13 +75,31 @@ export function AuthGateView({ status, children }: AuthGateViewProps) {
 }
 
 /** The hook adapter: reads Clerk's load/auth state and delegates the markup to {@link AuthGateView}. */
+/** Track the hash Clerk's hash routing navigates to, without adding a router. */
+function useHashSurface(): AuthSurface {
+  const hash = useSyncExternalStore(
+    (onChange) => {
+      window.addEventListener('hashchange', onChange);
+      return () => window.removeEventListener('hashchange', onChange);
+    },
+    () => window.location.hash,
+    () => '',
+  );
+  return authSurfaceFor(hash);
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
+  const surface = useHashSurface();
   const status: AuthGateStatus = !isLoaded
     ? 'loading'
     : isSignedIn === true
       ? 'signed-in'
       : 'signed-out';
 
-  return <AuthGateView status={status}>{children}</AuthGateView>;
+  return (
+    <AuthGateView status={status} surface={surface}>
+      {children}
+    </AuthGateView>
+  );
 }

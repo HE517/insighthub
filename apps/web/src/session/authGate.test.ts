@@ -14,6 +14,8 @@ const clerk = vi.hoisted(() => ({
   auth: { isLoaded: false, isSignedIn: undefined as boolean | undefined },
   signInRenders: 0,
   signInRouting: [] as Array<string | undefined>,
+  signUpRenders: 0,
+  signUpRouting: [] as Array<string | undefined>,
 }));
 
 vi.mock('@clerk/clerk-react', () => ({
@@ -23,6 +25,11 @@ vi.mock('@clerk/clerk-react', () => ({
     clerk.signInRouting.push(props.routing);
     // Rendering the real widget needs a Clerk tenant; the gate's own contract is the wrapper
     // `data-testid="clerk-sign-in"`, which the assertions below check.
+    return null;
+  },
+  SignUp: (props: { routing?: string }) => {
+    clerk.signUpRenders += 1;
+    clerk.signUpRouting.push(props.routing);
     return null;
   },
 }));
@@ -39,6 +46,8 @@ beforeEach(() => {
   clerk.auth = { isLoaded: false, isSignedIn: undefined };
   clerk.signInRenders = 0;
   clerk.signInRouting = [];
+  clerk.signUpRenders = 0;
+  clerk.signUpRouting = [];
 });
 
 describe('AuthGate', () => {
@@ -79,6 +88,19 @@ describe('AuthGate', () => {
     expect(markup).toContain('data-testid="app-workspace"');
     expect(markup).not.toContain('data-testid="auth-gate"');
     expect(markup).not.toContain('clerk-sign-in');
+    expect(clerk.signInRenders).toBe(0);
+  });
+});
+
+describe('AuthGateView sign-up surface', () => {
+  it('renders Clerk SignUp for #/sign-up instead of leaving the hash blank', () => {
+    const markup = renderToStaticMarkup(
+      createElement(AuthGateView, { status: 'signed-out', surface: 'sign-up' }, child),
+    );
+    expect(markup).toContain('data-testid="clerk-sign-up"');
+    expect(markup).not.toContain('data-testid="clerk-sign-in"');
+    expect(clerk.signUpRenders).toBe(1);
+    expect(clerk.signUpRouting).toEqual(['hash']);
     expect(clerk.signInRenders).toBe(0);
   });
 });
