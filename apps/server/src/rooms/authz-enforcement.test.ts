@@ -26,8 +26,8 @@
  * fresh-answer assertions below cover.
  *
  * Every server here runs with `authorization: 'enforced'`, i.e. the real `AuthzService` and the
- * real `authz.db`, on a temporary data directory (the two databases are separate by design,
- * `docs/DECISIONS.md` D-062 §4).
+ * real membership table in `insighthub.db` (schema 2, `docs/DECISIONS.md` D-084), on a temporary
+ * data directory.
  */
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';

@@ -55,6 +55,7 @@ import {
 import { loadConfig, type AuthMode } from './config.js';
 import { createLogger } from './logging/logger.js';
 import { logStartupSummary } from './logging/startup.js';
+import { isDocumentCreationStore } from './persistence/document-creation.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from './persistence/document-meta.js';
 import { isBackupError } from './persistence/backup.js';
 import { startBackupScheduler } from './persistence/backup-scheduler.js';
@@ -162,12 +163,16 @@ async function main(): Promise<void> {
       sessions: 'process-scoped',
     });
   } catch (error) {
+    // A typed schema/migration refusal keeps its stable code, so an operator can grep for
+    // `MEMBERSHIP_MIGRATION_FAILED` instead of inferring it from an error class.
+    const code = isSqliteCapabilityError(error) ? error.code : 'AUTHZ_INIT_FAILED';
     log.error('server.refused', {
-      code: 'AUTHZ_INIT_FAILED',
-      message: 'refusing to start: authorization could not be initialised',
+      code,
+      message: `refusing to start: ${code}`,
     });
     log.error('server.refused_detail', {
-      code: 'AUTHZ_INIT_FAILED',
+      code,
+      ...(isSqliteCapabilityError(error) ? { detail: error.message } : {}),
       errorClass: error instanceof Error ? error.name : typeof error,
     });
     await store.close();
@@ -260,6 +265,10 @@ async function main(): Promise<void> {
   const app = createApp(config, authz, aiProvider, identityOptions, undefined, {
     staticAssets,
     logger: log,
+    // B12.5 (D-084 method C): the same store instance that holds documents and membership is
+    // the one atomic creation path. Passing it here keeps `app.ts` free of persistence imports
+    // and makes the capability explicit at the composition root.
+    documentCreation: isDocumentCreationStore(store) ? store : null,
   });
   const server = createServer(app);
 
@@ -334,8 +343,9 @@ async function main(): Promise<void> {
     // then flush and release the store. `registry.destroy()` inside `socket.close()` stops
     // every per-document queue, so nothing is left mid-append when the store closes.
     await socket.close();
-    // Sessions are in memory, so closing authz only drops them and releases `authz.db`. It runs
-    // after the transports stop: an in-flight HTTP request must not see a closed membership table.
+    // Sessions are in memory, so closing authz only drops them and releases its read connection
+    // to `insighthub.db` (membership lives there since schema 2, D-084). It runs after the
+    // transports stop: an in-flight HTTP request must not see a closed membership table.
     authz.close();
     await store.close();
 

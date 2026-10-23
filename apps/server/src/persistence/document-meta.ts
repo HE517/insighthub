@@ -13,10 +13,10 @@
  * ## Read-only, in the sense that matters
  *
  * The catalog itself only reads: `get` and `list` issue SELECTs and never mutate. Creation is
- * separate and happens exactly once per document, when an authorized socket first brings it into
- * existence — see `ensureDocumentMeta`. Keeping those two apart is what lets
- * `DocumentCatalog` remain a pure query surface (§17.4 has no document-write endpoint) while
- * the store still knows where its rows came from.
+ * separate: a socket's first write still calls `ensureDocumentMeta` (with the id as the default
+ * title), and since B12.5 an explicit `POST /api/documents` writes document + metadata + owner
+ * membership atomically through `createDocumentWithOwner`. Keeping the read surface pure is what
+ * lets `DocumentCatalog` stay a query seam (§17.4).
  *
  * ## Where each `DocumentMeta` field comes from, and why
  *
@@ -25,7 +25,7 @@
  * | `id` | `document.document_id` | |
  * | `revision` | highest durably committed sequence for the document | server-owned and monotonic (§1); it is the same counter `append` returns, not a second one |
  * | `createdAt` / `updatedAt` | the metadata row's timestamps | written at creation / refreshed on append |
- * | `title` | the row's title, defaulting to the document id | Phase 2 has **no** rename endpoint and no creation form (§17.7), so there is no user-supplied title to lose |
+ * | `title` | the row's title | The socket-first creation path defaults to the document id; B12.5's `POST /api/documents` stores a user-supplied title (default `Untitled document`) |
  * | `ownerId` | the identity that first made the document durable | Phase-2 attribution only. It is **not** an authorization input: every decision comes from the membership table (`apps/server/src/authz/**`), and this field is display metadata |
  *
  * The `ownerId` row is the one judgement call here, and it is recorded as such rather than
@@ -109,10 +109,11 @@ export class StoreDocumentCatalog implements DocumentCatalog {
 /**
  * The default title for a durable document.
  *
- * The id, because Phase 2 has no way to set one (§17.7 excludes creation forms, rename and
- * metadata editing). Truncated to the schema's limit rather than throwing: a long document id is
- * a legitimate id, and refusing to describe the document because its *default title* is too long
- * would make the document invisible to the API for a cosmetic reason.
+ * The id, because the socket-first creation path has no title to record. Truncated to the
+ * schema's limit rather than throwing: a long document id is a legitimate id, and refusing to
+ * describe the document because its *default title* is too long would make the document
+ * invisible to the API for a cosmetic reason. `POST /api/documents` does not use this default;
+ * it stores `Untitled document` when the client omits a title (D-084).
  */
 export function defaultDocumentTitle(documentId: string): string {
   if (documentId.length <= TITLE_MAX_LENGTH) return documentId;

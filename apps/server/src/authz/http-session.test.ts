@@ -1,5 +1,5 @@
 /**
- * The HTTP surface of §17.4, over a real server and a real `authz.db`.
+ * The HTTP surface of §17.4, over a real server and the real `insighthub.db`.
  *
  * Covers:
  *

@@ -1,8 +1,9 @@
 /**
  * Test support for the AI endpoint suites.
  *
- * Built the way production builds it: a real `authz` on a temporary `authz.db`, a real Express
- * app from `createApp`, and a real HTTP server on an ephemeral port. The only injected
+ * Built the way production builds it: a real `authz` on a temporary `insighthub.db` (membership
+ * lives there since schema 2, D-084), a real Express app from `createApp`, and a real HTTP server
+ * on an ephemeral port. The only injected
  * component is the **provider**, which is exactly the seam `createApp` exposes — so the route,
  * the session guard, the authorization call and the response mapping all run unchanged.
  *

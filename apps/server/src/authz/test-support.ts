@@ -2,8 +2,8 @@
  * Test support for the authorization suites.
  *
  * Everything the tests need is built the way production builds it: a **real** `authz` on a real
- * temporary `authz.db`, a **real** Express app from `createApp`, and a **real** HTTP server on an
- * ephemeral port. No route handler, decision or cookie path is stubbed, so a test that passes
+ * temporary `insighthub.db` (membership included since schema 2, D-084), a **real** Express app
+ * from `createApp`, and a **real** HTTP server on an ephemeral port. No route handler, decision or cookie path is stubbed, so a test that passes
  * here has exercised the code the server actually runs.
  *
  * Not a `*.test.ts` file, so the test runner does not execute it — same convention as

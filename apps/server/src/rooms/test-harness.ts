@@ -45,6 +45,7 @@ import {
   type SessionVerifier,
 } from '../authz/public.js';
 import type { AuthMode, ServerConfig } from '../config.js';
+import { isDocumentCreationStore } from '../persistence/document-creation.js';
 import { isDocumentMetaStore, StoreDocumentCatalog } from '../persistence/document-meta.js';
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
@@ -228,15 +229,13 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
 
   // M4 B9: when a test supplies a structured logger, both transports use it — the same wiring
   // `index.ts` has — so an accepted upgrade can be traced back to the HTTP bootstrap request.
+  // B12.5: the store is also the atomic creation path, exactly as `index.ts` wires it.
+  const appOptions = {
+    ...(options.log === undefined ? {} : { logger: options.log }),
+    ...(isDocumentCreationStore(store) ? { documentCreation: store } : {}),
+  };
   const server: Server = createServer(
-    createApp(
-      config,
-      authz,
-      undefined,
-      identityOptions,
-      undefined,
-      options.log === undefined ? {} : { logger: options.log },
-    ),
+    createApp(config, authz, undefined, identityOptions, undefined, appOptions),
   );
   const handle = attachWebSocketServer(server, config, {
     ...transportOptions,

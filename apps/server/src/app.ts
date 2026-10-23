@@ -66,6 +66,8 @@
  * Both behaviours are configured through {@link AppOptions}, which (unlike {@link ServerConfig})
  * carries process facts — the already-validated build and the readiness predicate.
  */
+import { randomUUID } from 'node:crypto';
+
 import express, {
   type Express,
   type NextFunction,
@@ -99,6 +101,11 @@ import {
   requestLogger,
 } from './logging/http.js';
 import { createLogger, type Logger } from './logging/logger.js';
+import {
+  DEFAULT_NEW_DOCUMENT_TITLE,
+  DOCUMENT_TITLE_MAX_LENGTH,
+  type DocumentCreationStore,
+} from './persistence/document-creation.js';
 import { createOriginGuard } from './security/origin.js';
 import { FixedWindowRateLimiter } from './security/rate-limit.js';
 import { mountStaticHosting, type StaticAssets } from './static-hosting.js';
@@ -131,6 +138,12 @@ const RESPONSE_BODIES = {
   notFound: { error: 'not_found' },
   forbidden: { error: 'forbidden' },
   invalidDemoIdentity: { error: 'invalid_demo_identity' },
+  /**
+   * B12.5's refusal for `POST /api/documents`: unknown body field, a title of the wrong type,
+   * or a title outside 1..200 after trimming. One body for every malformed request so the
+   * endpoint cannot be probed for which field the server "would have accepted".
+   */
+  invalidRequest: { error: 'invalid_request' },
   /**
    * §B4's refusal for a cross-origin state-changing request (and for a preflight from a
    * non-allowed origin). One body for both, so a caller cannot use the response to probe
@@ -187,6 +200,13 @@ export interface AppOptions {
    * capturing sink here and assert on what was — and was not — emitted.
    */
   readonly logger?: Logger;
+  /**
+   * B12.5 creation seam (D-084 method C). `app.ts` owns the HTTP contract; the store owns the
+   * atomic three-row insert. Absent when the app is built without a durable store (the AI
+   * invariants harness deliberately has none), in which case the endpoint is not mounted at all
+   * — a route that could only answer 500 is worse than an honest 404 for an unknown path.
+   */
+  readonly documentCreation?: DocumentCreationStore | null;
 }
 
 /** The only body a bootstrap request may carry (§17.3/§17.4). */
@@ -341,7 +361,14 @@ export function createApp(
     });
   });
 
-  mountAuthorizationRoutes(app, authz, identityDeps, demoBootstrapEnabled, bootstrapLimiter);
+  mountAuthorizationRoutes(
+    app,
+    authz,
+    identityDeps,
+    demoBootstrapEnabled,
+    bootstrapLimiter,
+    options.documentCreation ?? null,
+  );
   mountAiRoutes(app, authz, aiProvider, identityDeps, aiLimits);
 
   // Same-origin hosting of the built web client (M4 B7, D-082 D2). Mounted after every API
@@ -388,6 +415,7 @@ function mountAuthorizationRoutes(
   identityDeps: IdentityDeps,
   demoBootstrapEnabled: boolean,
   bootstrapLimiter: FixedWindowRateLimiter,
+  documentCreation: DocumentCreationStore | null,
 ): void {
   /* ---------------------------------------------------------------- *
    * Session (§17.2, §17.4, §18)
@@ -477,6 +505,68 @@ function mountAuthorizationRoutes(
   });
 
   /**
+   * B12.5 self-service creation (D-084 method C).
+   *
+   * Order is the contract:
+   *
+   * ```text
+   * identity (401) → strict body (400) → one atomic insert (201)
+   * ```
+   *
+   * Identity comes first so an unauthenticated caller cannot make the server parse a body, and
+   * so the only 401 body this endpoint ever emits is `session_required` (D-084 acceptance #1;
+   * the UI that calls it runs under Clerk, where that is also the mode's normal body).
+   *
+   * The id and the owner are **server facts**: `randomUUID()` for the id, the resolved internal
+   * user id for the owner. The body schema accepts exactly one optional `title`; `documentId`,
+   * `ownerId` and `role` are unknown fields and therefore `400`, not silently ignored.
+   *
+   * The success body contains only the two values the client needs to switch to the new
+   * document. No owner, revision, timestamp or capability is returned: the client's role comes
+   * from the existing `join-room.role` path, not from this response.
+   */
+  if (documentCreation !== null) {
+    app.post('/api/documents', async (req: Request, res: Response) => {
+      const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+      if (user === null) {
+        // D-084 acceptance #1 names this body explicitly for creation.
+        res.status(401).json(RESPONSE_BODIES.sessionRequired);
+        return;
+      }
+      bindRequestUser(res, user.userId);
+
+      let rawBody: unknown;
+      try {
+        rawBody = await readCreateDocumentBody(req, res);
+      } catch {
+        // A body the parser could not read is the endpoint's own 400: there is no other code
+        // for "malformed request" in the frozen vocabulary.
+        res.status(400).json(RESPONSE_BODIES.invalidRequest);
+        return;
+      }
+
+      const input = parseCreateDocumentInput(rawBody);
+      if (input === null) {
+        res.status(400).json(RESPONSE_BODIES.invalidRequest);
+        return;
+      }
+
+      const documentId = randomUUID();
+      // One transaction on one connection (D-084 #4): a rejection here has rolled all three rows
+      // back; the error handler returns 500 without a half-created document.
+      await documentCreation.createDocumentWithOwner({
+        documentId,
+        title: input.title,
+        ownerUserId: user.userId,
+      });
+
+      // The document is bound only after the commit: the log records ids that exist.
+      bindRequestDocument(res, documentId);
+      res.status(201).json({ documentId, title: input.title });
+    });
+  }
+
+  /**
    * The production document read.
    *
    * Built by `createDocumentAccessHandler` with `canRead` — the same factory the table-driven
@@ -484,6 +574,58 @@ function mountAuthorizationRoutes(
    * through production code rather than through a mock.
    */
   app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead', identityDeps));
+}
+
+/** The validated creation request. `title` is already trimmed. */
+interface CreateDocumentBody {
+  readonly title: string;
+}
+
+/**
+ * Parse and validate the **entire** `POST /api/documents` body.
+ *
+ * Returns `null` for every violation, so the route has one `400 invalid_request` branch. The
+ * accepted shape is exactly `{}` or `{ "title": string }`; any other key is refused rather than
+ * ignored, which is what makes "the client cannot submit an owner/role/id" observable.
+ */
+function parseCreateDocumentInput(body: unknown): CreateDocumentBody | null {
+  // No body at all is a valid request: it creates `Untitled document`.
+  if (body === undefined) return { title: DEFAULT_NEW_DOCUMENT_TITLE };
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+
+  const record = body as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.some((key) => key !== 'title')) return null;
+  if (keys.length > 1) return null;
+
+  const rawTitle = record['title'];
+  if (rawTitle === undefined) return { title: DEFAULT_NEW_DOCUMENT_TITLE };
+  if (typeof rawTitle !== 'string') return null;
+
+  const title = rawTitle.trim();
+  if (title.length < 1 || title.length > DOCUMENT_TITLE_MAX_LENGTH) return null;
+  return { title };
+}
+
+/**
+ * Read a JSON body **after** authentication.
+ *
+ * `express.json()` is normally mounted before the handler. Here it is deliberately not: an
+ * unauthenticated request must be refused with 401 before the server allocates a parse tree or
+ * reads the payload. The middleware is scoped to this route and its failure is the route's 400.
+ */
+const createDocumentJsonParser = express.json({ limit: '8kb' });
+
+function readCreateDocumentBody(req: Request, res: Response): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    createDocumentJsonParser(req, res, (error?: unknown) => {
+      if (error !== undefined && error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(req.body);
+    });
+  });
 }
 
 /**
