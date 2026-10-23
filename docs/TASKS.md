@@ -847,7 +847,7 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 | B11a | FREE STAGING SMOKE（free、无 disk、`/tmp`、EPHEMERAL） | A3 + A0 | 仅 HTTPS/WSS、same-origin、Clerk、production gate、`/health`、`/ready`、bootstrap 404、Origin 403；**不含**持久化/restart/backup | 无（free） |
 | B11 | staging deploy（paid + disk） | A0 + A3 | Render hostname 可达；HTTPS/WSS；**持久盘**；restart 后数据仍在 | Render 凭据 + **支付方式** |
 | B12 | real OpenAI live smoke | A3 + A6 | opt-in、单次、固定 prompt；不替代确定性 gate | `OPENAI_API_KEY`（生产项目） |
-| B12.5 | Document creation（self-service `POST /api/documents` + UI 入口） | A3 + A5 + A2 | 见 D-084：认证、服务端 id/owner、**原子创建**、owner role、并发语义、UI 成功切换/失败不切换、非披露 404 | 原子机制 C/B 裁决 |
+| B12.5 | Document creation（self-service `POST /api/documents` + UI 入口） | A3 + A5 + A2 | 见 D-084：认证、服务端 id/owner、**原子创建**、owner role、并发语义、UI 成功切换/失败不切换、非披露 404 | **C 已批准**（D-084 §3） |
 | B13 | deployed smoke | A6 | 登录/会话/协作/权限/AI 全链路/失败路径 | — |
 | B14 | A7 Production Readiness final review | A7 | GO/NO-GO + 条件关闭 | — |
 

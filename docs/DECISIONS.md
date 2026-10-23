@@ -3603,18 +3603,38 @@ fixture（C），也**不**把自动建文档（A）作为正式方案。
    ownership transfer 均不在本项范围。
 10. **B13** 必须用真实 Clerk test user 走**自助创建**，不得靠 fixture seed 伪造产品可用性。
 
-### 3. 未决的存储机制（需 Owner 一行裁决）
+### 3. 存储机制：**C（Owner 已批准，2026-10-23）**
 
-当前文档在 `insighthub.db`，membership 在 `authz.db`（独立文件，历史决策：避免 schema 耦合与写竞争）。
-**跨两个 WAL 数据库没有真正的单事务原子提交**（SQLite 仅在 rollback-journal 下支持 ATTACH 事务，
-而热路径必须保持 WAL）。因此 Acceptance #4 需要二选一：
+当前文档在 `insighthub.db`，membership 在 `authz.db`（独立文件，历史决策）。**跨两个 WAL 数据库没有
+真正的单事务原子提交**（SQLite 仅在 rollback-journal 下支持 ATTACH 事务，而热路径必须保持 WAL）。
 
-| 方案 | 机制 | 代价 | 风险 |
-| --- | --- | --- | --- |
-| **C（推荐）** | 把 membership 表并入 `insighthub.db`（命名空间 `authz_*`），创建在**一个事务**内完成 | 推翻"独立 authz.db"的旧决策；需要迁移（B6 的 `user_version`）；A5/A1/A3 协同 | 改动面中等，但换来真正的原子性 |
-| **B** | 两阶段：先建 document+meta，再写 membership；membership 失败则删除 document（补偿） | 改动小 | 崩溃窗口会留下"无 membership 的孤儿 document"（对用户不可见、不泄漏，但**不是**严格原子） |
+**决定：C。** 为满足 B12.5 的严格原子性，推翻"document membership 必须独立存于 `authz.db`"的旧架构
+决定。新冻结原则：
 
-**Owner 选 C 或 B 之前，B12.5 不进入实现。** 选 C 需要显式批准"推翻独立 `authz.db` 的架构决策"。
+> **document 生命周期相关的 membership 必须与 document 位于同一个 SQLite durability domain**，
+> 从而允许 `create document + create creator owner membership` 在一个真正的 SQLite transaction 内
+> 原子提交。
+
+**Scope 限制（同样冻结）：**
+
+- **只迁移 document membership**；
+- **不**借机把整个 identity/auth domain 合并进 `insighthub.db`；
+- `app_user` / Clerk identity 等**非 document-lifecycle** 数据保持现状边界，除非将来出现独立必要性；
+- 新表命名空间 `authz_document_membership`，迁移完成后是**唯一 runtime source of truth**。
+
+**Migration 要求：**
+
+1. 复用现有 `PRAGMA user_version` 迁移框架（B6）；
+2. 从旧 `authz.db` 的 membership 迁入 `insighthub.db`；
+3. 迁移幂等、可重启；中途失败整体回滚；
+4. 复制后验证：row count、`(document_id,user_id)` 唯一、role 合法、无重复 membership；
+5. 迁移完成后 runtime **只**读写新表；
+6. **不允许**长期 dual-write / dual-read；
+7. 第一版**不** destructive-delete 旧数据：`authz.db` 保留为 migration audit / recovery source，
+   并明确标记 legacy / non-runtime；
+8. 新创建路径在**一个事务**内 insert document/meta + creator membership(owner)；
+9. 必须做 failure injection：membership insert 失败时 document 不存在；
+10. 必须做 crash/restart/migration compatibility evidence：旧库升级后原有用户权限不丢。
 
 **后果。** 产品首次具备"新用户 → 创建 → 协作 → AI"的完整入口；这条链是 B13/B14 的前提，而不是
 可选的便利功能。
