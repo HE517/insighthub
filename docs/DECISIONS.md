@@ -3588,8 +3588,9 @@ fixture（C），也**不**把自动建文档（A）作为正式方案。
 
 1. `POST /api/documents` 需要已验证的 Clerk 会话；未认证 → `401 session_required`；Origin 校验与
    现有 HTTP 面一致（非法 Origin → `403 origin_not_allowed`）。
-2. **document id 由服务端生成**（UUID）。请求体**严格**：只允许可选 `title`（trim 后 1..120，缺省
-   `Untitled document`）；`ownerUserId`、`role`、`documentId` 等未知字段一律 `400`。
+2. **document id 由服务端生成**（UUID）。请求体**严格**：只允许可选 `title`（trim 后 1..**200**，缺省
+   `Untitled document`；与 `CONTRACTS §1` / `DocumentMeta` 的 200 上限一致）；`ownerUserId`、`role`、
+   `documentId` 等未知字段一律 `400`。
 3. **owner 由会话决定**：internal user id 来自 `resolveAuthenticatedUser`，客户端无从指定。
 4. **创建必须原子**：document 行 + document_meta 行 + owner membership 三者要么全有、要么全无。
 5. 创建成功后 creator role = **owner**，通过既有 `Membership → DocumentRole → documentCapabilities`
