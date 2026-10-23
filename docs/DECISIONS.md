@@ -3498,3 +3498,76 @@ A7 终审 GO。**在此之前不得宣称 production ready。**
 
 **后果。** M4 从"补一堆生产特性"变成 14 个可独立验收的小批次，且认证不重复造 session、部署不引入
 多余基础设施、AI 成本有硬上限与 app-side 执行。
+
+---
+
+## D-083 · 2026-10-23 · accepted · B11a FREE STAGING SMOKE（临时、EPHEMERAL、TEST-ONLY）
+
+**背景。** Render 要求 Payment Information，因为正式 Blueprint 使用 paid plan + Persistent Disk；
+Owner 当前没有可绑定支付方式。M4 B11 因此拆出一个**可执行的前置**：B11a。
+
+### 1. B11a 的范围（只允许证明这些）
+
+`render.staging.yaml` 是**独立的** staging Blueprint：`plan: free`、**无 Persistent Disk**、
+`INSIGHTHUB_DATA_PATH=/tmp/insighthub-data`（绝对路径只为满足 B3，**不是**持久存储）、
+`BACKUP_ENABLED=false`。它允许证明：
+
+1. HTTPS（Render 终止 TLS）；
+2. WSS upgrade 可达（未认证仍 401，不是 500）；
+3. same-origin React 构建 + API + WebSocket；
+4. Clerk 登录（Email/Google 由 Clerk 配置）；
+5. production config gate（B3 的拒绝规则在真实环境成立）；
+6. `GET /health` 200、`GET /ready` 200；
+7. `POST /api/session/bootstrap` **404**（生产禁用 demo）；
+8. 非法 Origin → 403。
+
+### 2. B11a 明确**不**证明（保持 OPEN）
+
+- 持久化：`/tmp` 在 restart/redeploy/spin-down 后**允许全部丢失**；
+- 部署级 backup/restore（B8 的部署证据仍 OPEN）；
+- restart 后数据仍在；
+- custom domain / 生产容量 / 无停机。
+
+**口径**：free staging 上的任何数据都是 **EPHEMERAL / TEST-ONLY**。不得用它宣称
+"production persistence 已验证"，也不得把 B11a 计入 B11 完成。
+
+### 3. 状态细分（覆盖此前笼统的 BLOCKED 标签）
+
+| 项 | 状态 |
+| --- | --- |
+| B11a FREE STAGING SMOKE | **可执行** |
+| B11 的 persistent-disk / restart 部分 | **OPEN — BLOCKED BY PAYMENT** |
+| B8 deployed backup/restore durability | **OPEN — BLOCKED BY PAYMENT** |
+| B12 OpenAI live smoke | **允许**在 free staging 继续（AI 预算与 30s/0-retry 策略与磁盘无关） |
+| B13 deployed functional smoke | **允许执行**不依赖 durable disk 的部分；逐项标 `PASS` / `NOT VERIFIED` |
+| B14 Production Ready final GO | **BLOCKED**，直到 paid persistent deployment 完成 |
+
+### 4. 资源生命周期（不得描述成"零清理切换"）
+
+staging service 名 `insighthub-staging`，production service 名 `insighthub`，**是两个资源**。
+恢复 paid production 的正确顺序是：
+
+1. 绑定支付方式；
+2. **新建**一个指向 `render.yaml` 的 production Blueprint（或新建该服务）；
+3. 在 production 上验证持久盘/restart/backup/restore；
+4. **显式删除或 disconnect** staging resource。
+
+"把现有 staging Blueprint 的 path 改回 `render.yaml`" **不**删除已存在的 staging 服务，因此不是
+零清理切换，不作为恢复步骤描述。
+
+### 5. 恢复 paid 时需要改的字段（全部已在 `render.yaml` 中）
+
+无需新代码、无需改 `render.yaml`：
+
+| 字段 | 正式值（已存在） |
+| --- | --- |
+| `plan` | `1c-2g` |
+| `disk` | `insighthub-data` → `/var/data`，1 GB |
+| `INSIGHTHUB_DATA_PATH` | `/var/data` |
+| `BACKUP_ENABLED` | `true` |
+| `BACKUP_DIR` | `/var/data/backups` |
+| `CORS_ORIGIN` | 自引用；接 custom domain 后改为该 domain |
+
+**后果。** M4 不再被"一次性全阻塞"：认证、配置、Origin、AI 策略可以在 free staging 上真实验证，
+而持久性相关的四项（B11 disk/restart、B8 deployed、B13 的 durability 子项、B14）在 paid 部署前
+保持 OPEN，口径不再混淆。

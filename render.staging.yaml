@@ -1,0 +1,59 @@
+# B11a FREE STAGING SMOKE — EPHEMERAL, TEST-ONLY.
+#
+# This file is **not** the V1 production topology. It exists only while no payment method is
+# available: Render free instances cannot attach a persistent disk, so the SQLite store lives in
+# /tmp and is lost on every deploy, restart or spin-down. Data written here is disposable; do not
+# let real users type into this service.
+#
+# What this deployment is allowed to prove (B11a): HTTPS, WSS, same-origin React + API, Clerk
+# sign-in, the production config gate, /health, /ready, and "demo bootstrap is absent".
+# What it is NOT allowed to prove: persistence across restart, deployed backup/restore, or any
+# production-readiness claim. Those stay OPEN (D-083).
+#
+# Restoring paid production is **not** a path switch: create a separate production Blueprint that
+# points at `render.yaml` (service name `insighthub`), verify it, and then delete/disconnect this
+# staging service explicitly. Switching an existing Blueprint leaves the old resource in place.
+
+services:
+  - type: web
+    name: insighthub-staging
+    runtime: node
+    region: oregon
+    # Free plan: 0.1 CPU / 512 MB, no disk, spins down after inactivity (cold start on wake).
+    plan: free
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node apps/server/dist/index.js
+    healthCheckPath: /health
+    envVars:
+      # Production mode: the B3 gate, `trust proxy`, the static-build requirement, and the
+      # absence of the demo bootstrap route all apply exactly as they would in production.
+      - key: NODE_ENV
+        value: production
+      # `node:sqlite` exists from Node 22.5; pin the runtime instead of trusting a default.
+      - key: NODE_VERSION
+        value: '22.14.0'
+      - key: HOST
+        value: 0.0.0.0
+      - key: AUTH_MODE
+        value: clerk
+      # Absolute (the B3 gate refuses relative paths and the development default) but EPHEMERAL:
+      # /tmp is not a disk, so every deploy starts from an empty store.
+      - key: INSIGHTHUB_DATA_PATH
+        value: /tmp/insighthub-data
+      # Self-reference to Render's own https URL for this service, so the allowed browser origin
+      # is correct without guessing the hostname.
+      - key: CORS_ORIGIN
+        fromService:
+          name: insighthub-staging
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      # The only two values Render prompts for at Blueprint creation.
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+      # No disk: a backup would be as ephemeral as the database it copies. Off, and not claimed.
+      - key: BACKUP_ENABLED
+        value: 'false'
+      # AI stays disabled here (no AI_PROVIDER, no OpenAI credential): B12 enables it in the
+      # Dashboard with AI_PROVIDER=openai, OPENAI_API_KEY and OPENAI_MODEL=gpt-5.6-luna.
