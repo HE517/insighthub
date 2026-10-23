@@ -82,11 +82,13 @@ describe('backup scheduler', () => {
   it('catches up when the newest backup is stale, and prunes beyond retention', async () => {
     const { root, dataPath, backupDir } = await fixture('stale');
     await mkdir(backupDir, { recursive: true });
-    // A placeholder from eight days ago: only its name matters to prune.
-    const staleName = backupFileName(new Date(Date.now() - 8 * DAY_MS));
+    // The placeholder's age is relative to the **injected** clock, never to the wall clock: a
+    // date built from `Date.now()` drifts as the machine's time moves and made this assertion
+    // fail by a day. Only its name matters to prune.
+    const now = new Date('2026-10-22T03:00:00.000Z');
+    const staleName = backupFileName(new Date(now.getTime() - 8 * DAY_MS));
     await writeFile(path.join(backupDir, staleName), '');
 
-    const now = new Date('2026-10-22T03:00:00.000Z');
     const scheduler = start({ dataPath, now: () => now });
 
     assert.equal(await scheduler.tick(), 'backed-up');
