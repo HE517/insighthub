@@ -16,6 +16,7 @@ It covers two milestones:
 | M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
 | M3 redesign (UI evidence) | `suite/30-m3-ui-evidence.mjs` | the new Undo/Redo buttons (owner/editor reversible through the **durable** store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity-remount wait |
 | M3 AI proposal loop | `suite/31-m3-ai.mjs` | proposal → Diff Preview → Accept/Reject in the real panel: nothing changes before Accept, Accept is one Yjs transaction a peer sees, Undo reverts only the AI edit, Reject writes nothing, `revision` vs `text-mismatch` staleness, a viewer can review but not accept, an owner’s offline Accept reconnects **once**, and a viewer’s offline Accept stays a local-only divergence |
+| M4 B12.5 document creation | `suite/32b-m4-b125.mjs` | the shipped `New document` entry in a real browser: one click POSTs `/api/documents` (201), switches to the server-generated UUID, closes the panel, joins the new room as `owner` with an editable editor and marks exactly that row `aria-current`; an offline click shows the typed failure and changes nothing, and the same button succeeds after recovery; two clicks in one task still create **one** document |
 
 ## Why there is no Playwright
 
@@ -70,19 +71,19 @@ either is occupied, and its postflight prints whether both were released again.
 
 The default run measures the **frozen default configuration**: `AI_PROVIDER` is not set, so
 `POST /api/ai/suggest` answers `503`, and `VITE_AI_PROVIDER` is not set, so the client uses the
-deterministic local provider. That is what the 68 default scenarios assert, so a globally remote
+deterministic local provider. That is what the 71 default scenarios assert, so a globally remote
 Vite would invalidate them.
 
 The remote evidence is a separate group that exists only when asked for:
 
 ```bash
-INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 73 = 68 + 5
-
-The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 76 = 71 + 5
 ```
 
+The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
+
 `INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
-still exactly 68 scenarios and none of their assertions change. At the group boundary (the file
+still exactly 71 scenarios and none of their assertions change. At the group boundary (the file
 sorts last) the first `m3r/*` scenario stops Vite, restarts the backend on a fresh durable store
 with `AI_PROVIDER=stub`, and starts Vite with `VITE_AI_PROVIDER=remote`; every scenario in the
 group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) works too.
@@ -90,7 +91,7 @@ group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) wor
 `setWebEnv`; an `undefined` value deletes the key), and with no mode env the two children receive
 exactly the same environment as before.
 
-Why not start the whole run remote: the 68 scenarios measure the default configuration (intent
+Why not start the whole run remote: the 71 scenarios measure the default configuration (intent
 chips, local copy), and one Vite process has one `VITE_AI_PROVIDER`. Why not a second stack: two
 servers on `127.0.0.1` share one browser cookie jar while sessions are process-scoped, and the
 ports would double.
@@ -235,6 +236,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
 | `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
 | `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
+| `32b-m4-b125.mjs` | M4 B12.5 `New document` (D-084 #2/#6/#7) in the **default** configuration: one click → real `POST /api/documents` (201) → switch to the server UUID → panel closed → `owner` room + editable editor → exactly one `aria-current` row; an offline click shows `new-document-error[data-create-error="network"]` with nothing changed and succeeds after recovery; two clicks in one task create one document. It sorts before `33` because that group changes the stack's configuration and must stay last |
 | `33-m3-remote.mjs` | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
@@ -280,7 +282,39 @@ covering more than it does.
 | `m3r/4-ai-directory-offline` | CDP `Network.emulateNetworkConditions { offline: true }` + Refresh → `ai-directory[data-state="error"]`, `ai-directory-error[data-directory-error="network"]`, **zero** `ai-directory-item` elements; restoring the network + Refresh → `data-state="ready"` with rows, and the page recorded a real `200` |
 | `m3r/5-collapsed-caret-is-not-an-empty-proposal` | typing leaves a **collapsed** caret (no selection); Generate still sends no `selection`, so the stub sees the whole document and the proposal's diff is non-empty; Accept writes the uppercase text. Regression for A6's round-2 finding (an empty diff the user could Accept for no effect) |
 
-Acceptance **H** is the gate itself: the scenario count is now 68 (73 with
+### M4 B12.5 — `New document` (`b125/*`, in the **default** suite)
+
+`docs/DECISIONS.md` D-084 froze self-service creation as the product's first usable entry point:
+the id/title are server facts (#2), the creator becomes `owner` through the existing membership
+path (#5), the UI switches on success and changes nothing on failure (#7), and the pending-button
+plus in-flight guard means there is no double-click path (#6). B12.5 shipped Node-level proofs
+for the server transaction, the flow state machine and the panel markup; these three scenarios
+are the browser proof that the **shipped** path works end to end. Creation is part of the
+product, not a mode, so they carry no environment variable and count toward the default 71.
+
+| Scenario id | D-084 | What the real browser + real server actually prove |
+| --- | --- | --- |
+| `b125/1-create-document-switches` | #2, #5, #7 | the panel's directory is `data-state="ready"`; one click on `new-document` produces **one** `POST /api/documents` that the browser's network stack answers `201` with `{ documentId: <uuid>, title: "Untitled document" }`; `active-document` becomes **that** id (≠ the previous document); `ai-panel` unmounts; the page's own `room-joined` says `owner`, the header chip renders `role: owner`, `EditorState.readOnly` is `false` and `.cm-content` is `contenteditable="true"`; reopening the panel marks exactly that one row `aria-current="true"`, titled `Untitled document`, and the created document appears exactly once |
+| `b125/2-create-failure-does-not-switch` | #7 | with the browser's **network stack** offline (CDP `Network.emulateNetworkConditions`), the click is a real failed fetch (`status: null`, `error: TypeError`): `new-document-error` is **visible** with `data-create-error="network"`, `active-document` does not move, the directory's entries are the same ordered list of ids (no fabricated row), the panel stays open, and the button is enabled again with its idle label; restoring the network and clicking the same control yields a real `201`, a switch to that document, and exactly one new entry |
+| `b125/3-double-click-creates-one-document` | #6 | two genuine `click` events dispatched **in one task** (so React has not rendered `disabled` yet — a disabled control dispatches no click at all, and both were observed) still produce exactly **one** `POST /api/documents` at both observers (page `fetch` log **and** CDP): the server list grows by **one** row, not two, and the workspace switches to that one document |
+
+Three details a reader should not have to infer:
+
+- **`setOffline` is not enough for this failure.** The page-side control rewrites the
+  **collaboration socket**; it never touches `fetch`, so it cannot make `POST /api/documents`
+  fail. Scenario 2 therefore uses the browser's own network stack
+  (`Network.emulateNetworkConditions { offline: true }`), the same mechanism `m3r/4` uses for the
+  directory. It asserts the typed `network` failure, not merely "no switch".
+- **The POST is observed twice, independently.** `window.__qa.apiCalls` records the status the
+  application's own `fetch` received; CDP `Network.responseReceived` records what the browser
+  sent and the server answered, and `Network.getResponseBody` yields the frozen 201 body. "The
+  workspace switched to the id the server returned" is therefore a string comparison.
+- **The double click is the same-tick one.** D-084 #6 names both lines of defence: the `disabled`
+  attribute (after a re-render) and the flow's synchronous in-flight guard (before it). The
+  scenario exercises the harder one, and counts the click events that actually reached the
+  control so the suite cannot pass by never dispatching the second click.
+
+Acceptance **H** is the gate itself: the scenario count is now 71 (76 with
 `INSIGHTHUB_E2E_AI_MODE=remote`), and the four commands in
 `docs/TASKS.md` must all pass on the integrated HEAD.
 
@@ -418,6 +452,7 @@ a green browser run as covering them.
 | Need | Mechanism |
 | --- | --- |
 | a genuinely offline client | page-side `WebSocket` rewrite to an unreachable port (`window.__qa.setOffline`) |
+| a genuinely offline **`fetch`** (the socket shim does not touch it) | CDP `Network.emulateNetworkConditions { offline: true }` — used by `m3r/4` for the directory and `b125/2` for `POST /api/documents` |
 | a durable-append failure | `acquireWriteLock(dataPath)` holds SQLite's write lock from a second process, so the server's `BEGIN IMMEDIATE` fails after its 5 s `busy_timeout` |
 | duplicate / reordered / malformed frames | frame-level hold, replay and injection in the page transport |
 | durable-state assertions | `reconstructDurableDocument(dataPath, id)` rebuilds a `Y.Doc` from `snapshot` + `document_update`, the same replay `DocumentHydrator` does |
