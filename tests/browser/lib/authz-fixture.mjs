@@ -48,8 +48,14 @@ import { loadShared } from './deps.mjs';
 /** Cookie the session travels in (§17.2). */
 export const SESSION_COOKIE_NAME = 'insighthub_session';
 
-/** The A5-owned authorization database inside `INSIGHTHUB_DATA_PATH`. */
-export const AUTHZ_DATABASE_FILE_NAME = 'authz.db';
+/**
+ * The database that now holds memberships: **`insighthub.db`**.
+ *
+ * M4 B12.5 (D-084 option C) moved `authz_document_membership` into the document database so that
+ * creating a document and its owner membership can commit in one transaction. `authz.db` is a
+ * legacy audit file the runtime no longer opens; the fixture follows the runtime.
+ */
+export const AUTHZ_DATABASE_FILE_NAME = 'insighthub.db';
 
 /** The membership table (`apps/server/src/authz/membership-store.ts`). */
 export const MEMBERSHIP_TABLE = 'authz_document_membership';
@@ -478,8 +484,8 @@ export class AuthzFixture {
   async #openVerified(file) {
     if (!existsSync(file)) {
       throw new Error(
-        `the authorization database ${file} does not exist. The server creates ` +
-          'authz.db (and its membership table) at startup, so this is either a server that ' +
+        `the database ${file} does not exist. The server creates insighthub.db (and its ` +
+          'authz_document_membership table) at startup, so this is either a server that ' +
           'failed to start or a fixture running before the stack is up. The fixture must not ' +
           'create the file, because that would hide a broken authorization store.',
       );
