@@ -41,6 +41,25 @@
  * `ai-directory-error` block (with a typed `data-directory-error` and readable copy), and the
  * exact `ai-directory-empty` sentence ("No readable documents"). The list itself is never a
  * substitute for an error: a failed request never renders as "no documents" (R9).
+ *
+ * ## New document (M4 B12.5, `docs/DECISIONS.md` D-084 acceptance #7)
+ *
+ * The directory is also the product's only creation entry point: one `New document` button
+ * (`data-testid="new-document"`) beside Refresh. Clicking it runs the frozen flow in
+ * `newDocumentFlow.ts`:
+ *
+ * ```text
+ * click → POST /api/documents (empty body → server's "Untitled document")
+ *   → 201: refresh this list, then switch through the existing `documentSelected` action
+ *   → failure: stay on the current document, add nothing to the list, show
+ *              `data-testid="new-document-error"`, re-enable the button
+ * ```
+ *
+ * The button is `disabled` while the request is in flight, and the flow's own in-flight guard is
+ * the second line of defence against a double click that lands before React re-renders (§D-084
+ * #6). Creation does not depend on the list state: a user with **zero** readable documents —
+ * exactly the state B12.5 exists for — can still create one, including while the list is in its
+ * `error` state. A failure never fabricates a row: the list stays whatever the server last said.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -52,6 +71,14 @@ import {
   describeDirectoryFailure,
   type DirectoryFailureCopy,
 } from './aiDirectoryCopy.js';
+import { createDocument } from './documentCreation.js';
+import {
+  NEW_DOCUMENT_LABEL,
+  NEW_DOCUMENT_PENDING_LABEL,
+  describeCreateFailure,
+  type NewDocumentFailureCopy,
+} from './newDocumentCopy.js';
+import { createNewDocumentFlow, type NewDocumentFlow } from './newDocumentFlow.js';
 
 /** The directory's state machine. `ready` with zero rows renders as `empty`. */
 export type DirectoryState =
@@ -71,9 +98,13 @@ export interface AiDirectoryProps {
   onSelectDocument: (documentId: string) => void;
 }
 
-/** The stateful half: fetch, abort, retry. The view below is pure so it can be tested as markup. */
+/** The stateful half: fetch, abort, retry, create. The view below is pure so it can be tested as markup. */
 export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryProps) {
   const [state, setState] = useState<DirectoryState>({ kind: 'loading' });
+  /** `true` between the click and the settled request; drives the button's `disabled`. */
+  const [creating, setCreating] = useState(false);
+  /** The last creation failure, or `null`. Cleared when a new attempt starts. */
+  const [createFailure, setCreateFailure] = useState<NewDocumentFailureCopy | null>(null);
   /** The in-flight request, so Refresh, a switch and unmount can all cancel it (R9). */
   const abortRef = useRef<AbortController | null>(null);
   /**
@@ -110,6 +141,34 @@ export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryP
     );
   }, []);
 
+  // The create flow is created once per mount, so its in-flight guard cannot be reset by a
+  // parent re-render; the callbacks it calls are read through a ref so it always runs the
+  // current `load` / `onSelectDocument` (both are stable today, but a ref makes that explicit).
+  const handlersRef = useRef({ load, onSelectDocument });
+  handlersRef.current = { load, onSelectDocument };
+  const flowRef = useRef<NewDocumentFlow | null>(null);
+  if (flowRef.current === null) {
+    flowRef.current = createNewDocumentFlow({
+      create: (signal) => createDocument({ signal }),
+      // Order matters: the server's list must contain the new document before the workspace
+      // switches to it (D-084 #7: success → refresh, then switch).
+      refreshDirectory: () => handlersRef.current.load(),
+      selectDocument: (documentId) => handlersRef.current.onSelectDocument(documentId),
+      onPendingChange: (pending) => {
+        setCreating(pending);
+        // A retry starts from a clean slate; the old error must not sit under the new attempt.
+        if (pending) setCreateFailure(null);
+      },
+      onFailure: (error) => setCreateFailure(describeCreateFailure(error)),
+    });
+  }
+
+  const create = useCallback((): void => {
+    // `run()` is idempotent while pending (its own guard), so a double click can never send a
+    // second POST even before the disabled attribute has rendered.
+    void flowRef.current?.run();
+  }, []);
+
   // Fetch on open (this component is mounted only while the panel is open), and abort on close /
   // document switch / workspace remount. The request id is bumped here too, so a resolution after
   // unmount is ignored even if the signal has already fired (R9).
@@ -119,6 +178,9 @@ export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryP
       requestRef.current += 1;
       abortRef.current?.abort();
       abortRef.current = null;
+      // A creation in flight belongs to this mount: cancel it rather than let it switch a
+      // workspace the user has already left. The flow reports an aborted run as `ignored`.
+      flowRef.current?.abort();
     };
   }, [load]);
 
@@ -136,8 +198,11 @@ export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryP
     <AiDirectoryView
       state={state}
       activeDocumentId={activeDocumentId}
+      creating={creating}
+      createFailure={createFailure}
       onRefresh={load}
       onSelect={select}
+      onCreate={create}
     />
   );
 }
@@ -145,8 +210,13 @@ export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryP
 export interface AiDirectoryViewProps {
   state: DirectoryState;
   activeDocumentId: string;
+  /** `true` while `POST /api/documents` is in flight; disables the New document button. */
+  creating: boolean;
+  /** The last creation failure, or `null`. Rendered as `new-document-error`. */
+  createFailure: NewDocumentFailureCopy | null;
   onRefresh: () => void;
   onSelect: (documentId: string) => void;
+  onCreate: () => void;
 }
 
 /**
@@ -158,8 +228,11 @@ export interface AiDirectoryViewProps {
 export function AiDirectoryView({
   state,
   activeDocumentId,
+  creating,
+  createFailure,
   onRefresh,
   onSelect,
+  onCreate,
 }: AiDirectoryViewProps) {
   const status =
     state.kind === 'loading'
@@ -186,17 +259,52 @@ export function AiDirectoryView({
             document.
           </p>
         </div>
-        <button
-          type="button"
-          className="ai-directory__refresh"
-          data-testid="ai-directory-refresh"
-          title="Reload the list of documents you may read"
-          disabled={state.kind === 'loading'}
-          onClick={onRefresh}
-        >
-          Refresh
-        </button>
+        <div className="ai-directory__actions">
+          {/*
+            The product's only creation entry point (D-084 #7). It is available in every list
+            state on purpose: a new identity with no readable documents is the state B12.5
+            exists for. `disabled` is the visible guard; the flow's in-flight guard is the one
+            that survives a double click in the same tick.
+          */}
+          <button
+            type="button"
+            className="ai-directory__new"
+            data-testid="new-document"
+            title="Create a new document you own"
+            disabled={creating}
+            onClick={onCreate}
+          >
+            {creating ? NEW_DOCUMENT_PENDING_LABEL : NEW_DOCUMENT_LABEL}
+          </button>
+          <button
+            type="button"
+            className="ai-directory__refresh"
+            data-testid="ai-directory-refresh"
+            title="Reload the list of documents you may read"
+            disabled={state.kind === 'loading'}
+            onClick={onRefresh}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {/*
+        Creation failure, reported beside the control that caused it. No list row is added here:
+        the directory only ever renders what the server returned. The copy distinguishes
+        "nothing was created" from "may have been created" (`newDocumentCopy.ts`).
+      */}
+      {createFailure === null ? null : (
+        <div
+          className="ai-directory__error"
+          data-testid="new-document-error"
+          data-create-error={createFailure.kind}
+          role="alert"
+        >
+          <strong className="ai-directory__error-title">{createFailure.title}</strong>
+          <span className="ai-directory__error-detail">{createFailure.detail}</span>
+        </div>
+      )}
 
       {state.kind === 'loading' ? (
         <p className="ai-directory__loading" role="status">

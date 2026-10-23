@@ -1204,8 +1204,8 @@ body {
 
 .ai-directory__head {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .ai-directory__heading {
@@ -1226,9 +1226,52 @@ body {
   line-height: 1.45;
 }
 
+.ai-directory__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ai-directory__actions .ai-directory__refresh {
+  margin-left: 0;
+}
+
+/* The one creation action (B12.5): the same shape as Refresh, in the accent colour it shares
+   with the panel's other primary action. No new design tokens. */
+.ai-directory__new {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.ai-directory__new:hover:not(:disabled) {
+  border-color: #2f66cc;
+  background: #2f66cc;
+}
+
+.ai-directory__new:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ai-directory__new:focus-visible {
+  outline: 2px solid #1f4fa8;
+  outline-offset: 1px;
+}
+
 .ai-directory__refresh {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 3px 9px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -1307,6 +1350,7 @@ body {
 }
 
 .ai-directory__doc-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: 11.8px;
@@ -1319,11 +1363,22 @@ body {
   color: #1f4fa8;
 }
 
+/*
+ * The id is machine metadata, so it yields to the title: a server-generated UUID is ~36
+ * characters and, at `flex: 0 0 auto`, pushed the title to zero width and clipped the
+ * `current` badge for every self-created document (B12.5). It now shrinks and truncates;
+ * the button's `title` still carries the full id, and `data-document-id` is unaffected.
+ */
 .ai-directory__doc-id {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 34%;
+  overflow: hidden;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-directory__current {
@@ -1374,12 +1429,9 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ai-directory__head {
-    flex-wrap: wrap;
-  }
-
-  .ai-directory__refresh {
-    margin-left: 0;
+  /* One column: the actions row keeps the full width and stays right-aligned. */
+  .ai-directory__actions {
+    width: 100%;
   }
 }
 
