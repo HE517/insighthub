@@ -725,6 +725,7 @@ re-sent.
 | `DELETE` | `/api/session` | `204` + cleared cookie / `401` — §17.4 | M2 Phase 2 |
 | `GET` | `/api/documents` | `200 { documents: DocumentMeta[] }` / `401` — §17.4 | M2 Phase 2 |
 | `GET` | `/api/documents/:id` | `200 DocumentMeta` / `401` / `403` / `404` — §17.4 | M2 Phase 2 |
+| `POST` | `/api/documents` | `201 { documentId, title }` / `400 invalid_request` / `401 session_required` / `403` / `500` — §17.4, D-084 | M4 B12.5 |
 | `POST` | `/api/ai/suggest` | `200 AiSuggestionDraft` / `401` / `403` / `404` / `503` / `502` / `504` — §11.2 | M3 Round 2 |
 | `GET` | `/ready` | `200 { "status": "ready" }` / `503 { "status": "starting" }` — readiness, distinct from `/health` liveness | M4 B7 |
 
