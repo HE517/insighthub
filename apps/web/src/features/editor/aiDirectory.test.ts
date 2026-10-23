@@ -19,12 +19,19 @@ import { describe, expect, it } from 'vitest';
 import type { DocumentMeta } from '@insighthub/shared';
 
 import { DocumentListError } from '../ai/tools.js';
+import { DocumentCreateError } from './documentCreation.js';
 import { AiDirectoryView, type DirectoryState } from './AiDirectory.js';
 import {
   AI_DIRECTORY_EMPTY_COPY,
   describeDirectoryFailure,
   type DirectoryFailureCopy,
 } from './aiDirectoryCopy.js';
+import {
+  NEW_DOCUMENT_LABEL,
+  NEW_DOCUMENT_PENDING_LABEL,
+  describeCreateFailure,
+  type NewDocumentFailureCopy,
+} from './newDocumentCopy.js';
 
 const DOCUMENTS: readonly DocumentMeta[] = [
   {
@@ -53,13 +60,20 @@ const DOCUMENTS: readonly DocumentMeta[] = [
   },
 ];
 
-function markupFor(state: DirectoryState, activeDocumentId = 'bravo'): string {
+function markupFor(
+  state: DirectoryState,
+  activeDocumentId = 'bravo',
+  options: { creating?: boolean; createFailure?: NewDocumentFailureCopy | null } = {},
+): string {
   return renderToStaticMarkup(
     createElement(AiDirectoryView, {
       state,
       activeDocumentId,
+      creating: options.creating ?? false,
+      createFailure: options.createFailure ?? null,
       onRefresh: () => undefined,
       onSelect: () => undefined,
+      onCreate: () => undefined,
     }),
   );
 }
@@ -180,5 +194,137 @@ describe('directory failure copy: typed, distinct and never silent', () => {
     const failure = describeDirectoryFailure('not an error');
     expect(failure?.kind).toBe('unexpected');
     expect(failure?.detail).toContain('failed without a typed reason');
+  });
+});
+
+describe('new document control: markup (D-084 acceptance #7)', () => {
+  it('renders one enabled New document button beside Refresh in every list state', () => {
+    for (const state of [
+      { kind: 'loading' },
+      { kind: 'ready', documents: DOCUMENTS },
+      { kind: 'ready', documents: [] },
+      {
+        kind: 'error',
+        failure: describeDirectoryFailure(
+          new DocumentListError('http', 'HTTP 500', 500),
+        ) as DirectoryFailureCopy,
+      },
+    ] satisfies readonly DirectoryState[]) {
+      const html = markupFor(state);
+      expect(count(html, 'data-testid="new-document"')).toBe(1);
+      expect(html).toContain(NEW_DOCUMENT_LABEL);
+      // Creation is not a function of the list: a user with zero readable documents (the state
+      // B12.5 exists for) must still see the control.
+      expect(html).not.toMatch(/data-testid="new-document"[^>]*disabled/);
+      // The pre-existing directory contract is untouched.
+      expect(html).toContain('data-testid="ai-directory-refresh"');
+    }
+  });
+
+  it('disables exactly the New document button while a creation is pending', () => {
+    const html = markupFor({ kind: 'ready', documents: DOCUMENTS }, 'bravo', {
+      creating: true,
+    });
+
+    // The pending label is visible, so "it is doing something" is not only conveyed by colour.
+    expect(html).toContain(NEW_DOCUMENT_PENDING_LABEL);
+    expect(html).toMatch(/<button[^>]*data-testid="new-document"[^>]*disabled/);
+    // The list stays readable and its own control is unaffected by the creation.
+    expect(count(html, 'data-testid="ai-directory-item"')).toBe(DOCUMENTS.length);
+    expect(html).not.toMatch(/<button[^>]*data-testid="ai-directory-refresh"[^>]*disabled/);
+  });
+
+  it('renders a created-failure alert with a typed discriminator and no fabricated list row', () => {
+    const failure = describeCreateFailure(
+      new DocumentCreateError('http', 'POST /api/documents failed with HTTP 500.', 500),
+    );
+    const html = markupFor({ kind: 'ready', documents: DOCUMENTS }, 'bravo', {
+      createFailure: failure,
+    });
+
+    expect(html).toContain('data-testid="new-document-error"');
+    expect(html).toContain('data-create-error="http"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('The document was not created.');
+    expect(html).toContain('500');
+    // A failed creation must not appear as a document: the server list is the only source.
+    expect(count(html, 'data-testid="ai-directory-item"')).toBe(DOCUMENTS.length);
+    expect(html).not.toContain('Untitled document');
+    // The button is usable again, so the failure is retryable from the same control.
+    expect(html).not.toMatch(/data-testid="new-document"[^>]*disabled/);
+  });
+
+  it('keeps the creation error visible while the list is loading or in its own error state', () => {
+    const failure = describeCreateFailure(
+      new DocumentCreateError('unauthorized', 'no session', 401),
+    );
+    const onLoading = markupFor({ kind: 'loading' }, 'bravo', { createFailure: failure });
+    const onDirectoryError = markupFor(
+      {
+        kind: 'error',
+        failure: describeDirectoryFailure(
+          new DocumentListError('network', 'offline'),
+        ) as DirectoryFailureCopy,
+      },
+      'bravo',
+      { createFailure: failure },
+    );
+
+    // Both errors are distinguishable: the directory keeps its own testid, so a scenario can
+    // never mistake "the list failed" for "creation failed".
+    expect(onLoading).not.toContain('data-testid="ai-directory-error"');
+    expect(onDirectoryError).toContain('data-testid="ai-directory-error"');
+    for (const html of [onLoading, onDirectoryError]) {
+      expect(html).toContain('data-testid="new-document-error"');
+      expect(html).toContain('data-create-error="unauthorized"');
+    }
+  });
+});
+
+describe('creation failure copy: honest about what is known (D-084 #7)', () => {
+  it('maps 401 and 500 to distinct, retryable copy that never promises a saved document', () => {
+    const unauthorized = describeCreateFailure(
+      new DocumentCreateError('unauthorized', 'no session', 401),
+    );
+    const serverError = describeCreateFailure(new DocumentCreateError('http', 'HTTP 500', 500));
+
+    expect(unauthorized?.kind).toBe('unauthorized');
+    expect(serverError?.kind).toBe('http');
+    expect(unauthorized?.title).not.toBe(serverError?.title);
+    expect(serverError?.detail).toContain('500');
+    expect(unauthorized?.detail.toLowerCase()).toContain('nothing was created');
+    expect(serverError?.detail.toLowerCase()).toContain('nothing was created');
+    // Neither may read as a success: the only confirmation of a created document is the switch
+    // to the id the server returned.
+    for (const failure of [unauthorized, serverError] as const) {
+      expect(failure?.detail).not.toMatch(/saved|saving|successfully/i);
+      expect(failure?.detail).toMatch(/try again|reload/i);
+    }
+  });
+
+  it('does not claim "nothing was created" when the server may have committed', () => {
+    const timeout = describeCreateFailure(new DocumentCreateError('timeout', 'timed out'));
+    const malformed = describeCreateFailure(new DocumentCreateError('malformed', 'bad body'));
+    // A transport failure can happen after the server committed but before the answer arrived;
+    // the client cannot prove the absence of a document, so it must not say there is none.
+    const network = describeCreateFailure(new DocumentCreateError('network', 'fetch failed'));
+
+    for (const failure of [timeout, malformed, network] as const) {
+      expect(failure).not.toBeNull();
+      expect(failure?.detail).not.toContain('Nothing was created.');
+      // The honest next step is to look at the server's list, not to create a second document.
+      expect(failure?.detail).toContain('Refresh');
+    }
+  });
+
+  it('returns null only for an aborted request', () => {
+    expect(describeCreateFailure(new DocumentCreateError('aborted', 'cancelled'))).toBeNull();
+  });
+
+  it('keeps an untyped error message, without inventing an outcome', () => {
+    const failure = describeCreateFailure(new Error('boom while creating'));
+    expect(failure?.kind).toBe('unexpected');
+    expect(failure?.detail).toContain('boom while creating');
+    expect(failure?.detail).not.toContain('Nothing was created.');
   });
 });
