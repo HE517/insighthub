@@ -3571,3 +3571,50 @@ staging service 名 `insighthub-staging`，production service 名 `insighthub`�
 **后果。** M4 不再被"一次性全阻塞"：认证、配置、Origin、AI 策略可以在 free staging 上真实验证，
 而持久性相关的四项（B11 disk/restart、B8 deployed、B13 的 durability 子项、B14）在 paid 部署前
 保持 OPEN，口径不再混淆。
+---
+
+## D-084 · 2026-10-23 · accepted · B12.5 文档自助创建（M4 新 P0 launch blocker）
+
+**背景。** B11a 之后发现：真实 Clerk 用户登录后**没有任何文档**，且没有创建入口。产品因此无法开始
+使用。Owner 决策：采用方案 **B**（authenticated `POST /api/documents` + UI 入口），**不**用 staging
+fixture（C），也**不**把自动建文档（A）作为正式方案。
+
+### 1. 编号与位置
+
+**B12.5 — Document creation（self-service）**，插入 B12 与 B13 之间，是 **P0 launch blocker**，
+不推迟到 M5。
+
+### 2. 冻结 Acceptance
+
+1. `POST /api/documents` 需要已验证的 Clerk 会话；未认证 → `401 session_required`；Origin 校验与
+   现有 HTTP 面一致（非法 Origin → `403 origin_not_allowed`）。
+2. **document id 由服务端生成**（UUID）。请求体**严格**：只允许可选 `title`（trim 后 1..120，缺省
+   `Untitled document`）；`ownerUserId`、`role`、`documentId` 等未知字段一律 `400`。
+3. **owner 由会话决定**：internal user id 来自 `resolveAuthenticatedUser`，客户端无从指定。
+4. **创建必须原子**：document 行 + document_meta 行 + owner membership 三者要么全有、要么全无。
+5. 创建成功后 creator role = **owner**，通过既有 `Membership → DocumentRole → documentCapabilities`
+   生效；`GET /api/documents` 立即包含该文档。
+6. **并发/重复提交语义明确**：两个并发 POST 创建**两个不同文档**（不做去重），各有自己的 owner
+   membership；UI 在 pending 时禁用按钮，不存在双击路径。测试必须证明该语义。
+7. **UI**：现有 directory 中加最小 `New document` 入口；成功 → 切换到新文档；失败 → **不切换
+   workspace**、不产生半创建条目、显示错误。
+8. 他人访问该新文档仍是 `404`（非披露不变）。
+9. **不扩展**：folders / templates / search / trash / versioning / workspace / organization /
+   ownership transfer 均不在本项范围。
+10. **B13** 必须用真实 Clerk test user 走**自助创建**，不得靠 fixture seed 伪造产品可用性。
+
+### 3. 未决的存储机制（需 Owner 一行裁决）
+
+当前文档在 `insighthub.db`，membership 在 `authz.db`（独立文件，历史决策：避免 schema 耦合与写竞争）。
+**跨两个 WAL 数据库没有真正的单事务原子提交**（SQLite 仅在 rollback-journal 下支持 ATTACH 事务，
+而热路径必须保持 WAL）。因此 Acceptance #4 需要二选一：
+
+| 方案 | 机制 | 代价 | 风险 |
+| --- | --- | --- | --- |
+| **C（推荐）** | 把 membership 表并入 `insighthub.db`（命名空间 `authz_*`），创建在**一个事务**内完成 | 推翻"独立 authz.db"的旧决策；需要迁移（B6 的 `user_version`）；A5/A1/A3 协同 | 改动面中等，但换来真正的原子性 |
+| **B** | 两阶段：先建 document+meta，再写 membership；membership 失败则删除 document（补偿） | 改动小 | 崩溃窗口会留下"无 membership 的孤儿 document"（对用户不可见、不泄漏，但**不是**严格原子） |
+
+**Owner 选 C 或 B 之前，B12.5 不进入实现。** 选 C 需要显式批准"推翻独立 `authz.db` 的架构决策"。
+
+**后果。** 产品首次具备"新用户 → 创建 → 协作 → AI"的完整入口；这条链是 B13/B14 的前提，而不是
+可选的便利功能。
