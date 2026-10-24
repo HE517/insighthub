@@ -55,5 +55,16 @@ services:
       # No disk: a backup would be as ephemeral as the database it copies. Off, and not claimed.
       - key: BACKUP_ENABLED
         value: 'false'
-      # AI stays disabled here (no AI_PROVIDER, no OpenAI credential): B12 enables it in the
-      # Dashboard with AI_PROVIDER=openai, OPENAI_API_KEY and OPENAI_MODEL=gpt-5.6-luna.
+      # AI on staging (M4 B12/B13). The client only calls `/api/ai/suggest` when the build carries
+      # `VITE_AI_PROVIDER=remote`; without it the deterministic local provider answers in the
+      # browser and the real OpenAI path is never exercised. The key itself is `sync: false` and
+      # lives only in the Dashboard; a missing key makes the production gate refuse to start
+      # (`OPENAI_API_KEY_MISSING`), which is the intended fail-closed behaviour.
+      - key: VITE_AI_PROVIDER
+        value: remote
+      - key: AI_PROVIDER
+        value: openai
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_API_KEY
+        sync: false
