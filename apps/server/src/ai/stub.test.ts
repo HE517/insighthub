@@ -177,10 +177,13 @@ describe('configuration selection', () => {
     assert.equal(createServerAiProviderFromEnv({ OPENAI_API_KEY: 'sk-test-not-a-real-key' }), null);
 
     // No OPENAI_API_KEY is required to build the stub.
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
-    assert.ok(provider !== null);
+    const configured = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    assert.ok(configured !== null);
+    // The selection reports what was built, so the startup log cannot disagree with the adapter.
+    assert.equal(configured.kind, 'stub');
+    assert.equal(configured.model, 'stub');
     assert.deepEqual(
-      await provider.suggest(WHOLE_INPUT, new AbortController().signal),
+      await configured.provider.suggest(WHOLE_INPUT, new AbortController().signal),
       EXPECTED_WHOLE,
     );
   });
@@ -188,9 +191,9 @@ describe('configuration selection', () => {
 
 describe('POST /api/ai/suggest with AI_PROVIDER=stub', () => {
   it('returns 200 with the exact uppercase draft, and repeats byte-identically', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
-    assert.ok(provider !== null);
-    const harness = await newHarness(provider);
+    const configured = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    assert.ok(configured !== null);
+    const harness = await newHarness(configured.provider);
     const cookie = await bootstrapSession(harness, 'demo-ada');
 
     const first = await postSuggest(harness, cookie, WHOLE_REQUEST);
@@ -207,9 +210,9 @@ describe('POST /api/ai/suggest with AI_PROVIDER=stub', () => {
   });
 
   it('applies the selection through the real route', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
-    assert.ok(provider !== null);
-    const harness = await newHarness(provider);
+    const configured = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    assert.ok(configured !== null);
+    const harness = await newHarness(configured.provider);
     const cookie = await bootstrapSession(harness, 'demo-ada');
 
     const response = await postSuggest(harness, cookie, {
@@ -222,9 +225,9 @@ describe('POST /api/ai/suggest with AI_PROVIDER=stub', () => {
   });
 
   it('answers 502 invalid_provider_output for an out-of-bounds selection, with no draft', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
-    assert.ok(provider !== null);
-    const harness = await newHarness(provider);
+    const configured = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    assert.ok(configured !== null);
+    const harness = await newHarness(configured.provider);
     const cookie = await bootstrapSession(harness, 'demo-ada');
 
     for (const selection of [
@@ -255,9 +258,9 @@ describe('POST /api/ai/suggest with AI_PROVIDER=stub', () => {
   });
 
   it('returns only the draft shape: no credential, key, prompt or instruction', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
-    assert.ok(provider !== null);
-    const harness = await newHarness(provider);
+    const configured = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    assert.ok(configured !== null);
+    const harness = await newHarness(configured.provider);
     const cookie = await bootstrapSession(harness, 'demo-ada');
 
     const response = await postSuggest(harness, cookie, WHOLE_REQUEST);

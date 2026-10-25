@@ -220,7 +220,7 @@ describe('startup summary', () => {
     logStartupSummary(logger, startupConfig(), env);
 
     const records = parsed(lines);
-    assert.equal(records.length, 3, 'one config event and two secret-presence events');
+    assert.equal(records.length, 4, 'one config event and three secret-presence events');
 
     const config = byEvent(records, 'server.config');
     assert.equal(config.length, 1);
@@ -264,6 +264,13 @@ describe('startup summary', () => {
         name: 'OPENAI_API_KEY',
         present: true,
       },
+      {
+        ts: secrets[2]?.['ts'],
+        level: 'info',
+        event: 'server.secret',
+        name: 'KIMI_API_KEY',
+        present: false,
+      },
     ]);
 
     const output = lines.map((captured) => captured.line).join('\n');
@@ -287,14 +294,23 @@ describe('startup summary', () => {
       [
         ['CLERK_SECRET_KEY', false],
         ['OPENAI_API_KEY', false],
+        ['KIMI_API_KEY', false],
       ],
     );
     assert.equal(parsed(lines)[0]?.['aiProvider'], 'disabled');
     assert.equal(parsed(lines)[0]?.['backupEnabled'], false);
   });
 
-  it('reads the configured model through the adapter default', () => {
+  it('reads the configured model through the selected adapter default', () => {
     assert.equal(readConfiguredAiModel({}), 'gpt-5.6-luna');
     assert.equal(readConfiguredAiModel({ OPENAI_MODEL: '  gpt-custom  ' }), 'gpt-custom');
+    // `AI_MODEL` is the unified selector and wins over the deprecated alias (D-085 §1).
+    assert.equal(
+      readConfiguredAiModel({ AI_MODEL: 'unified-model', OPENAI_MODEL: 'gpt-custom' }),
+      'unified-model',
+    );
+    // Kimi defaults to the K3 tier, not to the OpenAI model.
+    assert.equal(readConfiguredAiModel({ AI_PROVIDER: 'kimi' }), 'kimi-k3');
+    assert.equal(readConfiguredAiModel({ AI_PROVIDER: 'kimi', AI_MODEL: 'kimi-x' }), 'kimi-x');
   });
 });

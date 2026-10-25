@@ -29,7 +29,7 @@
  * operator debugs); the value is not needed for that, so it is not available to the logger at
  * all. `CLERK_PUBLISHABLE_KEY` is a public browser value and does not need this treatment.
  */
-import { DEFAULT_OPENAI_MODEL, readServerAiProviderKind } from '../ai/openai.js';
+import { readAiModel, readServerAiProviderKind } from '../ai/provider.js';
 import type { ServerConfig } from '../config.js';
 import type { Logger } from './logger.js';
 
@@ -39,13 +39,14 @@ export function isEnvironmentValuePresent(value: string | undefined): value is s
 }
 
 /**
- * The configured OpenAI model, for the startup summary and the `ai.suggest` event.
+ * The configured model, for the startup summary and the `ai.suggest` event.
  *
- * Read through the same default as the adapter so the log cannot claim a model the provider is
- * not using (D-082 D3). It is configuration, not a credential.
+ * Read through the same resolver the selected adapter uses (`AI_MODEL` first, then the
+ * provider-specific fallback), so the log cannot claim a model the provider is not using
+ * (D-082 D3, D-085 §1). It is configuration, not a credential.
  */
 export function readConfiguredAiModel(env: NodeJS.ProcessEnv = process.env): string {
-  return (env['OPENAI_MODEL'] ?? '').trim() || DEFAULT_OPENAI_MODEL;
+  return readAiModel(env);
 }
 
 /**
@@ -71,8 +72,10 @@ export function logStartupSummary(
     backupEnabled: config.backupEnabled === true,
   });
 
-  // Server-only credentials: **presence only**. Never `env[name]`.
-  for (const name of ['CLERK_SECRET_KEY', 'OPENAI_API_KEY'] as const) {
+  // Server-only credentials: **presence only**. Never `env[name]`. Both model-provider keys are
+  // reported in every environment: an operator needs "is the credential this deployment would
+  // use present?" and the pair costs one line each (D-085 §1).
+  for (const name of ['CLERK_SECRET_KEY', 'OPENAI_API_KEY', 'KIMI_API_KEY'] as const) {
     logger.info('server.secret', { name, present: isEnvironmentValuePresent(env[name]) });
   }
 }
