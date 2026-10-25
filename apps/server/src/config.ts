@@ -138,6 +138,12 @@ export interface ServerConfig {
   backupDir?: string;
   /** Retention in days; defaults to the frozen 7. */
   backupRetentionDays?: number;
+  /**
+   * The deployed commit, when the platform provides one (RENDER_GIT_COMMIT). Read-only
+   * diagnostics for /api/meta: an operator can prove which build is serving before trusting
+   * its logs. Absent locally, where there is no deployment.
+   */
+  commit?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -166,6 +172,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ...(readPositiveOrUndefined(env.BACKUP_RETENTION_DAYS) === undefined
       ? {}
       : { backupRetentionDays: readPositiveOrUndefined(env.BACKUP_RETENTION_DAYS) }),
+    ...(env.RENDER_GIT_COMMIT === undefined || env.RENDER_GIT_COMMIT.trim() === ''
+      ? {}
+      : { commit: env.RENDER_GIT_COMMIT.trim() }),
     authMode: readAuthMode(env.AUTH_MODE),
     ...(env.NODE_ENV === undefined ? {} : { nodeEnv: env.NODE_ENV }),
     // An empty value is treated as unset: `INSIGHTHUB_DATA_PATH=` in a shell should not

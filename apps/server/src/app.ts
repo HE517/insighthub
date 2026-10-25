@@ -358,6 +358,9 @@ export function createApp(
       name: 'insighthub-server',
       wsPath: config.wsPath,
       protocolVersion: PROTOCOL_VERSION,
+      // Which build is serving: the diagnostics below are only trustworthy if this matches the
+      // commit that introduced them. Render sets RENDER_GIT_COMMIT; absent elsewhere.
+      ...(config.commit === undefined ? {} : { commit: config.commit }),
     });
   });
 
