@@ -37,6 +37,22 @@ export function readPositiveIntegerEnv(value: string | undefined, fallback: numb
 }
 
 /**
+ * The output-token ceiling, provider-independent.
+ *
+ * `AI_MAX_OUTPUT_TOKENS` is the unified name (D-085); `OPENAI_MAX_OUTPUT_TOKENS` remains a
+ * deprecated alias so an existing deployment keeps its configured value across the rename.
+ */
+export function readMaxOutputTokens(
+  env: Record<string, string | undefined>,
+  fallback: number,
+): number {
+  return readPositiveIntegerEnv(
+    env['AI_MAX_OUTPUT_TOKENS'] ?? env['OPENAI_MAX_OUTPUT_TOKENS'],
+    fallback,
+  );
+}
+
+/**
  * The development endpoint override, without a trailing slash, or `undefined`.
  *
  * `undefined` for a blank value (an empty shell variable means "unset") and for anything that is

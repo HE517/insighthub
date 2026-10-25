@@ -40,11 +40,16 @@ const CONTENT = 'This is a draft sentence.';
  */
 function readLocalEnv(): Record<string, string> {
   const file = resolve(process.cwd(), '.env.local');
+  const fallback = resolve(process.cwd(), '../../tests/deployed/.env.local');
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
   } catch {
-    return {};
+    try {
+      text = readFileSync(fallback, 'utf8');
+    } catch {
+      return {};
+    }
   }
   const allowed = new Set([
     'AI_PROVIDER',

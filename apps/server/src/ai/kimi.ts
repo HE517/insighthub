@@ -42,7 +42,12 @@
  * | `AI_BASE_URL` | development-only endpoint override; production refuses it |
  */
 import { ServerAiProviderError } from './errors.js';
-import { readAiBaseUrl, readAiProviderSelector, readPositiveIntegerEnv } from './env.js';
+import {
+  readAiBaseUrl,
+  readAiProviderSelector,
+  readMaxOutputTokens,
+  readPositiveIntegerEnv,
+} from './env.js';
 import {
   DEFAULT_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_AI_TIMEOUT_MS,
@@ -124,10 +129,7 @@ export function readKimiProviderConfig(env: NodeJS.ProcessEnv): KimiProviderConf
   return {
     apiKey,
     model: readKimiModel(env),
-    maxOutputTokens: readPositiveIntegerEnv(
-      env['OPENAI_MAX_OUTPUT_TOKENS'],
-      DEFAULT_KIMI_MAX_OUTPUT_TOKENS,
-    ),
+    maxOutputTokens: readMaxOutputTokens(env, DEFAULT_KIMI_MAX_OUTPUT_TOKENS),
     timeoutMs: readPositiveIntegerEnv(env['AI_PROVIDER_TIMEOUT_MS'], DEFAULT_KIMI_TIMEOUT_MS),
     ...(endpoint === undefined ? {} : { endpoint }),
   };

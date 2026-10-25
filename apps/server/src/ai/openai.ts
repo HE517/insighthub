@@ -52,7 +52,12 @@ import {
   createOpenAICompatibleProvider,
 } from './openai-compatible.js';
 import { ServerAiProviderError } from './errors.js';
-import { readAiBaseUrl, readAiProviderSelector, readPositiveIntegerEnv } from './env.js';
+import {
+  readAiBaseUrl,
+  readAiProviderSelector,
+  readMaxOutputTokens,
+  readPositiveIntegerEnv,
+} from './env.js';
 import type { ServerAiProvider } from './provider.js';
 
 /**
@@ -141,10 +146,7 @@ export function readOpenAiProviderConfig(env: NodeJS.ProcessEnv): OpenAiProvider
   return {
     apiKey,
     model: readOpenAiModel(env),
-    maxOutputTokens: readPositiveIntegerEnv(
-      env['OPENAI_MAX_OUTPUT_TOKENS'],
-      DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
-    ),
+    maxOutputTokens: readMaxOutputTokens(env, DEFAULT_OPENAI_MAX_OUTPUT_TOKENS),
     timeoutMs: readPositiveIntegerEnv(env['AI_PROVIDER_TIMEOUT_MS'], DEFAULT_OPENAI_TIMEOUT_MS),
     ...(endpoint === undefined ? {} : { endpoint }),
   };

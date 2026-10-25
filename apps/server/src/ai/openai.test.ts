@@ -192,6 +192,22 @@ describe('request shape', () => {
     assert.equal(payload.max_tokens, 4096);
   });
 
+  it('prefers AI_MAX_OUTPUT_TOKENS over the deprecated OPENAI_MAX_OUTPUT_TOKENS alias', () => {
+    const base = { AI_PROVIDER: 'openai', OPENAI_API_KEY: API_KEY };
+
+    assert.equal(
+      readOpenAiProviderConfig({
+        ...base,
+        AI_MAX_OUTPUT_TOKENS: '2048',
+        OPENAI_MAX_OUTPUT_TOKENS: '512',
+      })?.maxOutputTokens,
+      2048,
+    );
+    assert.equal(
+      readOpenAiProviderConfig({ ...base, OPENAI_MAX_OUTPUT_TOKENS: '512' })?.maxOutputTokens,
+      512,
+    );
+  });
   it('honours an explicit maxOutputTokens instead of the default', async () => {
     const fake = fakeFetch(() => completion(JSON.stringify(VALID_OUTPUT)));
     const provider = createOpenAiProvider({
