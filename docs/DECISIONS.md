@@ -3639,3 +3639,49 @@ fixture（C），也**不**把自动建文档（A）作为正式方案。
 
 **后果。** 产品首次具备"新用户 → 创建 → 协作 → AI"的完整入口；这条链是 B13/B14 的前提，而不是
 可选的便利功能。
+---
+
+## D-085 · 2026-10-25 · accepted · AI provider 可配置化（解除 OpenAI vendor lock-in）
+
+**背景。** staging 的 OpenAI 调用返回 `429 credit_balance_exhausted`。Owner 决定**不充值、不换
+OpenAI 模型**，而是把 production AI provider 改为可配置：`stub | openai | kimi | disabled`。
+M3 safety pipeline 完全不变；任何 provider 都不得直接 mutation `Y.Text`。
+
+### 1. 冻结配置
+
+| 变量 | 值 |
+| --- | --- |
+| `AI_PROVIDER` | `stub`（dev/test only） / `openai` / `kimi` / `disabled` |
+| `AI_MODEL` | provider-specific model id（统一入口） |
+| `OPENAI_MODEL` | **弃用别名**，仅迁移期回退（`AI_MODEL` 优先） |
+| `OPENAI_API_KEY` / `KIMI_API_KEY` | 按选定 provider 取其一 |
+| endpoint | **代码内 allowlist**：`https://api.openai.com/v1`、`https://api.moonshot.ai/v1` |
+| `AI_BASE_URL` | **生产禁止**（`AI_BASE_URL_FORBIDDEN`）；非生产才允许 dev override |
+
+生产启动 gate（B3）扩展：未知 provider → `AI_PROVIDER_INVALID`；选定 provider 缺 key →
+`OPENAI_API_KEY_MISSING` / `KIMI_API_KEY_MISSING`；`stub` → `AI_PROVIDER_STUB_FORBIDDEN`；
+`AI_BASE_URL` 在 production → `AI_BASE_URL_FORBIDDEN`。
+
+### 2. 实现边界
+
+- 抽取 `OpenAICompatibleProvider` 作为**传输层**；但每个 provider 的 request 参数、JSON/structured
+  output、timeout、error body/code 映射、output extraction、max-output 语义**分别配置并分别测试**，
+  不因 wire protocol 相似而假设语义一致。
+- 所有 provider 的输出仍必须通过 InsightHub 自己的 `aiSuggestionDraftSchema`（及客户端锚定校验）。
+
+### 3. Kimi 模型
+
+K2 系列官方已宣布 2026-12 底下线；新 production 默认进入 K3 系列。默认 **`kimi-k3`**（K3 系列
+支持 `response_format`/JSON mode，成本档低于 `kimi-k3.1-pro`）。`kimi-k3.1-pro` 仅在真实 proposal
+质量不足时由 Owner 决策启用。**不选 highspeed**（无真实 latency 要求）。
+
+### 4. Gate 语义更新
+
+- **B12** 由 `OpenAI live smoke` 改为 **`External LLM live smoke`**：任一 production-supported
+  external provider 在 staging 真实联网并返回合法 `AiSuggestionDraft` 即 PASS；不再要求 OpenAI 成功。
+- **B13** 使用当前 `AI_PROVIDER` 完成真实链路（Clerk → New document → 编辑 → 真实 AI → Diff →
+  Accept/Reject → 登出）。
+- **OpenAI finding 保留**：`429 credit_balance_exhausted` 证明可达性与请求到达，**不是**实现失败。
+
+**后果。** AI 能力不再绑定单一 vendor；OpenAI 与 Kimi 走同一 draft 契约，切换 provider 不需要改
+客户端、锚定、Diff、Accept 或 Yjs 事务。
