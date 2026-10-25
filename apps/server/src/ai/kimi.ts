@@ -56,12 +56,12 @@ import {
 import type { ServerAiProvider } from './provider.js';
 
 /**
- * The code allowlist for Moonshot's OpenAI-compatible endpoint (D-085 §1).
+ * The code allowlist for Moonshot's **China** OpenAI-compatible endpoint (D-085 §1).\n *\n * InsightHub supports the platform.kimi.com (CN) platform only: a CN key does not authenticate\n * against the international pi.moonshot.ai host (observed 401 invalid_authentication_error),\n * so the endpoint is fixed rather than region-configurable.
  *
  * Configuration names a **provider**, not a URL: the only exception is the development
  * `AI_BASE_URL` proxy, which production refuses before a port is bound.
  */
-export const KIMI_API_BASE_URL = 'https://api.moonshot.ai/v1';
+export const KIMI_API_BASE_URL = 'https://api.moonshot.cn/v1';
 
 /**
  * The production default model (D-085 §3).

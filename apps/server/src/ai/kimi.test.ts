@@ -102,7 +102,7 @@ describe('configuration', () => {
 
   it('defaults to the K3 tier and lets AI_MODEL override it', () => {
     assert.equal(DEFAULT_KIMI_MODEL, 'kimi-k3');
-    assert.equal(KIMI_API_BASE_URL, 'https://api.moonshot.ai/v1');
+    assert.equal(KIMI_API_BASE_URL, 'https://api.moonshot.cn/v1');
     assert.equal(DEFAULT_KIMI_TIMEOUT_MS, 30_000);
     assert.equal(DEFAULT_KIMI_MAX_OUTPUT_TOKENS, 4096);
 
@@ -165,7 +165,7 @@ describe('request shape', () => {
     const call = fake.calls[0] as FetchCall;
     const url = new URL(call.url);
     assert.equal(url.protocol, 'https:');
-    assert.equal(url.host, 'api.moonshot.ai');
+    assert.equal(url.host, 'api.moonshot.cn');
     assert.equal(url.pathname, '/v1/chat/completions');
     assert.equal(call.init.method, 'POST');
 
@@ -194,6 +194,33 @@ describe('request shape', () => {
     assert.equal(String(call.init.body).includes(KIMI_KEY), false);
   });
 
+  it('trims the key before it becomes a bearer header, and never leaks it in errors', async () => {
+    const fake = fakeFetch(() => completion(JSON.stringify(VALID_OUTPUT)));
+    const provider = createKimiProvider({ apiKey: `  ${KIMI_KEY}  `, fetchImpl: fake.fetchImpl });
+
+    await provider.suggest(INPUT, new AbortController().signal);
+    const call = fake.calls[0] as FetchCall;
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers['authorization'], `Bearer ${KIMI_KEY}`);
+
+    // A 401 must not echo the credential anywhere an operator could read it.
+    const failing = fakeFetch(
+      () => new Response(JSON.stringify({ error: { code: 'invalid_authentication_error' } }), { status: 401 }),
+    );
+    const failingProvider = createKimiProvider({
+      apiKey: `  ${KIMI_KEY}  `,
+      fetchImpl: failing.fetchImpl,
+    });
+    try {
+      await failingProvider.suggest(INPUT, new AbortController().signal);
+      assert.fail('a 401 must fail');
+    } catch (error) {
+      assert.ok(error instanceof ServerAiProviderError);
+      assert.equal(error.upstreamStatus, 401);
+      assert.equal(error.providerCode, 'invalid_authentication_error');
+      assert.equal(error.message.includes(KIMI_KEY), false);
+    }
+  });
   it('honours an explicit model and output bound', async () => {
     const fake = fakeFetch(() => completion(JSON.stringify(VALID_OUTPUT)));
     const provider = createKimiProvider({

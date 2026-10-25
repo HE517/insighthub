@@ -68,8 +68,8 @@ services:
       # whose key is absent would fail startup with *_API_KEY_MISSING, which is correct but
       # takes staging down for no reason.
       - key: AI_PROVIDER
-        value: openai
+        value: kimi
       - key: AI_MODEL
-        value: gpt-5.6-luna
-      - key: OPENAI_API_KEY
+        value: kimi-k3.1-pro
+      - key: KIMI_API_KEY
         sync: false

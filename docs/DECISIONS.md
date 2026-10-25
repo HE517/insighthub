@@ -3655,7 +3655,7 @@ M3 safety pipeline 完全不变；任何 provider 都不得直接 mutation `Y.Te
 | `AI_MODEL` | provider-specific model id（统一入口） |
 | `OPENAI_MODEL` | **弃用别名**，仅迁移期回退（`AI_MODEL` 优先） |
 | `OPENAI_API_KEY` / `KIMI_API_KEY` | 按选定 provider 取其一 |
-| endpoint | **代码内 allowlist**：`https://api.openai.com/v1`、`https://api.moonshot.ai/v1` |
+| endpoint | **代码内 allowlist**：`https://api.openai.com/v1`、`https://api.moonshot.cn/v1`（InsightHub 只支持 Kimi 中国站；CN key 在 `api.moonshot.ai` 上会 401 `invalid_authentication_error`，实测确认） |
 | `AI_BASE_URL` | **生产禁止**（`AI_BASE_URL_FORBIDDEN`）；非生产才允许 dev override |
 
 生产启动 gate（B3）扩展：未知 provider → `AI_PROVIDER_INVALID`；选定 provider 缺 key →
