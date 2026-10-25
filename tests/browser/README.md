@@ -19,10 +19,12 @@ It covers two milestones:
 | M3 AI proposal loop | `suite/31-m3-ai.mjs` | proposal → Diff Preview → Accept/Reject in the real panel: nothing changes before Accept, Accept is one Yjs transaction a peer sees, Undo reverts only the AI edit, Reject writes nothing, `revision` vs `text-mismatch` staleness, a viewer can review but not accept, an owner’s offline Accept reconnects **once**, and a viewer’s offline Accept stays a local-only divergence |
 | M4 B12.5 document creation | `suite/32b-m4-b125.mjs` | the shipped `New document` entry in a real browser: one click POSTs `/api/documents` (201), switches to the server-generated UUID, closes the panel, joins the new room as `owner` with an editable editor and marks exactly that row `aria-current`; an offline click shows the typed failure and changes nothing, and the same button succeeds after recovery; two clicks in one task still create **one** document |
 
-## Why there is no Playwright
+## Why this suite does not use Playwright
 
-The repository has no browser-automation dependency, and `AGENTS.md` R3/§2 forbid
-adding one without Supervisor approval. Everything this suite needs already exists:
+The suite controls the browser over CDP; adding Playwright to it would be an unapproved dependency
+for no capability. `playwright-core` **is** a root devDependency, but only for the opt-in deployed
+smoke (`tests/deployed/b13.mjs`, with `@clerk/testing` for the Clerk testing token), and the product
+never imports it. Everything this suite needs already exists:
 
 | Need | Provided by |
 | --- | --- |
@@ -323,6 +325,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `21-m2-f1-role-ui.mjs` | M2 Phase 2 closure, F1: the UI role gate in a real browser — read-only viewer + honest visible notice, no remount across a role change, unknown role never locks the editor, and a client that forges its own role is still refused by the server |
 | `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
 | `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
+| `32-design-fidelity.mjs` | M4 UI fidelity (`ui/1..8`): logo hover transform, switcher focus ring, avatar hover/tooltip/Tab focus, undo button states (including the disabled viewer state), connection pill pulse, editor focus-within, reduced-motion (0 s transitions, pulse off), and notice copy that never claims a false "saved" |
 | `32b-m4-b125.mjs` | M4 B12.5 `New document` (D-084 #2/#6/#7) in the **default** configuration: one click → real `POST /api/documents` (201) → switch to the server UUID → panel closed → `owner` room + editable editor → exactly one `aria-current` row; an offline click shows `new-document-error[data-create-error="network"]` with nothing changed and succeeds after recovery; two clicks in one task create one document. It sorts before `33` because that group changes the stack's configuration and must stay last |
 | `33-m3-remote.mjs` | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
 
@@ -414,7 +417,7 @@ the report (`docs/agent-governance/A6-evidence-gate-round2.md`) carries the meas
 | Scenario id | Inventory item | What the browser + server actually prove |
 | --- | --- | --- |
 | `collab/independent-contexts` | **A1** | two `Target.createBrowserContext` contexts with different session tokens and separate `localStorage` edit one document concurrently (front insert + tail insert, then a Backspace delete and a typed replace, each round started together); the two edit windows overlap; A's editor text = B's = the `WireOracle`'s; `sha256(Y.encodeStateVector)` is identical for all three (3 clients, 19-byte state vector). `realtime/two-tabs-converge` is same-profile and is **not** this claim |
-| `stale/directory-list` | **C2** | the client has **no** document-metadata request on open/switch, so that half is `NOT APPLICABLE`; on the real cancellable path (`AiDirectory` `GET /api/documents`), a real 200 held at the CDP response stage is aborted by the document switch 78 ms after it started (not the 5 s timeout), Chrome refuses to deliver it afterwards (`Invalid InterceptionId`), and the UI/session/directory stay on the document the user switched to |
+| `stale/directory-list` | **C2** | the client has **no** document-metadata request on open/switch, so that half is `NOT APPLICABLE`; on the real cancellable path (`AiDirectory` `GET /api/documents`), a real 200 held at the CDP response stage is aborted by the document switch ~69–78 ms after it started (two recorded runs) (not the 5 s timeout), Chrome refuses to deliver it afterwards (`Invalid InterceptionId`), and the UI/session/directory stay on the document the user switched to |
 
 ### Re-aimed by D-067 §4: the UI gate removed the write, not the assertion
 
@@ -576,7 +579,7 @@ request in the client that carries an `AbortController` and a monotonic request 
 panel open (list ready)
   → CDP holds the next GET /api/documents at the response stage   (real 200, body read, page fetch pending)
   → the user switches A → B through the header input              (the panel unmounts, so it aborts)
-  → the page's own request log turns that request into AbortError (78 ms after it started, not the 5 s timeout)
+  → the page's own request log turns that request into AbortError (~69–78 ms after it started, not the 5 s timeout)
   → the response is released anyway: Fetch.fulfillRequest → "Invalid InterceptionId"
   → active-document, editor text and the (absent) panel are still B's
   → reopening the panel shows the server's list, with B marked aria-current

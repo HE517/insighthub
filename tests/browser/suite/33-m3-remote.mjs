@@ -18,13 +18,13 @@
  * ## The mode switch is deliberate, and it is why the default run is untouched
  *
  * `INSIGHTHUB_E2E_AI_MODE=remote` is the only thing that registers this file. Without it the
- * suite is exactly the previous 71 scenarios. **With** it, the same run must also keep those 71
+ * suite is exactly the previous 73 scenarios. **With** it, the same run must also keep those 73
  * green, and they are the measurements of the **default** configuration (`AI_PROVIDER` unset →
  * `503`, `VITE_AI_PROVIDER` unset → local provider; `suite/31-m3-ai.mjs` asserts the local intent
  * chips and local copy). A globally remote Vite would make those scenarios measure a different
  * product, so the switch happens here, at this group's boundary: the first `m3r/*` scenario stops
  * Vite, restarts the backend on a **fresh durable store** with `AI_PROVIDER=stub`, and starts Vite
- * with `VITE_AI_PROVIDER=remote`. The 71 have already run by then (this file sorts last), and
+ * with `VITE_AI_PROVIDER=remote`. The 73 have already run by then (this file sorts last), and
  * each of the five scenarios calls {@link ensureRemoteAiStack} so a filtered run
  * (`--filter m3r/3`) switches too.
  *
@@ -436,7 +436,7 @@ async function waitForActiveDocument(page, documentId, { timeoutMs = 30_000 } = 
 const requestedMode = process.env.INSIGHTHUB_E2E_AI_MODE;
 
 /**
- * Fail loudly on a typo instead of silently running the default 71.
+ * Fail loudly on a typo instead of silently running the default 73.
  *
  * A mistyped mode would otherwise produce a green run that contains **no** remote evidence —
  * exactly the kind of false success this suite exists to prevent.
@@ -444,12 +444,12 @@ const requestedMode = process.env.INSIGHTHUB_E2E_AI_MODE;
 if (requestedMode !== undefined && requestedMode !== 'remote') {
   throw new Error(
     `INSIGHTHUB_E2E_AI_MODE=${JSON.stringify(requestedMode)} is not supported; ` +
-      'use "remote" (suite/33-m3-remote.mjs) or leave it unset to run the 68 default scenarios',
+      'use "remote" (suite/33-m3-remote.mjs) or leave it unset to run the 73 default scenarios',
   );
 }
 
 export function register(runner) {
-  // Default mode: this file contributes nothing. 68/68 stays 68/68.
+  // Default mode: this file contributes nothing. 73/73 stays 73/73.
   if (requestedMode !== 'remote') return;
 
   /* ================================================================== *
@@ -465,7 +465,7 @@ export function register(runner) {
       /*
        * A document id of this scenario's own, for two independent reasons:
        *
-       * 1. the 68 default scenarios have already run in the same browser profile, and a
+       * 1. the 73 default scenarios have already run in the same browser profile, and a
        *    `demo-*` document would be hydrated from **IndexedDB** — a stale replica from an
        *    earlier scenario turned the editor into 237 characters of someone else's text the
        *    first time this suite ran in full (caught by this suite, kept as a regression note);
