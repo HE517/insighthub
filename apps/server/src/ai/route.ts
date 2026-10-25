@@ -240,7 +240,7 @@ function createSuggestHandler(
       outcome: AiSuggestOutcome,
       documentId?: string,
       producedBy?: string,
-      diagnostics: { upstreamStatus?: number; providerCode?: string } = {},
+      diagnostics: { upstreamStatus?: number; providerCode?: string; providerParam?: string } = {},
     ): void => {
       log.log(outcomeLevel(outcome), 'ai.suggest', {
         ...(requestId === undefined ? {} : { requestId }),
@@ -256,6 +256,7 @@ function createSuggestHandler(
           ? {}
           : { upstreamStatus: diagnostics.upstreamStatus }),
         ...(diagnostics.providerCode === undefined ? {} : { providerCode: diagnostics.providerCode }),
+        ...(diagnostics.providerParam === undefined ? {} : { providerParam: diagnostics.providerParam }),
       });
     };
 
@@ -355,6 +356,7 @@ function createSuggestHandler(
                   ? {}
                   : { upstreamStatus: error.upstreamStatus }),
                 ...(error.providerCode === undefined ? {} : { providerCode: error.providerCode }),
+                ...(error.providerParam === undefined ? {} : { providerParam: error.providerParam }),
               }
             : {},
         );

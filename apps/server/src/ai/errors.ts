@@ -60,17 +60,23 @@ export class ServerAiProviderError extends Error {
    * carried one. A short machine code, never the human message, which can echo request material.
    */
   readonly providerCode?: string;
+  /**
+   * The provider's offending parameter (esponse_format, max_tokens, …), when the error names
+   * one. A short identifier used for diagnosis; never the message or the request body.
+   */
+  readonly providerParam?: string;
 
   constructor(
     kind: ServerAiProviderErrorKind,
     message: string,
-    details: { upstreamStatus?: number; providerCode?: string } = {},
+    details: { upstreamStatus?: number; providerCode?: string; providerParam?: string } = {},
   ) {
     super(message);
     this.name = 'ServerAiProviderError';
     this.kind = kind;
     if (details.upstreamStatus !== undefined) this.upstreamStatus = details.upstreamStatus;
     if (details.providerCode !== undefined) this.providerCode = details.providerCode;
+    if (details.providerParam !== undefined) this.providerParam = details.providerParam;
   }
 }
 

@@ -9,11 +9,11 @@
  *
  * | Parameter | OpenAI | Kimi (this file) |
  * | --- | --- | --- |
- * | endpoint | `https://api.openai.com/v1` | `https://api.moonshot.ai/v1` |
+ * | endpoint | `https://api.openai.com/v1` | `https://api.moonshot.cn/v1` (CN platform) |
  * | credential | `OPENAI_API_KEY` | `KIMI_API_KEY` |
  * | default model | `gpt-5.6-luna` | {@link DEFAULT_KIMI_MODEL} (`kimi-k3`) |
  * | output bound field | `max_tokens` | `max_tokens` |
- * | structured output | `response_format: {type:"json_object"}` | **enabled** — K3 supports JSON mode |
+ * | structured output | `response_format: {type:"json_object"}` | **prompt-only** (no `response_format`) |
  *
  * ## The model choice
  *
@@ -22,13 +22,14 @@
  * `kimi-k3.1-pro` is an Owner decision if proposal quality proves insufficient, and `highspeed`
  * is deliberately not selected because there is no real latency requirement (D-085 §3).
  *
- * ## JSON mode is a claim that must survive a live call
+ * ## Why prompt-only, not JSON mode
  *
- * `response_format` is enabled here on the strength of the provider's documented JSON mode. If
- * the B12 live smoke proves the endpoint rejects it, the fallback is **prompt-only** (the system
- * prompt already demands bare JSON): delete the `responseFormat` line below and nothing else.
- * A0 owns that decision after the live call; it is not a runtime fallback, because silently
- * retrying without the parameter would hide a provider-capability change.
+ * The CN endpoint answered the B12 live request with HTTP 400 `invalid_request_error` while the
+ * request carried `response_format`. Rather than guess which sub-parameter caused it, this adapter
+ * stops sending the parameter: the system prompt already demands bare JSON, and the response still
+ * passes `JSON.parse` plus the strict `AiSuggestionDraft` schema, so a malformed answer is
+ * `invalid_output` exactly as before. This is a recorded provider-capability finding, not a silent
+ * runtime fallback.
  *
  * ## Configuration
  *
@@ -156,9 +157,10 @@ export function createKimiProvider(options: KimiProviderOptions): ServerAiProvid
     // than inherited, so a provider that switches to `max_completion_tokens` is a one-line change
     // with its own test.
     maxTokensField: 'max_tokens',
-    // Kimi's official JSON mode (D-085 §3). If the live smoke disproves it, this line is the
-    // whole fallback: remove it and rely on the system prompt, which already demands bare JSON.
-    responseFormat: { type: 'json_object' },
+    // No `response_format` (D-085 §3 rev after the live 400 `invalid_request_error`): the CN
+    // endpoint rejected the JSON-mode request for this model. The system prompt already demands
+    // bare JSON, and the response still goes through parse + strict draft schema validation, so
+    // dropping the parameter weakens nothing except the provider-side enforcement hint.
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   });
 }

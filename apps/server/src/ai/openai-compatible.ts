@@ -193,7 +193,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleOptions)
           `the ${options.provider} AI provider responded with HTTP ${response.status}`,
           {
             upstreamStatus: response.status,
-            ...(await readProviderErrorCode(response)),
+            ...(await readProviderErrorDetails(response)),
           },
         );
       }
@@ -344,15 +344,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Diagnostics only: the human `message` is never read (it can echo prompt material), the body is
  * bounded, and anything unexpected degrades to "no code" rather than masking the original failure.
  */
-async function readProviderErrorCode(response: Response): Promise<{ providerCode?: string }> {
+async function readProviderErrorDetails(
+  response: Response,
+): Promise<{ providerCode?: string; providerParam?: string }> {
   try {
     const text = await response.text();
     if (text.length > 8_192) return {};
-    const parsed = JSON.parse(text) as { error?: { code?: unknown; type?: unknown } };
+    const parsed = JSON.parse(text) as {
+      error?: { code?: unknown; type?: unknown; param?: unknown };
+    };
     const code = parsed.error?.code ?? parsed.error?.type;
-    if (typeof code === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(code)) {
-      return { providerCode: code };
-    }
+    const param = parsed.error?.param;
+    return {
+      ...(typeof code === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(code)
+        ? { providerCode: code }
+        : {}),
+      // A parameter name is a short identifier; never the message, which can echo the request.
+      ...(typeof param === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(param)
+        ? { providerParam: param }
+        : {}),
+    };
   } catch {
     // Not JSON, or no body: the status alone is still useful.
   }

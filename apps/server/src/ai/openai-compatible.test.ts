@@ -284,6 +284,38 @@ describe('failure mapping (retry = 0)', () => {
     }
   });
 
+  it('carries the offending parameter when the provider names one, without the body', async () => {
+    const fake = fakeFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              type: 'invalid_request_error',
+              param: 'response_format',
+              message: `bad parameter for ${CONTENT}`,
+            },
+          }),
+          { status: 400, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const provider = createOpenAICompatibleProvider({
+      provider: 'kimi',
+      endpoint: 'https://api.example.test/v1',
+      apiKey: API_KEY,
+      model: 'm',
+      fetchImpl: fake.fetchImpl,
+    });
+
+    const error = await expectKind(
+      provider.suggest(INPUT, new AbortController().signal),
+      'provider',
+    );
+    assert.equal(error.upstreamStatus, 400);
+    assert.equal(error.providerCode, 'invalid_request_error');
+    assert.equal(error.providerParam, 'response_format');
+    assert.ok(!error.message.includes(CONTENT));
+    assert.ok(!error.message.includes('bad parameter'));
+  });
   it('maps a network error to provider without retrying', async () => {
     const fake = fakeFetch(() => {
       throw new TypeError(`connect failed while sending ${API_KEY}`);

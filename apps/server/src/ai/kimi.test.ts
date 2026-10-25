@@ -183,9 +183,9 @@ describe('request shape', () => {
     assert.equal(body.model, 'kimi-k3');
     assert.equal(body.stream, false);
     assert.equal(body.max_tokens, DEFAULT_KIMI_MAX_OUTPUT_TOKENS);
-    // Kimi's documented JSON mode (D-085 §3); the fallback if a live smoke disproves it is
-    // prompt-only, so this assertion is the one that must change with that decision.
-    assert.deepEqual(body.response_format, { type: 'json_object' });
+    // B12 live finding: the CN endpoint rejects `response_format` (400 invalid_request_error),
+    // so Kimi is prompt-only. OpenAI keeps the parameter; this assertion is provider-specific.
+    assert.equal(body.response_format, undefined);
     assert.equal(body.messages[0]?.role, 'system');
     assert.equal(body.messages[0]?.content, AI_SYSTEM_PROMPT);
     assert.ok(body.messages[1]?.content.includes(CONTENT));
@@ -219,6 +219,19 @@ describe('request shape', () => {
       assert.equal(error.upstreamStatus, 401);
       assert.equal(error.providerCode, 'invalid_authentication_error');
       assert.equal(error.message.includes(KIMI_KEY), false);
+    }
+  });
+  it('rejects a non-JSON or schema-invalid Kimi answer as invalid_output', async () => {
+    for (const content of ['not json at all', '{"summary":"x","operations":[{"kind":"delete"}]}']) {
+      const fake = fakeFetch(() => completion(content));
+      const provider = createKimiProvider({ apiKey: KIMI_KEY, fetchImpl: fake.fetchImpl });
+      try {
+        await provider.suggest(INPUT, new AbortController().signal);
+        assert.fail(`content ${JSON.stringify(content)} must be refused`);
+      } catch (error) {
+        assert.ok(error instanceof ServerAiProviderError);
+        assert.equal(error.kind, 'invalid-output');
+      }
     }
   });
   it('honours an explicit model and output bound', async () => {
