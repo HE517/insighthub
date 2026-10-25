@@ -3725,3 +3725,13 @@ PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描�
 
 **后果。** Evidence Gate 与 M4 launch scope 解耦：100k 性能是独立 gate，不阻塞 M4；项目描述将按
 实际能力降级，而不是为描述补功能。
+### 4. 第二轮裁决记录（2026-10-25，A/C 合入后）
+
+- **A1**：记 **PASS**，措辞必须带限定：**两个独立 browser context + 独立 session/storage + state-vector digest
+  （A = B = server）**；不得再用同 profile 双 tab 作为“多人协作”的最终证据。
+- **C**：拆成两项——**document metadata stale = NOT APPLICABLE（实测客户端不发该请求）**；
+  **directory list stale + AbortController = PASS**（真实 200 被延迟、窗口内切换、69ms `AbortError`、
+  浏览器拒绝投递旧响应、UI/session 保持 B）。
+- **`requestId` ownership guard 未被压测**：接受为 residual。要压测需产品侧注入“不 abort”开关，
+  属于产品改动，不在 A6 授权内，也不为证据新增。
+- **远程 AI 模式 78**：本轮不跑（与 A/C 无关）。
