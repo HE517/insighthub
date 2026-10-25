@@ -876,3 +876,6 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 - Any change touching `packages/shared/**`, any `package.json`,
   `pnpm-workspace.yaml`, `docs/ARCHITECTURE.md` or `docs/CONTRACTS.md` goes
   through Supervisor review first (`AGENTS.md` §2).
+
+
+**Performance Evidence Gate（独立，不阻塞 M4）**：`tests/perf/**` + `PERF-BASELINE-100K.md` 已合入。current baseline（Windows 11 / Chrome 155 / commit `9f4879f`）：100k 行 fixture sha256 `0d12688d…`；ready **3246 ms**；input n=300 → p50 **423.8** / p95 **535.9** / max **715.0 ms**；Long Task **385**（total 163356 ms，max 715）；WS reconnect restore→connected p50 **775** / max **812 ms**；bundle 合计 **1,058,970 B raw / 340,811 B gzip**；memory sampled 49,159,347 B（Chrome 非标准 API）。**production performance = NOT VERIFIED**；未做优化。
