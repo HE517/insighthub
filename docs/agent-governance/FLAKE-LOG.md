@@ -6,9 +6,9 @@ did, and a reader must be able to tell which is which without digging through ch
 
 | Date | Commit | Scenario / test | Symptom | Rerun | Classification |
 | --- | --- | --- | --- | --- | --- |
-| 2026-10-22 | `0d1b30d` | `f1/1-viewer-is-read-only-and-not-remounted` | editor probe not attached after 9.4 s (`cmEditorCount:0`) | full suite rerun: PASS | harness/startup timing, **open** — needs a repeat run to close |
-| 2026-10-22 | `0d1b30d` | `m3/5-ai-proposal-and-accept` | editor text contained markers from earlier scenarios before Generate (cross-scenario state leak) | full suite rerun: PASS | **open** — the leak path is not identified; two consecutive runs were requested by A7 review |
-| 2026-10-25 | `39854d4` | `origin-http.test.ts` (server) | one transient `fetch failed` in `bootstrapSessionCookie` | same command rerun: 500/500 PASS | harness/network transient, **open** — recorded instead of being called "flaky but fine" |
+| 2026-10-22 | `0d1b30d` | `f1/1-viewer-is-read-only-and-not-remounted` | editor probe not attached after 9.4 s (`cmEditorCount:0`) | full suite 73/73 PASS (`1807ea1`); filtered rerun 1/1 PASS | **closed at the observed rate**: 3/3 green since; cause not isolated, so a future red is still plausible |
+| 2026-10-22 | `0d1b30d` | `m3/5-ai-proposal-and-accept` | editor text contained markers from earlier scenarios before Generate (cross-scenario state leak) | full suite 73/73 PASS (`1807ea1`); filtered runs 1/1 PASS twice consecutively (`1807ea1`) | **open (not reproduced)**: 3 green runs since, but the leak path was never identified, so the guard is empirical only |
+| 2026-10-25 | `39854d4` | `origin-http.test.ts` (server) | one transient `fetch failed` in `bootstrapSessionCookie` | same command rerun: 500/500 PASS (`39854d4`, `1807ea1`) | harness/network transient, **open** — recorded instead of being called "flaky but fine" |
 
 ## Rules
 
