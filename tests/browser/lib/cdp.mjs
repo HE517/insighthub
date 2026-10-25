@@ -459,16 +459,60 @@ export class CdpPage {
   }
 }
 
-/** Create a new page target and attach to it. */
-export async function newPage(connection) {
-  const { targetId } = await connection.send('Target.createTarget', { url: 'about:blank' });
+/**
+ * Create a new page target and attach to it.
+ *
+ * `browserContextId` (optional) puts the page in a **specific browser context** instead of the
+ * default one. A context created with {@link createBrowserContext} has its own cookie jar, its
+ * own `localStorage`/`sessionStorage` and its own IndexedDB partition, so two pages in two
+ * contexts are two genuinely independent clients — which is what "two people are collaborating"
+ * requires and what two tabs in one profile can never prove (`tests/browser/README.md`).
+ */
+export async function newPage(connection, { browserContextId } = {}) {
+  const target =
+    browserContextId === undefined
+      ? { url: 'about:blank' }
+      : { url: 'about:blank', browserContextId };
+  const { targetId } = await connection.send('Target.createTarget', target);
   const { sessionId } = await connection.send('Target.attachToTarget', {
     targetId,
     flatten: true,
   });
   const page = new CdpPage(connection, sessionId, targetId);
+  page.browserContextId = browserContextId ?? null;
   await page.init();
   return page;
+}
+
+/**
+ * Create an **incognito-like browser context** (`Target.createBrowserContext`).
+ *
+ * Chrome gives it a fresh storage partition: no cookies, no `localStorage`, no IndexedDB shared
+ * with the default context or with any other created context. It is the only way this harness can
+ * open two clients that cannot see each other's session, replica or storage.
+ *
+ * `disposeOnDetach: false` keeps the context alive when the last target detaches; the run disposes
+ * it explicitly ({@link disposeBrowserContext}) so a page that closes without a teardown cannot
+ * take the context with it before its evidence has been read.
+ */
+export async function createBrowserContext(connection, { disposeOnDetach = false } = {}) {
+  const { browserContextId } = await connection.send('Target.createBrowserContext', {
+    disposeOnDetach,
+  });
+  if (typeof browserContextId !== 'string' || browserContextId.length === 0) {
+    throw new Error('Target.createBrowserContext returned no browserContextId');
+  }
+  return browserContextId;
+}
+
+/**
+ * Dispose a created browser context and every target still inside it.
+ *
+ * Disposing is part of the evidence, not housekeeping: a leaked context is a leaked storage
+ * partition, and this suite counts what it left behind.
+ */
+export async function disposeBrowserContext(connection, browserContextId) {
+  await connection.send('Target.disposeBrowserContext', { browserContextId });
 }
 
 export function sleep(ms) {

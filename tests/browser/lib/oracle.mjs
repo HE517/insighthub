@@ -21,6 +21,8 @@
  * recorded in the scenario's evidence, so "the oracle could join" is never an unexplained
  * privilege. A scenario that needs a **non-member** passes `membership: false`.
  */
+import { createHash } from 'node:crypto';
+
 import { authzFixture, DEFAULT_DEMO_USER } from './authz-fixture.mjs';
 import {
   importDependency,
@@ -38,6 +40,8 @@ const ORACLE_ORIGIN = 'insighthub:qa-oracle';
 
 export class WireOracle {
   #shared;
+  /** The `yjs` module this peer uses (one instance, resolved through `deps.mjs`). */
+  #Y;
   #encoding;
   #decoding;
   #syncProtocol;
@@ -86,6 +90,7 @@ export class WireOracle {
     /** The membership role the fixture wrote for `(documentId, userId)`, when it wrote one. */
     this.fixtureRole = role;
     this.#shared = shared;
+    this.#Y = Y;
     this.#encoding = encoding;
     this.#decoding = decoding;
     this.#syncProtocol = syncProtocol;
@@ -240,6 +245,26 @@ export class WireOracle {
       framesIn: this.#framesIn,
       framesOut: this.#framesOut,
       awarenessClientIds: [...this.#awarenessClientIds].sort((a, b) => a - b),
+    };
+  }
+
+  /**
+   * Deterministic digest of this peer's **state vector** — the same measurement the page
+   * instrumentation exposes as `window.__qa.docStateVector()`.
+   *
+   * `Y.encodeStateVector(doc)` maps every client to the highest clock this replica has integrated
+   * and yjs writes the entries sorted, so the bytes are order-independent: two replicas at the
+   * same CRDT state produce the same digest even though their `clientID`s and their text would
+   * differ. Text equality alone cannot tell "same state" from "same string, pending structs";
+   * this can.
+   *
+   * Read-only: `encodeStateVector` touches no store and starts no transaction.
+   */
+  stateVectorHash() {
+    const stateVector = this.#Y.encodeStateVector(this.#doc);
+    return {
+      hash: createHash('sha256').update(stateVector).digest('hex'),
+      stateVectorBytes: stateVector.length,
     };
   }
 

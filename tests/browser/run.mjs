@@ -39,7 +39,7 @@ import {
   configureAuthzFixture,
   DEFAULT_DEMO_USER,
 } from './lib/authz-fixture.mjs';
-import { newPage } from './lib/cdp.mjs';
+import { newPage, createBrowserContext, disposeBrowserContext } from './lib/cdp.mjs';
 import { Browser } from './lib/chrome.mjs';
 import { artifactsDir, repoRoot } from './lib/deps.mjs';
 import { renderMarkdown, Runner } from './lib/harness.mjs';
@@ -124,6 +124,39 @@ async function main() {
   const openPages = [];
   /** Extra browsers launched for "a brand-new device" checks. */
   const extraBrowsers = new Set();
+  /**
+   * Independent browser contexts created by scenarios (`Target.createBrowserContext`).
+   *
+   * Tracked for the same reason as `openPages`: a context is a whole storage partition (cookies,
+   * `localStorage`, IndexedDB). Leaking one would let a later scenario see a previous scenario's
+   * replica, and it would outlive the browser this run started.
+   */
+  const browserContexts = new Set();
+
+  /**
+   * Create a browser context with its own cookies/storage/IndexedDB.
+   *
+   * Pass the returned id to `newAppPage` / `openInstrumentedPage` (`browserContextId`). Two pages
+   * opened in two contexts are two independent clients — the only honest way to claim "two
+   * people are collaborating" (`tests/browser/README.md`, "Independent browser contexts").
+   */
+  async function newBrowserContext() {
+    const browserContextId = await createBrowserContext(browser.connection);
+    browserContexts.add(browserContextId);
+    return browserContextId;
+  }
+
+  /** Dispose a context created by `newBrowserContext` (idempotent). */
+  async function closeBrowserContext(browserContextId) {
+    if (browserContextId === null || browserContextId === undefined) return false;
+    if (!browserContexts.delete(browserContextId)) return false;
+    try {
+      await disposeBrowserContext(browser.connection, browserContextId);
+    } catch {
+      /* already disposed (e.g. the browser went away) — the run reports the remainder */
+    }
+    return true;
+  }
 
   /**
    * Open the application in a fresh browser tab.
@@ -152,9 +185,13 @@ async function main() {
    * application change). It exists to make the one-time identity remount deterministic: with a
    * fast bootstrap the editor can happen to mount after the identity already landed, so a
    * regression scenario has to widen the window to prove `waitForSessionActive` crosses it.
+   *
+   * `browserContextId` opens the page inside a context created with `newBrowserContext()` instead
+   * of the default one, i.e. with its own cookies and storage. Used by
+   * `collab/independent-contexts`; every other scenario keeps the default context.
    */
-  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role, offlineFirst = false, bootstrapDelayMs = 0 } = {}) {
-    const page = await openInstrumentedPage({ target, as, offlineFirst, bootstrapDelayMs });
+  async function newAppPage({ documentId, target, as = DEFAULT_DEMO_USER, role, offlineFirst = false, bootstrapDelayMs = 0, browserContextId } = {}) {
+    const page = await openInstrumentedPage({ target, as, offlineFirst, bootstrapDelayMs, browserContextId });
     await waitForSessionActive(page);
     await installEditorProbe(page);
     await clearEditorTransactions(page);
@@ -182,9 +219,9 @@ async function main() {
    * membership at all. `--keep-open` runs still have a reachable URL; `setOffline(false)`
    * restores the real socket.
    */
-  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER, offlineFirst = false, bootstrapDelayMs = 0 } = {}) {
+  async function openInstrumentedPage({ target, as = DEFAULT_DEMO_USER, offlineFirst = false, bootstrapDelayMs = 0, browserContextId } = {}) {
     const connection = (target ?? browser).connection;
-    const page = await newPage(connection);
+    const page = await newPage(connection, { browserContextId });
     openPages.push(page);
     // The identity pin must exist *before* the instrumentation installs its `fetch` wrapper,
     // and both must exist before any application script runs. `addInitScript` preserves order.
@@ -256,6 +293,10 @@ async function main() {
     authz,
     newAppPage,
     openInstrumentedPage,
+    /** Independent browser context (own cookies/storage/IndexedDB); pass its id to `newAppPage`. */
+    newBrowserContext,
+    /** Dispose a context created by `newBrowserContext`. */
+    closeBrowserContext,
     withFreshBrowser,
     launchBrowser,
     closeBrowser,
@@ -353,6 +394,13 @@ async function main() {
         for (const page of openPages.splice(0, openPages.length)) {
           await page.close().catch(() => {});
         }
+        // ... and every independent context, so a leaked storage partition cannot answer a later
+        // scenario from a previous one. A scenario is expected to dispose its own contexts (and
+        // record that it did); this is the safety net, and it is deliberately silent so the
+        // scenario's own evidence stays the one that counts.
+        for (const browserContextId of [...browserContexts]) {
+          await closeBrowserContext(browserContextId);
+        }
         // A scenario is allowed to crash the backend to prove restart recovery; it must
         // never leave it down for the next scenario.
         await stack.startServer().catch(() => {});
@@ -392,6 +440,9 @@ async function main() {
       extraBrowsers.clear();
       for (const page of openPages.splice(0, openPages.length)) {
         await page.close().catch(() => {});
+      }
+      for (const browserContextId of [...browserContexts]) {
+        await closeBrowserContext(browserContextId);
       }
       const removed = await stack.dispose().catch(() => []);
       await browser?.close().catch(() => {});
