@@ -3685,3 +3685,43 @@ K2 系列官方已宣布 2026-12 底下线；新 production 默认进入 K3 系�
 
 **后果。** AI 能力不再绑定单一 vendor；OpenAI 与 Kimi 走同一 draft 契约，切换 provider 不需要改
 客户端、锚定、Diff、Accept 或 Yjs 事务。
+---
+
+## D-086 · 2026-10-25 · accepted · Capability Evidence Gate 第二轮范围（A 独立上下文 / B 100k baseline / C stale response）
+
+**背景。** Gate 0 inventory 通过。Owner 明确 V1 不含 Markdown preview、production
+PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描述删除，**不允许**为了
+让描述成立而实现功能。
+
+### 1. 批准范围（只做这三项）
+
+| 项 | 内容 | 性质 |
+| --- | --- | --- |
+| A | 两个**独立 browser context**（独立 storage/cookies/identity）的协作证据：insert/delete/replace/overlap、A/B 最终 Y.Text 相等、server 最终状态相等、state-vector 或 deterministic hash | 正式 evidence |
+| B | deterministic **100,000 行** Markdown fixture + browser benchmark harness，仅建立 **current baseline** | **独立 `Performance Evidence Gate`**，不是 M4 release blocker |
+| C | HTTP document 请求被人工延迟 → 切 B → B 先回 → A 后回 → UI/session 保持 B；stale response 不得污染当前 document ownership | 正式 evidence |
+
+### 2. 固定与禁止
+
+- B 固定：commit、Windows 11 host、Chrome version、fixture、operation sequence、sample/iteration count。
+- B 采集：ready duration、input latency p50/p95/max、Long Task count/total/max、WS reconnect duration、
+  bundle raw+gzip、memory **仅当稳定可信**。
+- 允许在 **test harness** 中注入 `PerformanceObserver`，必须标注为 **test instrumentation**，
+  不代表 production telemetry。
+- **不得**为 benchmark 修改产品代码制造漂亮数字；发现瓶颈先报告，再单独提 optimization plan。
+- C：不要求为了测试新增 AbortController；核心 acceptance 是 stale response 不能污染当前 document。
+  若实现有 abort，可额外证明。
+- Search stale-response **不纳入**（无 search 功能）。
+- Render Free cold start/shared CPU **不得**作为 production P95；production performance 保持
+  **NOT VERIFIED**。
+- 已有 PASS 项不重复跑，除非作为新测试前置。
+
+### 3. Claim 处置（第二轮由 A7 独立复核）
+
+- 删除/降级：Markdown preview、preview incremental update、preview debounce、production
+  PerformanceObserver、sendBeacon telemetry、search/cancel stale search。
+- 保留待证据：独立 contexts 协作、100k baseline 指标、HTTP stale response。
+- A7 输出 kategor：`KEEP / REWORD / REMOVE / NOT VERIFIED`。
+
+**后果。** Evidence Gate 与 M4 launch scope 解耦：100k 性能是独立 gate，不阻塞 M4；项目描述将按
+实际能力降级，而不是为描述补功能。
