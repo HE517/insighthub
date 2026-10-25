@@ -79,8 +79,7 @@ import express, {
 import { PROTOCOL_VERSION, type DocumentCapability } from '@insighthub/shared';
 
 import { AiLimits } from './ai/limits.js';
-import { createServerAiProviderFromEnv } from './ai/openai.js';
-import { type ServerAiProvider } from './ai/provider.js';
+import { createServerAiProviderFromEnv, type ServerAiProvider } from './ai/provider.js';
 import { mountAiRoutes } from './ai/route.js';
 import {
   SESSION_COOKIE_NAME,
@@ -235,11 +234,11 @@ interface BootstrapBody {
  * `POST /api/ai/suggest` needs a provider, and tests need to drive that route without a
  * network (`docs/CONTRACTS.md` §11.2 "Test determinism"). The parameter is therefore an
  * **injection seam**: `undefined` (the default) builds the provider from the environment,
- * an explicit provider is used as-is, and an explicit `null` is "not configured". A missing
- * `OPENAI_API_KEY` yields `null`, i.e. a runtime `503 ai_provider_not_configured`; it must
- * not crash startup, because fail-fast configuration is M4 D3's decision
- * (`docs/DECISIONS.md` D-080 §3). `index.ts` constructs the provider explicitly only so it
- * can log whether AI is enabled.
+ * an explicit provider is used as-is, and an explicit `null` is "not configured". No configured
+ * provider — unset/`disabled`, or a selected provider without its own key — yields `null`, i.e.
+ * a runtime `503 ai_provider_not_configured`; it must not crash startup, because fail-fast
+ * configuration is the production gate's decision (`docs/DECISIONS.md` D-080 §3, D-085 §1).
+ * `index.ts` constructs the provider explicitly only so it can log whether AI is enabled.
  *
  * ## M4 B1 — `identity` is the injected Clerk seam
  *
@@ -253,10 +252,20 @@ interface BootstrapBody {
  * the request falls through to the M0 `404 not_found` — the same answer as any unknown path,
  * which is what keeps "this endpoint used to exist" from being observable.
  */
+/**
+ * The environment-selected provider, or `null` when nothing is configured.
+ *
+ * Extracted so the default parameter stays one readable call: the factory returns the M4 B12
+ * selection wrapper, and `createApp` only ever consumes the provider itself.
+ */
+function providerFromEnvironment(): ServerAiProvider | null {
+  return createServerAiProviderFromEnv(process.env)?.provider ?? null;
+}
+
 export function createApp(
   config: ServerConfig,
   authz: AuthzService,
-  aiProvider: ServerAiProvider | null = createServerAiProviderFromEnv(process.env),
+  aiProvider: ServerAiProvider | null = providerFromEnvironment(),
   identity: IdentityOptions = {},
   aiLimits: AiLimits = new AiLimits({
     // The frozen D-082 D3 numbers are the defaults; the suite raises the budgets through the

@@ -523,6 +523,30 @@ describe('configuration', () => {
     );
   });
 
+  it('honours the development AI_BASE_URL proxy and ignores a malformed one', () => {
+    const base = { AI_PROVIDER: 'openai', OPENAI_API_KEY: API_KEY };
+
+    // A dev proxy overrides the code allowlist; production refuses the variable outright
+    // (`AI_BASE_URL_FORBIDDEN`, asserted in `startup.test.ts`).
+    assert.equal(
+      readOpenAiProviderConfig({
+        ...base,
+        AI_BASE_URL: 'https://proxy.example.test/v1/',
+      })?.endpoint,
+      'https://proxy.example.test/v1',
+    );
+
+    // Blank means unset; anything that is not an absolute http(s) URL degrades to the allowlist
+    // rather than becoming a request to an unintended host.
+    for (const bad of ['', '   ', 'not-a-url', 'ftp://proxy.example/v1', 'ws://proxy.example']) {
+      assert.equal(
+        readOpenAiProviderConfig({ ...base, AI_BASE_URL: bad })?.endpoint,
+        undefined,
+        `AI_BASE_URL=${JSON.stringify(bad)}`,
+      );
+    }
+  });
+
   it('reads the output-token and timeout bounds, falling back on invalid values', () => {
     const base = { AI_PROVIDER: 'openai', OPENAI_API_KEY: API_KEY };
 
@@ -556,12 +580,14 @@ describe('configuration', () => {
     assert.equal(createServerAiProviderFromEnv({ AI_PROVIDER: 'openai' }), null);
 
     // Constructing a provider performs no I/O, so this is safe without a fake fetch.
-    const provider = createServerAiProviderFromEnv({
+    const configured = createServerAiProviderFromEnv({
       AI_PROVIDER: 'openai',
       OPENAI_API_KEY: API_KEY,
     });
-    assert.ok(provider !== null);
-    assert.equal(typeof provider.suggest, 'function');
+    assert.ok(configured !== null);
+    assert.equal(configured.kind, 'openai');
+    assert.equal(configured.model, DEFAULT_OPENAI_MODEL);
+    assert.equal(typeof configured.provider.suggest, 'function');
     assert.equal(DEFAULT_OPENAI_TIMEOUT_MS, 30_000);
   });
 });

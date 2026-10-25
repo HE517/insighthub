@@ -42,7 +42,7 @@ import { createServer } from 'node:http';
 import { basename } from 'node:path';
 
 import { createApp } from './app.js';
-import { createServerAiProviderFromEnv, readServerAiProviderKind } from './ai/openai.js';
+import { createServerAiProviderFromEnv } from './ai/provider.js';
 import {
   createAuthz,
   createClerkSessionVerifier,
@@ -248,11 +248,13 @@ async function main(): Promise<void> {
   // Built here (rather than inside `createApp`) only so the startup log can say which provider
   // is configured. A missing key is not a startup failure at runtime: the route answers
   // `503 ai_provider_not_configured`. In **production** the config gate above already refuses
-  // `AI_PROVIDER=stub` and `openai` without a key, so the warning below can only appear in
-  // development/test. The log prints only the provider class — never the key, the model or
-  // request material.
-  const aiKind = readServerAiProviderKind(process.env);
-  const aiProvider = createServerAiProviderFromEnv(process.env);
+  // `AI_PROVIDER=stub`, an unknown selector, a selected provider without its key and a
+  // non-empty `AI_BASE_URL`, so the warning below can only appear in development/test. The log
+  // prints only the provider class — never the key, the model or request material. The selection
+  // object is the same decision the log reports, so the two cannot disagree (D-085 §1).
+  const aiConfigured = createServerAiProviderFromEnv(process.env);
+  const aiKind = aiConfigured?.kind ?? 'disabled';
+  const aiProvider = aiConfigured?.provider ?? null;
   if (aiKind === 'stub') {
     log.warn('server.ai_ready', {
       aiProvider: aiKind,

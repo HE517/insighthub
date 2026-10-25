@@ -23,17 +23,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import {
-  DEFAULT_CORS_ORIGIN,
-  DEFAULT_DATA_PATH,
-  loadConfig,
-  type ServerConfig,
-} from './config.js';
-import {
-  findStartupRefusal,
-  type StartupEnvironment,
-  type StartupRefusalCode,
-} from './startup.js';
+import { DEFAULT_CORS_ORIGIN, DEFAULT_DATA_PATH, loadConfig, type ServerConfig } from './config.js';
+import { findStartupRefusal, type StartupEnvironment, type StartupRefusalCode } from './startup.js';
 
 /* ---------------------------------------------------------------- *
  * Fixtures
@@ -46,6 +37,8 @@ const PRODUCTION_ORIGIN = 'https://app.insighthub.example';
 /** Distinctive placeholder values: if one reaches a log, the assertion below proves it. */
 const CLERK_SECRET = 'sk_test_placeholder_clerk_secret_not_real';
 const OPENAI_KEY = 'sk-test-placeholder-openai-key-not-real';
+const KIMI_KEY = 'kimi-test-placeholder-key-not-real';
+const AI_BASE_URL_VALUE = 'https://ai-proxy.invalid.example/v1';
 
 /** A complete production configuration, so each test varies exactly one field. */
 function productionConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -182,6 +175,53 @@ describe('findStartupRefusal — production configuration (M4 B3)', () => {
     }
   });
 
+  it('refuses kimi without its own key (KIMI_API_KEY_MISSING)', () => {
+    for (const kimiKey of [undefined, '', '   ']) {
+      assert.equal(
+        findStartupRefusal(
+          productionConfig(),
+          productionEnv({ AI_PROVIDER: 'kimi', KIMI_API_KEY: kimiKey }),
+        )?.code,
+        'KIMI_API_KEY_MISSING',
+      );
+    }
+
+    // Selecting Kimi must not be satisfied by the OpenAI credential (D-085 §1).
+    assert.equal(
+      findStartupRefusal(
+        productionConfig(),
+        productionEnv({ AI_PROVIDER: 'kimi', KIMI_API_KEY: undefined }),
+      )?.code,
+      'KIMI_API_KEY_MISSING',
+    );
+  });
+
+  it('refuses any non-empty AI_BASE_URL in production (AI_BASE_URL_FORBIDDEN)', () => {
+    // A valid https URL is exactly as forbidden as a typo: the property is "model traffic never
+    // goes to an environment-chosen host", not "this URL happens to look reasonable".
+    for (const aiBaseUrl of [
+      AI_BASE_URL_VALUE,
+      'http://localhost:8787/v1',
+      'https://api.openai.com/v1',
+      ` ${AI_BASE_URL_VALUE} `,
+    ]) {
+      assert.equal(
+        findStartupRefusal(productionConfig(), productionEnv({ AI_BASE_URL: aiBaseUrl }))?.code,
+        'AI_BASE_URL_FORBIDDEN',
+        `AI_BASE_URL=${JSON.stringify(aiBaseUrl)} must be refused`,
+      );
+    }
+
+    // Blank means unset: an empty shell variable must not refuse a good deployment.
+    for (const aiBaseUrl of ['', '   ']) {
+      assert.equal(
+        findStartupRefusal(productionConfig(), productionEnv({ AI_BASE_URL: aiBaseUrl })),
+        null,
+        `AI_BASE_URL=${JSON.stringify(aiBaseUrl)} must be treated as unset`,
+      );
+    }
+  });
+
   it('refuses an unknown AI_PROVIDER (AI_PROVIDER_INVALID)', () => {
     for (const aiProvider of ['gpt-5.6-luna', 'openai2', 'local', 'true']) {
       assert.equal(
@@ -189,10 +229,28 @@ describe('findStartupRefusal — production configuration (M4 B3)', () => {
         'AI_PROVIDER_INVALID',
       );
     }
+
+    // A typo stays invalid even when a *different* provider's key is present.
+    assert.equal(
+      findStartupRefusal(
+        productionConfig(),
+        productionEnv({ AI_PROVIDER: 'kimi2', KIMI_API_KEY: KIMI_KEY }),
+      )?.code,
+      'AI_PROVIDER_INVALID',
+    );
   });
 
   it('does not refuse a complete production configuration', () => {
     assert.equal(findStartupRefusal(productionConfig(), productionEnv()), null);
+
+    // Kimi is a production-supported provider with its own credential (D-085).
+    assert.equal(
+      findStartupRefusal(
+        productionConfig(),
+        productionEnv({ AI_PROVIDER: 'kimi', KIMI_API_KEY: KIMI_KEY }),
+      ),
+      null,
+    );
 
     // The documented off states: unset and the explicit `disabled` value.
     assert.equal(
@@ -240,6 +298,16 @@ describe('findStartupRefusal — production configuration (M4 B3)', () => {
       ),
       null,
     );
+
+    // `AI_BASE_URL` is a development seam (a local model proxy) and stays allowed outside
+    // production, which is exactly why production must refuse its presence (D-085 §1).
+    for (const aiBaseUrl of ['http://localhost:8787/v1', 'https://proxy.example.test/v1']) {
+      assert.equal(
+        findStartupRefusal(development, { AI_PROVIDER: 'stub', AI_BASE_URL: aiBaseUrl }),
+        null,
+        `AI_BASE_URL=${aiBaseUrl} must stay available in development`,
+      );
+    }
   });
 
   it('keeps the B2 clerk-secret guard outside production', () => {
@@ -266,10 +334,9 @@ describe('findStartupRefusal — production configuration (M4 B3)', () => {
       findStartupRefusal(productionConfig({ dataPath: './ephemeral-data' }), productionEnv()),
       findStartupRefusal(productionConfig(), productionEnv({ AI_PROVIDER: 'stub' })),
       findStartupRefusal(productionConfig(), productionEnv({ OPENAI_API_KEY: undefined })),
-      findStartupRefusal(
-        productionConfig(),
-        productionEnv({ AI_PROVIDER: 'gpt-5.6-luna' }),
-      ),
+      findStartupRefusal(productionConfig(), productionEnv({ AI_PROVIDER: 'kimi' })),
+      findStartupRefusal(productionConfig(), productionEnv({ AI_PROVIDER: 'gpt-5.6-luna' })),
+      findStartupRefusal(productionConfig(), productionEnv({ AI_BASE_URL: AI_BASE_URL_VALUE })),
     ];
 
     for (const refusal of refusals) {
@@ -277,6 +344,8 @@ describe('findStartupRefusal — production configuration (M4 B3)', () => {
       for (const value of [
         CLERK_SECRET,
         OPENAI_KEY,
+        KIMI_KEY,
+        'ai-proxy.invalid.example',
         'insecure.example',
         'ephemeral-data',
         'gpt-5.6-luna',
@@ -343,6 +412,16 @@ const SUBPROCESS_CASES: readonly SubprocessRejectionCase[] = [
     forbidden: [CLERK_SECRET],
   },
   {
+    code: 'KIMI_API_KEY_MISSING',
+    overrides: { AI_PROVIDER: 'kimi' },
+    forbidden: [CLERK_SECRET, OPENAI_KEY],
+  },
+  {
+    code: 'AI_BASE_URL_FORBIDDEN',
+    overrides: { AI_BASE_URL: AI_BASE_URL_VALUE },
+    forbidden: [CLERK_SECRET, OPENAI_KEY, 'ai-proxy.invalid.example'],
+  },
+  {
     code: 'AI_PROVIDER_INVALID',
     overrides: { AI_PROVIDER: 'gpt-5.6-luna' },
     forbidden: [CLERK_SECRET, OPENAI_KEY, 'gpt-5.6-luna'],
@@ -370,6 +449,11 @@ function childEnvironment(
     AI_PROVIDER: 'openai',
     OPENAI_API_KEY: OPENAI_KEY,
   };
+
+  // Two ambient settings *are* the gate: a developer shell exporting them must not decide a case
+  // (each case either sets them explicitly below or runs without them).
+  delete env['KIMI_API_KEY'];
+  delete env['AI_BASE_URL'];
 
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) {

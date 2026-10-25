@@ -39,11 +39,8 @@
  */
 import type { AiOperationDraft, AiSuggestionDraft } from '@insighthub/shared';
 
-import {
-  ServerAiProviderError,
-  type ServerAiProvider,
-  type ServerAiSuggestInput,
-} from './provider.js';
+import { ServerAiProviderError } from './errors.js';
+import type { ServerAiProvider, ServerAiSuggestInput } from './provider.js';
 
 /** The `model` value every stub draft reports. Never a model name, never a secret. */
 export const STUB_MODEL = 'stub';

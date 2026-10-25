@@ -6,10 +6,11 @@
  *
  * A production process must not start with a configuration that can only produce a broken or
  * unsafe server: no demo identity, no unverifiable Clerk session, a development CORS origin, a
- * relative/ephemeral data path, the deterministic AI stub, or an OpenAI provider without a key.
- * Each of those failures is a **startup refusal**, not a warning, because the alternative is a
- * server that looks healthy while it serves the wrong identity, loses data on redeploy or bills
- * for a provider it never configured (D-082 §5 B3, `CONTRACTS.md` §18.6).
+ * relative/ephemeral data path, the deterministic AI stub, a model provider without its key, or a
+ * development AI proxy endpoint. Each of those failures is a **startup refusal**, not a warning,
+ * because the alternative is a server that looks healthy while it serves the wrong identity, loses
+ * data on redeploy or bills for a provider it never configured (D-082 §5 B3, D-085 §1,
+ * `CONTRACTS.md` §18.6).
  *
  * ## Why a separate pure function
  *
@@ -68,7 +69,9 @@ export type StartupRefusalCode =
   | 'DATA_PATH_INVALID'
   | 'AI_PROVIDER_STUB_FORBIDDEN'
   | 'OPENAI_API_KEY_MISSING'
+  | 'KIMI_API_KEY_MISSING'
   | 'AI_PROVIDER_INVALID'
+  | 'AI_BASE_URL_FORBIDDEN'
   /**
    * M4 B7. Produced by `static-hosting.ts`'s filesystem check rather than by
    * {@link findStartupRefusal}, which stays pure: whether the built web client exists is an I/O
@@ -101,6 +104,12 @@ export interface StartupEnvironment {
   readonly CLERK_SECRET_KEY?: string | undefined;
   readonly AI_PROVIDER?: string | undefined;
   readonly OPENAI_API_KEY?: string | undefined;
+  readonly KIMI_API_KEY?: string | undefined;
+  /**
+   * Development-only AI endpoint override (D-085 §1). Production refuses any non-empty value, so
+   * it is the one setting here whose *presence* is the problem rather than its content.
+   */
+  readonly AI_BASE_URL?: string | undefined;
 }
 
 /**
@@ -178,10 +187,14 @@ export function findStartupRefusal(
   }
 
   // --- AI provider ------------------------------------------------------
+  // `AI_PROVIDER` names a provider, never a URL or a model (D-085 §1). Three rules, in the order
+  // an operator would debug them: the selector itself, that provider's credential, then the
+  // endpoint. All three are production-only, so development keeps its stub and its dev proxy.
+  const aiProvider = (env.AI_PROVIDER ?? '').trim().toLowerCase();
+
   // `stub` is deterministic, network-free and uppercases the content: it is evidence tooling,
   // never a production model, and it must never let a production endpoint answer as if a model
   // had responded (D-080 §3, D-082 D3).
-  const aiProvider = (env.AI_PROVIDER ?? '').trim().toLowerCase();
   if (aiProvider === 'stub') {
     return {
       code: 'AI_PROVIDER_STUB_FORBIDDEN',
@@ -200,13 +213,35 @@ export function findStartupRefusal(
           'AI_PROVIDER=openai requires OPENAI_API_KEY (server only); the value is never printed',
       };
     }
+  } else if (aiProvider === 'kimi') {
+    // Same rule, separate credential: selecting Kimi must never borrow the OpenAI key (D-085 §1).
+    if (!isPresent(env.KIMI_API_KEY)) {
+      return {
+        code: 'KIMI_API_KEY_MISSING',
+        message: 'AI_PROVIDER=kimi requires KIMI_API_KEY (server only); the value is never printed',
+      };
+    }
   } else if (aiProvider !== '' && aiProvider !== 'disabled') {
-    // The documented vocabulary is `openai | disabled | stub`, or unset (= disabled). Anything
-    // else is a typo that would otherwise silently disable AI and look like a provider outage.
+    // The documented vocabulary is `openai | kimi | disabled | stub`, or unset (= disabled).
+    // Anything else is a typo that would otherwise silently disable AI and look like a provider
+    // outage.
     return {
       code: 'AI_PROVIDER_INVALID',
       message:
-        'AI_PROVIDER must be "openai", "disabled" or unset in production (the value is never printed)',
+        'AI_PROVIDER must be "openai", "kimi", "disabled" or unset in production (the value is never printed)',
+    };
+  }
+
+  // Endpoint selection is not configuration in production: the endpoint comes from the code
+  // allowlist (`openai.ts` / `kimi.ts`). `AI_BASE_URL` exists only so a developer can point the
+  // server at a local proxy, so **any** non-empty value is refused — a perfectly valid https URL
+  // is exactly as forbidden as a typo, because the property being protected is "model traffic
+  // never goes to a host chosen by the environment" (D-085 §1).
+  if ((env.AI_BASE_URL ?? '').trim() !== '') {
+    return {
+      code: 'AI_BASE_URL_FORBIDDEN',
+      message:
+        'AI_BASE_URL is a development-only AI endpoint override and must be unset in production (the value is never printed)',
     };
   }
 

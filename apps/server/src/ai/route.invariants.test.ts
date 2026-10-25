@@ -70,7 +70,7 @@ function applicationHeaders(response: Response): Record<string, string> {
 
 describe('POST /api/ai/suggest — the 404 is the same response as §17.4', () => {
   it('matches GET /api/documents/:id for an unknown document and for no membership', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' })?.provider ?? null;
     assert.ok(provider !== null);
     const harness = await newHarness(provider);
     const ada = await bootstrapSession(harness, 'demo-ada');
@@ -154,7 +154,17 @@ describe('POST /api/ai/suggest — no server-side document content source', () =
         /from\s+['"]\.\.\/authz\/(?!public\.js)/,
       ],
     ];
-    const MODULES = ['./route.ts', './provider.ts', './openai.ts', './stub.ts', './limits.ts'];
+    const MODULES = [
+      './route.ts',
+      './provider.ts',
+      './openai.ts',
+      './openai-compatible.ts',
+      './kimi.ts',
+      './stub.ts',
+      './errors.ts',
+      './env.ts',
+      './limits.ts',
+    ];
 
     for (const relative of MODULES) {
       const source = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -170,7 +180,7 @@ describe('POST /api/ai/suggest — no server-side document content source', () =
 
 describe('POST /api/ai/suggest — AI_PROVIDER=stub does not widen the gate', () => {
   it('still requires a session, still requires canRead, and lets a viewer generate', async () => {
-    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' });
+    const provider = createServerAiProviderFromEnv({ AI_PROVIDER: 'stub' })?.provider ?? null;
     assert.ok(provider !== null, 'the stub is built without a key');
     const harness = await newHarness(provider);
     const ada = await bootstrapSession(harness, 'demo-ada');
