@@ -84,6 +84,7 @@ import {
 import { readConfiguredAiModel } from '../logging/startup.js';
 import type { AiLimits } from './limits.js';
 import {
+  isServerAiProviderError,
   ServerAiProviderError,
   type ServerAiProvider,
   type ServerAiSuggestInput,
@@ -239,6 +240,7 @@ function createSuggestHandler(
       outcome: AiSuggestOutcome,
       documentId?: string,
       producedBy?: string,
+      diagnostics: { upstreamStatus?: number; providerCode?: string } = {},
     ): void => {
       log.log(outcomeLevel(outcome), 'ai.suggest', {
         ...(requestId === undefined ? {} : { requestId }),
@@ -248,6 +250,12 @@ function createSuggestHandler(
         // refusal there is no draft, so the configured model is the only truthful answer.
         model: producedBy ?? model,
         outcome,
+        // Safe diagnostics: an HTTP status and a short provider code, never the provider's
+        // message or any request material. They are what turns "provider_error" into an action.
+        ...(diagnostics.upstreamStatus === undefined
+          ? {}
+          : { upstreamStatus: diagnostics.upstreamStatus }),
+        ...(diagnostics.providerCode === undefined ? {} : { providerCode: diagnostics.providerCode }),
       });
     };
 
@@ -336,7 +344,21 @@ function createSuggestHandler(
       const outcome = respondToProviderFailure(res, error);
       // A client that went away mid-generation is not a provider failure; the abort signal is
       // the only reliable way to tell the two apart here.
-      if (!controller.signal.aborted) record(outcome, request.documentId);
+      if (!controller.signal.aborted) {
+        record(
+          outcome,
+          request.documentId,
+          undefined,
+          isServerAiProviderError(error)
+            ? {
+                ...(error.upstreamStatus === undefined
+                  ? {}
+                  : { upstreamStatus: error.upstreamStatus }),
+                ...(error.providerCode === undefined ? {} : { providerCode: error.providerCode }),
+              }
+            : {},
+        );
+      }
     } finally {
       res.off('close', abortOnClose);
       // Every path — success, typed provider failure, invalid output, timeout, abort, or an

@@ -249,6 +249,28 @@ describe('output parsing', () => {
     }
   });
 
+  it('carries the upstream status and provider code on a non-2xx response', async () => {
+    // Diagnostics only: the status and the machine code are safe to log, the message is not.
+    const fake = fakeFetch(
+      () =>
+        new Response(
+          JSON.stringify({ error: { code: 'model_not_found', message: 'SECRET-PROMPT-ECHO' } }),
+          { status: 404, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const provider = createOpenAiProvider({ apiKey: API_KEY, fetchImpl: fake.fetchImpl });
+
+    try {
+      await provider.suggest(INPUT, new AbortController().signal);
+      assert.fail('a 404 must fail');
+    } catch (error) {
+      assert.ok(error instanceof ServerAiProviderError);
+      assert.equal(error.kind, 'provider');
+      assert.equal(error.upstreamStatus, 404);
+      assert.equal(error.providerCode, 'model_not_found');
+      assert.equal(error.message.includes('SECRET-PROMPT-ECHO'), false);
+    }
+  });
   it('rejects a response with no assistant message', async () => {
     for (const body of [
       {},

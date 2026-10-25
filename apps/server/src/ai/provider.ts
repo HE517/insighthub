@@ -77,11 +77,28 @@ export type ServerAiProviderErrorKind =
  */
 export class ServerAiProviderError extends Error {
   readonly kind: ServerAiProviderErrorKind;
+  /**
+   * The upstream HTTP status, when the provider answered at all. Safe to log: it is a number, not
+   * request material. Without it an operator cannot tell "bad key" (401) from "model not found"
+   * (404) from "rate limited" (429), which are three different fixes.
+   */
+  readonly upstreamStatus?: number;
+  /**
+   * The provider's own error code (`model_not_found`, `invalid_api_key`, …), when the response
+   * carried one. A short machine code, never the human message, which can echo request material.
+   */
+  readonly providerCode?: string;
 
-  constructor(kind: ServerAiProviderErrorKind, message: string) {
+  constructor(
+    kind: ServerAiProviderErrorKind,
+    message: string,
+    details: { upstreamStatus?: number; providerCode?: string } = {},
+  ) {
     super(message);
     this.name = 'ServerAiProviderError';
     this.kind = kind;
+    if (details.upstreamStatus !== undefined) this.upstreamStatus = details.upstreamStatus;
+    if (details.providerCode !== undefined) this.providerCode = details.providerCode;
   }
 }
 

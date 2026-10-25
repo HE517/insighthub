@@ -235,6 +235,7 @@ export function createOpenAiProvider(options: OpenAiProviderOptions): ServerAiPr
 
   const fetchImpl = options.fetchImpl ?? fetch;
 
+
   return {
     async suggest(input: ServerAiSuggestInput, signal: AbortSignal): Promise<AiSuggestionDraft> {
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -273,11 +274,16 @@ export function createOpenAiProvider(options: OpenAiProviderOptions): ServerAiPr
       }
 
       if (!response.ok) {
-        // 401/403 (bad key), 429 (rate limited — enforcement is M4 D6) and every 5xx are
-        // one class here: `provider`. The response body is never read or echoed.
+        // 401/403 (bad key), 404 (model not found), 429 (rate limited) and every 5xx are one class
+        // here: `provider`. The status and the provider's machine-readable code are carried for
+        // the logs (a number and a short token, never the message or request material).
         throw new ServerAiProviderError(
           'provider',
           `the AI provider responded with HTTP ${response.status}`,
+          {
+            upstreamStatus: response.status,
+            ...(await readProviderErrorCode(response)),
+          },
         );
       }
 
@@ -419,4 +425,25 @@ function operationFitsContent(operation: AiOperationDraft, contentLength: number
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Extract the provider's machine-readable error code from a failed response.
+ *
+ * Diagnostics only: the human `message` is never read (it can echo prompt material), the body is
+ * bounded, and anything unexpected degrades to "no code" rather than masking the original failure.
+ */
+async function readProviderErrorCode(response: Response): Promise<{ providerCode?: string }> {
+  try {
+    const text = await response.text();
+    if (text.length > 8_192) return {};
+    const parsed = JSON.parse(text) as { error?: { code?: unknown; type?: unknown } };
+    const code = parsed.error?.code ?? parsed.error?.type;
+    if (typeof code === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(code)) {
+      return { providerCode: code };
+    }
+  } catch {
+    // Not JSON, or no body: the status alone is still useful.
+  }
+  return {};
 }
