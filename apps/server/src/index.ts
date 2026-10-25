@@ -267,6 +267,10 @@ async function main(): Promise<void> {
   const app = createApp(config, authz, aiProvider, identityOptions, undefined, {
     staticAssets,
     logger: log,
+    ai: {
+      provider: aiKind,
+      ...(aiConfigured === null ? {} : { model: aiConfigured.model }),
+    },
     // B12.5 (D-084 method C): the same store instance that holds documents and membership is
     // the one atomic creation path. Passing it here keeps `app.ts` free of persistence imports
     // and makes the capability explicit at the composition root.

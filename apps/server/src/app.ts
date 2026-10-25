@@ -200,6 +200,11 @@ export interface AppOptions {
    */
   readonly logger?: Logger;
   /**
+   * Non-secret AI configuration for /api/meta (M4 B12). Proves from outside which provider and
+   * model a deployment is actually running, without exposing a key.
+   */
+  readonly ai?: { readonly provider: string; readonly model?: string };
+  /**
    * B12.5 creation seam (D-084 method C). `app.ts` owns the HTTP contract; the store owns the
    * atomic three-row insert. Absent when the app is built without a durable store (the AI
    * invariants harness deliberately has none), in which case the endpoint is not mounted at all
@@ -370,6 +375,7 @@ export function createApp(
       // Which build is serving: the diagnostics below are only trustworthy if this matches the
       // commit that introduced them. Render sets RENDER_GIT_COMMIT; absent elsewhere.
       ...(config.commit === undefined ? {} : { commit: config.commit }),
+      ...(options.ai === undefined ? {} : { ai: options.ai }),
     });
   });
 
