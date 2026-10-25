@@ -970,6 +970,31 @@ export async function selectRight(page, count, { modifiers = 0 } = {}) {
   }
 }
 
+/**
+ * Move the caret `count` characters with real arrow keys.
+ *
+ * Used where a scenario must reach a **known** offset without a programmatic selection: the caret
+ * is moved the way a user moves it, so the editor's own keymap and selection mapping do the work
+ * (a remote update landing meanwhile moves the caret with the text, which is the behaviour the
+ * concurrent-edit scenario depends on).
+ */
+export async function moveCaret(page, direction, count) {
+  const key = direction === 'left' ? 'ArrowLeft' : 'ArrowRight';
+  for (let index = 0; index < count; index += 1) await page.pressKey(key);
+}
+
+/** Click into the editor and put the caret at the very start (Ctrl+Home). */
+export async function caretToStart(page) {
+  await clickEditorContent(page);
+  await page.pressKey('Home', { modifiers: 2 });
+}
+
+/** Click into the editor and put the caret at the very end (Ctrl+End). */
+export async function caretToEnd(page) {
+  await clickEditorContent(page);
+  await page.pressKey('End', { modifiers: 2 });
+}
+
 /* -------------------------------------------------------------------- *
  * IndexedDB — inspected for real, not inferred from the UI
  * -------------------------------------------------------------------- */

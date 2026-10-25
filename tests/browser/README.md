@@ -11,6 +11,7 @@ It covers two milestones:
 | Area | Suite | What it proves |
 | --- | --- | --- |
 | M1 collaboration | `suite/00…07` | editor, IndexedDB, realtime, presence, offline/reconnect, chaos, performance, lifecycle, wire robustness |
+| **A6 Evidence Gate round 2** (D-086) | `suite/08-evidence-gate.mjs` | **A:** two *independent browser contexts* (own cookies/storage/IndexedDB) editing one document concurrently — insert/delete/replace, A = B = server text **and** equal state-vector digests; **C:** a delayed HTTP response cannot override the document the user switched to, and the measured answer is that the client has **no** document-metadata request (the cancellable `GET /api/documents` list is the path that is tested) |
 | M2 durable persistence | `suite/10-m2-durability.mjs` | the server's document survives room eviction, a hard process kill, compaction, and is never faked on a failed write |
 | M2 Phase 2 authorization | `suite/20-m2-phase2-authz.mjs` | viewer/editor/owner enforcement, identity cannot be self-declared, non-disclosure, session revocation, token never reachable by JS |
 | M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
@@ -71,19 +72,19 @@ either is occupied, and its postflight prints whether both were released again.
 
 The default run measures the **frozen default configuration**: `AI_PROVIDER` is not set, so
 `POST /api/ai/suggest` answers `503`, and `VITE_AI_PROVIDER` is not set, so the client uses the
-deterministic local provider. That is what the 71 default scenarios assert, so a globally remote
+deterministic local provider. That is what the 73 default scenarios assert, so a globally remote
 Vite would invalidate them.
 
 The remote evidence is a separate group that exists only when asked for:
 
 ```bash
-INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 76 = 71 + 5
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 78 = 73 + 5
 ```
 
 The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
 
 `INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
-still exactly 71 scenarios and none of their assertions change. At the group boundary (the file
+still exactly 73 scenarios and none of their assertions change. At the group boundary (the file
 sorts last) the first `m3r/*` scenario stops Vite, restarts the backend on a fresh durable store
 with `AI_PROVIDER=stub`, and starts Vite with `VITE_AI_PROVIDER=remote`; every scenario in the
 group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) works too.
@@ -91,7 +92,7 @@ group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) wor
 `setWebEnv`; an `undefined` value deletes the key), and with no mode env the two children receive
 exactly the same environment as before.
 
-Why not start the whole run remote: the 71 scenarios measure the default configuration (intent
+Why not start the whole run remote: the 73 scenarios measure the default configuration (intent
 chips, local copy), and one Vite process has one `VITE_AI_PROVIDER`. Why not a second stack: two
 servers on `127.0.0.1` share one browser cookie jar while sessions are process-scoped, and the
 ports would double.
@@ -148,6 +149,90 @@ no replica, no storage, nothing to fall back on.
 
 Set `INSIGHTHUB_BROWSER` to an executable path to choose the browser explicitly.
 
+## Independent browser contexts (Evidence Gate A, `docs/DECISIONS.md` D-086)
+
+A second **tab** is not a second **person**: tabs in one profile share the cookie jar, one
+`localStorage` and one IndexedDB replica, so a "two tabs converge" test can be answered by
+mechanisms that do not exist between two users. `collab/independent-contexts` therefore opens each
+page inside its own context:
+
+```js
+const contextA = await ctx.newBrowserContext();   // Target.createBrowserContext
+const contextB = await ctx.newBrowserContext();
+const pageA = await ctx.newAppPage({ documentId, as: 'demo-ada', role: null, browserContextId: contextA });
+const pageB = await ctx.newAppPage({ documentId, as: 'demo-grace', role: null, browserContextId: contextB });
+```
+
+`lib/cdp.mjs` owns the two primitives (`createBrowserContext` / `disposeBrowserContext`) and
+`newPage(connection, { browserContextId })`; `run.mjs` tracks every context it created, disposes
+the ones a scenario forgot after each scenario, and the scenario disposes its own two so "no
+leaked storage partition" is measured rather than assumed. Every other scenario passes no
+`browserContextId` and keeps the default context, so nothing else changed.
+
+The isolation is **observed**, not just constructed — a scenario that merely called
+`createBrowserContext` would still be asserting its own setup:
+
+| Observation | How |
+| --- | --- |
+| two cookie jars | `Network.getCookies` per page: one `insighthub_session` each, `HttpOnly`, **different token values** (only the comparison is recorded, never a token) |
+| two storage partitions | a `localStorage` key written in A is `null` in B |
+| per-context replica | `readIndexedDb` per page lists the replica that page itself opened. The **name** is the same in both contexts, so it proves nothing on its own — the partition itself is what the `localStorage` row above measures |
+| two identities | `__qa.demoIdentity` + `[data-testid="session-identity"]` + the `role: …` chip (`editor` for A, `owner` for B, both from fixture membership rows) |
+
+### State-vector digests
+
+Equal text is necessary but not sufficient: two replicas can show the same string while one still
+holds structs the other has not integrated. The page instrumentation exposes
+
+```js
+window.__qa.docStateVector()
+// → { ok, hash, stateVectorBytes, clients, documentId, textLength, source }
+```
+
+where `hash = sha256(Y.encodeStateVector(session.doc))` (hex). `Y.encodeStateVector` maps every
+client to the highest clock the replica has integrated and yjs writes the entries **sorted**, so
+the bytes — and therefore the digest — are order-independent and comparable across replicas. The
+scenario requires A, B **and** the Node-side `WireOracle` (`WireOracle.stateVectorHash()`, the same
+bytes hashed with `node:crypto`) to report the same digest. **Only the digest and lengths are
+recorded; the document body never leaves the page.**
+
+The digest is a deterministic function of the CRDT state, not a constant across runs: every
+`Y.Doc` mints a random `clientID`, and the state vector encodes those ids, so the same document
+edited by fresh clients yields a different digest next run. The assertion is therefore
+`A = B = server`, never "the hash equals this literal".
+
+How the page reaches its own `Y.Doc` without any product hook: `Y.Doc` is module-scoped, but the
+editor host is a React-rendered node, and walking its attached fiber's `return` chain reaches
+`CollaborativeMarkdownEditor`'s `memoizedProps.session` — the session the live editor is bound to.
+The `yjs` module itself is re-imported by the **same URL** the application loaded (resource
+timing), exactly like the `@codemirror/view` probe. `docStateVector()` is read-only: it starts no
+transaction, mutates nothing, and returns a descriptive `{ ok: false, reason }` if either step
+fails (so a React-internals change shows up as a red scenario, not a silent pass).
+
+### What the scenario asserts, in order
+
+1. the fixture seeds exactly two members of the same document — A `editor`, B `owner`;
+2. a real `WireOracle` writes the baseline (front token + middle + tail token) and stays connected
+   as the independent witness;
+3. the two contexts hold different sessions and do not share storage;
+4. round 1, started together: A inserts at the front, B inserts at the tail;
+5. round 2, started together: A deletes a known token with twenty real **Delete** presses, B
+   selects another known token with **one** `Ctrl+Shift+ArrowLeft` (CodeMirror's
+   `selectGroupLeft`) and types a replacement character by character — real key events
+   (`caretToStart` / `caretToEnd`, `moveCaret`, `Input.insertText`) throughout. Typing
+   character-by-character is deliberate: each character is one Yjs transaction, so a
+   participant's edit *stream* lasts tens of milliseconds and remote updates arrive **inside** it;
+6. the two edit windows (page-relative transaction times made absolute against `qa.startedAt`,
+   which both renderers share) must **overlap** in each round — "concurrent" is measured, not
+   narrated;
+7. conditional polling until A, B and the witness all hold the exact expected text, then until the
+   two digests match; on timeout the failure lists all three lengths and the first divergence.
+
+The regions are disjoint (A owns the front, B the tail), so the final text is a constant of the
+edits and not of the interleaving: an operation never has to win a race for the assertion to be
+exact. `realtime/two-tabs-converge` is unchanged and still proves the same-profile case; it must
+not be read as the multi-person evidence.
+
 ## How it observes the application
 
 Everything is injected with `Page.addScriptToEvaluateOnNewDocument`, i.e. it runs
@@ -157,7 +242,7 @@ test-only hook was added to A1/A2/A3 code.**
 | File | Role |
 | --- | --- |
 | `lib/chrome.mjs` | launches a throwaway-profile browser and reports its real version |
-| `lib/cdp.mjs` | minimal CDP client, real input (`Input.insertText`, key events, mouse), and the browser's cookie store (`Network.getCookie`/`setCookie`) |
+| `lib/cdp.mjs` | minimal CDP client, real input (`Input.insertText`, key events, mouse), the browser's cookie store (`Network.getCookie`/`setCookie`), and **independent browser contexts** (`Target.createBrowserContext` / `Target.disposeBrowserContext`) |
 | `lib/stack.mjs` | starts/stops the real backend and Vite; `stopServer()` is a verified process death |
 | `instrument/page-instrument.js` | transport recording, fault injection, mount/timer/IDB counting, control-frame capture |
 | `lib/app.mjs` | drives the real UI and reads real state back |
@@ -193,6 +278,7 @@ Both `ChangeSpec[]` and `ChangeSet` shapes are handled: `applyDelta` passes a
 | `inboundControl(documentId)` / `outboundControl(documentId)` | the TEXT control frames the page received/sent, including `error.code` and `room-joined.role` — the browser's own view of the authorization answers |
 | `sendControl(documentId, text)` | send a raw control frame on the page's newest socket (used to inject a `userId` into a `join-room` payload from the real connection) |
 | `bootstrapCalls` / `demoIdentity` | every `POST /api/session/bootstrap` the page performed and the identity it claimed |
+| `docStateVector()` | **read-only** digest of the live document's CRDT state: `sha256(Y.encodeStateVector(session.doc))`, plus the state-vector byte length, the client count and the document length. Never the text (see "State-vector digests") |
 | `bootstrapDelayMs = N` | delay the bootstrap request by N ms — the identity-window chaos control (see "The one-time identity remount"); no application change |
 | `identity` / `editor.mountLog` / `bootstrap` | when the identity decision rendered, whether each editor mount happened after it, and the bootstrap's outcome — the evidence the settle wait is built on |
 
@@ -224,6 +310,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | Suite | Covers |
 | --- | --- |
 | `00-smoke.mjs` | the harness itself: real browser, real backend, real `EditorView`, real IndexedDB |
+| `08-evidence-gate.mjs` | A6 Evidence Gate round 2 (D-086): two independent browser contexts converging on one document (with state-vector digests), and HTTP stale-response ownership on the only cancellable request the client makes |
 | `01-persistence.mjs` | browser IndexedDB: reload without backend, offline edits, reopen, two tabs, replica inspection |
 | `02-editor.mjs` | real `EditorView`: mount on existing `Y.Text`, minimal remote apply, undo, document switch |
 | `03-realtime.mjs` | live remote edits, two-tab convergence, validated presence, remote caret/selection, presence lifecycle |
@@ -290,7 +377,7 @@ path (#5), the UI switches on success and changes nothing on failure (#7), and t
 plus in-flight guard means there is no double-click path (#6). B12.5 shipped Node-level proofs
 for the server transaction, the flow state machine and the panel markup; these three scenarios
 are the browser proof that the **shipped** path works end to end. Creation is part of the
-product, not a mode, so they carry no environment variable and count toward the default 71.
+product, not a mode, so they carry no environment variable and count toward the default 73.
 
 | Scenario id | D-084 | What the real browser + real server actually prove |
 | --- | --- | --- |
@@ -314,9 +401,20 @@ Three details a reader should not have to infer:
   scenario exercises the harder one, and counts the click events that actually reached the
   control so the suite cannot pass by never dispatching the second click.
 
-Acceptance **H** is the gate itself: the scenario count is now 71 (76 with
+Acceptance **H** is the gate itself: the scenario count is now 73 (78 with
 `INSIGHTHUB_E2E_AI_MODE=remote`), and the four commands in
 `docs/TASKS.md` must all pass on the integrated HEAD.
+
+### A6 Evidence Gate round 2 (`docs/DECISIONS.md` D-086) — `collab/*`, `stale/*`
+
+The phase-1 inventory (`docs/agent-governance/CAPABILITY-EVIDENCE-INVENTORY.md`) left exactly two
+collaboration/consistency claims `NOT VERIFIED`. These two scenarios are the real-browser answer;
+the report (`docs/agent-governance/A6-evidence-gate-round2.md`) carries the measured values.
+
+| Scenario id | Inventory item | What the browser + server actually prove |
+| --- | --- | --- |
+| `collab/independent-contexts` | **A1** | two `Target.createBrowserContext` contexts with different session tokens and separate `localStorage` edit one document concurrently (front insert + tail insert, then a Backspace delete and a typed replace, each round started together); the two edit windows overlap; A's editor text = B's = the `WireOracle`'s; `sha256(Y.encodeStateVector)` is identical for all three (3 clients, 19-byte state vector). `realtime/two-tabs-converge` is same-profile and is **not** this claim |
+| `stale/directory-list` | **C2** | the client has **no** document-metadata request on open/switch, so that half is `NOT APPLICABLE`; on the real cancellable path (`AiDirectory` `GET /api/documents`), a real 200 held at the CDP response stage is aborted by the document switch 78 ms after it started (not the 5 s timeout), Chrome refuses to deliver it afterwards (`Invalid InterceptionId`), and the UI/session/directory stay on the document the user switched to |
 
 ### Re-aimed by D-067 §4: the UI gate removed the write, not the assertion
 
@@ -455,7 +553,52 @@ a green browser run as covering them.
 | a genuinely offline **`fetch`** (the socket shim does not touch it) | CDP `Network.emulateNetworkConditions { offline: true }` — used by `m3r/4` for the directory and `b125/2` for `POST /api/documents` |
 | a durable-append failure | `acquireWriteLock(dataPath)` holds SQLite's write lock from a second process, so the server's `BEGIN IMMEDIATE` fails after its 5 s `busy_timeout` |
 | duplicate / reordered / malformed frames | frame-level hold, replay and injection in the page transport |
+| a **delayed HTTP response** (the request runs, the answer is held) | CDP `Fetch.enable` with `requestStage: 'Response'`, then `Fetch.fulfillRequest` / `Fetch.continueResponse`; the held response's real body is read with `Fetch.getResponseBody` |
 | durable-state assertions | `reconstructDurableDocument(dataPath, id)` rebuilds a `Y.Doc` from `snapshot` + `document_update`, the same replay `DocumentHydrator` does |
+
+## HTTP stale-response ownership (Evidence Gate C, `docs/DECISIONS.md` D-086)
+
+The gate's wording is "document metadata request delayed → switch to B → B answers first → A
+answers late → the UI stays on B". **The first half of that is not true of this client, and the
+scenario records that instead of inventing a request.** Opening or switching a document performs
+**no** HTTP request for the document's metadata: the only `/api/**` call a page makes while
+opening and switching is `POST /api/session/bootstrap`, and the switch itself is a WebSocket
+`join-room` answered by `room-joined` (`stale/directory-list` asserts the page's own `__qa.apiCalls`
+contains no `GET /api/documents/:id`). The server route exists; the client never calls it on this
+path.
+
+So the scenario is named for the request it actually delays — `stale/directory-list` — and it
+tests the closest **real** cancellable HTTP path: `AiDirectory`'s `GET /api/documents`, the one
+request in the client that carries an `AbortController` and a monotonic request id
+(`apps/web/src/features/editor/AiDirectory.tsx`, R9).
+
+```text
+panel open (list ready)
+  → CDP holds the next GET /api/documents at the response stage   (real 200, body read, page fetch pending)
+  → the user switches A → B through the header input              (the panel unmounts, so it aborts)
+  → the page's own request log turns that request into AbortError (78 ms after it started, not the 5 s timeout)
+  → the response is released anyway: Fetch.fulfillRequest → "Invalid InterceptionId"
+  → active-document, editor text and the (absent) panel are still B's
+  → reopening the panel shows the server's list, with B marked aria-current
+```
+
+What this proves, and what it does not:
+
+| Claim | Evidence |
+| --- | --- |
+| the delayed answer was a **real** server response | `Fetch.requestPaused` reports `responseStatusCode: 200`; `Fetch.getResponseBody` returns the real body and its document ids |
+| the answer was genuinely **late** | while held, exactly one `/api/documents` entry is `{status: null, error: null}` in the page's own log — the application's `fetch` had not settled when the switch happened |
+| the switch **cancelled** it | the same entry becomes `error: 'AbortError'`; the elapsed time is recorded and asserted to be under the request's internal 5 s timeout, so this is the switch's abort and not a timeout |
+| a late answer cannot **arrive** | Chrome refuses to deliver a response whose page-side request was aborted (`Invalid InterceptionId`); if a future browser accepted it, the assertions check the entry is *still* `AbortError` (a delivered 200 would set `status`) and that the active document, the editor text and the DOM are untouched |
+| the directory is **not polluted** | the reopened panel's rows are compared one-for-one, in order, with `GET /api/documents` for the same session; exactly B is `aria-current`; the stale marker never appears |
+| an abort is **not a failure** | no `ai-directory-error`, no `session-failed`, no uncaught page error |
+
+The honest limit: the product aborts on every ownership change, so a "stale response is delivered
+and then ignored by an ownership guard" instance **cannot be constructed without modifying the
+product**. What is proven is the stronger transport-level fact (the request is cancelled and the
+browser will not deliver it), plus the UI-level fact (nothing about the new document moved). The
+request-id guard inside `AiDirectory` is therefore a second line of defence that this run could
+not put under load; do not read this scenario as evidence that the guard itself was exercised.
 
 ## The one-time identity remount — a real residual, waited for
 

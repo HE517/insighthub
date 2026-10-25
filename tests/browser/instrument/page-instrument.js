@@ -735,6 +735,135 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * Live Y.Doc state vector (deterministic convergence digest)
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The page's **live** collaboration session.
+   *
+   * There is no product-side hook for this and none will be added (`AGENTS.md` R2). The `Y.Doc`
+   * itself is module-scoped inside the scene, but the component that owns the editor receives the
+   * session as a prop, and React attaches its fiber to every DOM node it renders. The editor host
+   * (`[data-testid="markdown-editor"]`) is such a node, so walking the fiber's `return` chain
+   * reaches `CollaborativeMarkdownEditor`'s `memoizedProps.session` — the very session the live
+   * editor is bound to (verified: one level up, `tag 0`, `type.name === 'CollaborativeMarkdownEditor'`).
+   *
+   * This reads the application's own object. Nothing is dispatched, no transaction is opened and
+   * no text leaves the page: the caller only receives a digest and lengths.
+   */
+  function liveSession() {
+    const host = document.querySelector('[data-testid="markdown-editor"]');
+    if (host === null) {
+      return { ok: false, reason: 'no [data-testid="markdown-editor"] in the DOM' };
+    }
+    const fiberKey = Object.keys(host).find((name) => name.startsWith('__reactFiber$'));
+    if (fiberKey === undefined) {
+      return { ok: false, reason: 'React attached no fiber to the editor host (internal shape changed?)' };
+    }
+    let fiber = host[fiberKey];
+    for (let depth = 0; depth < 12 && fiber !== null && fiber !== undefined; depth += 1) {
+      const session = fiber.memoizedProps?.session;
+      if (
+        session !== null &&
+        session !== undefined &&
+        session.doc !== null &&
+        session.doc !== undefined &&
+        typeof session.doc.getText === 'function'
+      ) {
+        return { ok: true, session, depth };
+      }
+      fiber = fiber.return;
+    }
+    return {
+      ok: false,
+      reason: 'no memoizedProps.session carrying a Y.Doc within 12 fiber levels of the editor host',
+    };
+  }
+
+  let yjsModulePromise = null;
+  /**
+   * The application's **own** `yjs` module instance.
+   *
+   * Resolved from resource timing and imported by the same URL, exactly like
+   * `lib/app.mjs#installEditorProbe` resolves `@codemirror/view`: the page's module registry is
+   * keyed by URL, so this is the class the application used, not a second copy. (`Y.Doc`
+   * constructor checks and state-vector encoding would otherwise be unrelated.)
+   */
+  function loadYjsModule() {
+    if (yjsModulePromise !== null) return yjsModulePromise;
+    yjsModulePromise = (async () => {
+      const urls = performance.getEntriesByType('resource').map((entry) => entry.name);
+      const url =
+        urls.find((name) => /(^|\/)yjs(\.js)?(\?|$)/.test(name)) ??
+        urls.find((name) => name.includes('/yjs'));
+      if (url === undefined) throw new Error('no yjs module URL in resource timing');
+      const module = await import(url);
+      if (typeof module.encodeStateVector !== 'function') {
+        throw new Error(`${url} does not export encodeStateVector`);
+      }
+      return module;
+    })();
+    // A rejected import must be retryable: caching the rejection would make one early call
+    // (before the app loaded yjs) poison every later one.
+    yjsModulePromise.catch(() => {
+      yjsModulePromise = null;
+    });
+    return yjsModulePromise;
+  }
+
+  async function sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  /**
+   * The live document's **state vector**, as a deterministic SHA-256 digest.
+   *
+   * This is the evidence that two clients are at the same CRDT state rather than merely showing
+   * the same string: `Y.encodeStateVector` maps every client to the highest clock this replica
+   * has integrated, and yjs writes it sorted (descending client id), so the bytes — and therefore
+   * the digest — are order-independent and comparable across replicas.
+   *
+   * Deliberately **read-only**: no transaction, no mutation, no text. The caller gets the digest,
+   * the state-vector byte length, the number of clients and the document length, never content.
+   */
+  qa.docStateVector = async function docStateVector() {
+    const found = liveSession();
+    if (!found.ok) return { ok: false, reason: found.reason };
+    let Y;
+    try {
+      Y = await loadYjsModule();
+    } catch (error) {
+      return { ok: false, reason: `yjs module unavailable: ${String(error?.message ?? error)}` };
+    }
+    try {
+      const session = found.session;
+      const stateVector = Y.encodeStateVector(session.doc);
+      const hash = await sha256Hex(stateVector);
+      let clients = null;
+      try {
+        const decoded = Y.decodeStateVector(stateVector);
+        clients = decoded instanceof Map ? decoded.size : null;
+      } catch {
+        /* the digest is the evidence; the client count is a convenience */
+      }
+      return {
+        ok: true,
+        hash,
+        stateVectorBytes: stateVector.length,
+        clients,
+        documentId: typeof session.documentId === 'string' ? session.documentId : null,
+        textLength: typeof session.text?.length === 'number' ? session.text.length : null,
+        source: `react-fiber depth ${found.depth}`,
+      };
+    } catch (error) {
+      return { ok: false, reason: `encodeStateVector failed: ${String(error?.message ?? error)}` };
+    }
+  };
+
+  /* ------------------------------------------------------------------ *
    * Counters
    * ------------------------------------------------------------------ */
 
