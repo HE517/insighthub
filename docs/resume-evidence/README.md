@@ -175,9 +175,10 @@ stands even after the bullet is corrected.
 
 **Post-evidence changes.** After `874f107`, the Markdown preview feature was added under D-087
 (`dc20ecb`/`0f4c6aa`). It is **not** part of any bullet in this pack, and none of the "NOT
-IMPLEMENTED" lists in the reports should be read as still current for preview. The 73-scenario suite
-was re-run after that merge and stayed **73/73**; this does not retroactively change the evidence
-commit, and no benchmark was re-run.
+IMPLEMENTED" lists in the reports should be read as still current for preview. The default browser
+suite grew from 73 to **78** scenarios (5 preview scenarios in `suite/34-markdown-preview.mjs`) and
+passed **78/78** on merge commit `7585263`; this does not retroactively change the evidence commit,
+and no benchmark was re-run.
 
 **Also after `874f107`.** `d1d8aec` made `aggregate.mjs` derive its `caution` from the run's
 `servingMode` and regenerated the two aggregate JSONs; report 03 §6's stale-caution finding
