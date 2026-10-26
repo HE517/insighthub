@@ -78,7 +78,9 @@ const aggregate = {
   generatedAt: new Date().toISOString(),
   evidenceType: 'multi-round current baseline; no PASS/FAIL thresholds',
   caution:
-    'Local Windows host, Vite dev server for interaction timing; bundle sizes come from the production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.',
+    last.servingMode?.startsWith('build')
+      ? 'Local Windows host, built server + built web (Express static, no Vite) for interaction timing; bundle sizes come from the same production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.'
+      : 'Local Windows host, Vite dev server for interaction timing; bundle sizes come from the production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.',
   git: last.git,
   host: last.host,
   chrome: last.chrome,

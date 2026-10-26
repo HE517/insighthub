@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-26T02:57:47.199Z",
+  "generatedAt": "2026-10-26T08:14:39.161Z",
   "evidenceType": "multi-round current baseline; no PASS/FAIL thresholds",
   "caution": "Local Windows host, Vite dev server for interaction timing; bundle sizes come from the production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.",
   "git": {

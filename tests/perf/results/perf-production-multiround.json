@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-26T03:33:18.009Z",
+  "generatedAt": "2026-10-26T08:14:39.097Z",
   "evidenceType": "multi-round current baseline; no PASS/FAIL thresholds",
-  "caution": "Local Windows host, Vite dev server for interaction timing; bundle sizes come from the production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.",
+  "caution": "Local Windows host, built server + built web (Express static, no Vite) for interaction timing; bundle sizes come from the same production build. Not production P95. Long Tasks and Redux inspection are test instrumentation.",
   "git": {
     "commit": "c2ad879834853785e87a5239af3d65b559e1d281",
     "shortCommit": "c2ad879",
