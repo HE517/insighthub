@@ -39,6 +39,55 @@ export const PERF_INIT_SCRIPT = String.raw`
   };
   window.__perf = perf;
 
+  /*
+   * Dynamic Redux check (test instrumentation only): find the Provider store through the React
+   * fiber tree and prove the document body is NOT mirrored into it — the behavioural counterpart
+   * of "content lives only in Y.Text" (AGENTS.md R11).
+   */
+  perf.reduxSnapshot = () => {
+    const findStore = () => {
+      const root = document.querySelector('#root');
+      if (root === null) return null;
+      const containerKey = Object.keys(root).find((key) => key.startsWith('__reactContainer$'));
+      if (containerKey === undefined) return null;
+      const seen = new Set();
+      const queue = [root[containerKey]];
+      while (queue.length > 0 && seen.size < 20000) {
+        const fiber = queue.shift();
+        if (fiber === null || typeof fiber !== 'object' || seen.has(fiber)) continue;
+        seen.add(fiber);
+        const props = fiber.memoizedProps;
+        if (
+          props !== null &&
+          typeof props === 'object' &&
+          props.store !== undefined &&
+          typeof props.store.getState === 'function'
+        ) {
+          return props.store;
+        }
+        if (fiber.child) queue.push(fiber.child);
+        if (fiber.sibling) queue.push(fiber.sibling);
+      }
+      return null;
+    };
+
+    const store = findStore();
+    if (store === null) return { available: false, reason: 'no Redux store in the fiber tree' };
+    let json;
+    try {
+      json = JSON.stringify(store.getState());
+    } catch {
+      return { available: false, reason: 'state not serialisable' };
+    }
+    return {
+      available: true,
+      bytes: json.length,
+      keys: Object.keys(store.getState()),
+      containsFixtureMarker: json.includes('The quick brown fox jumps over the lazy dog 0123456789.'),
+      containsLine99999: json.includes('line-99999:'),
+    };
+  };
+
   /* ------------------------------------------------------------------ *
    * Long Tasks (test instrumentation only)
    * ------------------------------------------------------------------ */

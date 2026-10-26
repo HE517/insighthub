@@ -1,0 +1,5545 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-26T02:50:04.382Z",
+  "evidenceType": "current baseline; no PASS/FAIL thresholds",
+  "caution": "Long Tasks and input timings are test instrumentation, not production telemetry. Local host only; production performance NOT VERIFIED.",
+  "git": {
+    "commit": "01d3963b1fee09dd61878883824464b9e48a7910",
+    "shortCommit": "01d3963",
+    "branch": "main",
+    "status": "M tests/perf/instrument.mjs\n M tests/perf/run.mjs"
+  },
+  "host": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "version": "Windows 11 Home China",
+    "arch": "x64",
+    "cpuModel": "13th Gen Intel(R) Core(TM) i5-1340P",
+    "logicalCpuCount": 16,
+    "totalMemoryBytes": 16890716160,
+    "node": "v22.14.0"
+  },
+  "chrome": {
+    "product": "Chrome/155.0.8059.85",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+    "jsVersion": "15.5.35.25",
+    "protocolVersion": "1.3",
+    "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "headless": true
+  },
+  "ports": {
+    "serverPort": 3301,
+    "webPort": 5183,
+    "appUrl": "http://127.0.0.1:5183/"
+  },
+  "urls": {
+    "app": "http://127.0.0.1:5183/",
+    "ws": "ws://127.0.0.1:5183/ws",
+    "server": "http://127.0.0.1:3301"
+  },
+  "fixture": {
+    "path": "tests/perf/fixtures/100k-lines.md",
+    "absolutePath": "D:\\前端\\react\\项目\\面试项目\\Insighthub\\tests\\perf\\fixtures\\100k-lines.md",
+    "lineCount": 100000,
+    "characters": 6788895,
+    "bytes": 6788895,
+    "sha256": "0d12688d13d4e956b5b5ddfa4dcd085e97cda184a0112c80d6a09cd0a3a5c46c",
+    "secondGenerationSha256": "0d12688d13d4e956b5b5ddfa4dcd085e97cda184a0112c80d6a09cd0a3a5c46c",
+    "deterministic": true,
+    "wroteFixture": false,
+    "observedOnDiskSha256": "0d12688d13d4e956b5b5ddfa4dcd085e97cda184a0112c80d6a09cd0a3a5c46c",
+    "lineTemplate": "line-<i>: The quick brown fox jumps over the lazy dog 0123456789.",
+    "trailingNewline": true
+  },
+  "seed": {
+    "documentId": "a6-perf-100k",
+    "characters": 6788895,
+    "updateBytes": 6788917,
+    "sequence": 1,
+    "dataPath": "D:\\dev-temp\\insighthub-a6-perf-100k-nYIKC4",
+    "journalMode": "wal"
+  },
+  "operationSequence": [
+    "pnpm build; pnpm typecheck; pnpm test",
+    "generate fixture twice and compare sha256",
+    "create temporary dataPath; openDocumentStore; Y.Doc getText(\"content\").insert(fixture); store.append; close",
+    "start real server and real Vite dev server",
+    "arrange demo-ada owner membership for a6-perf-100k",
+    "launch real Chrome; open app; wait for session; switch to a6-perf-100k",
+    "wait until EditorView text length == 6788895; hash editor text and compare",
+    "3 rounds x 100 real Input.insertText(\"x\") at document start",
+    "capture a Redux state snapshot and assert the 100k body is not mirrored into it",
+    "3 iterations setOffline(true) -> 250 ms -> setOffline(false) -> connected",
+    "collect Long Tasks, performance.memory, bundle sizes"
+  ],
+  "inputCounts": {
+    "rounds": 3,
+    "inputsPerRound": 100,
+    "totalInputSamples": 300,
+    "reconnectIterations": 3
+  },
+  "results": {
+    "ready": {
+      "durationMs": 6301,
+      "modelLength": 6788895,
+      "viewId": 2,
+      "cmContentCount": 1,
+      "cmEditorCount": 1,
+      "editorSha256": "0d12688d13d4e956b5b5ddfa4dcd085e97cda184a0112c80d6a09cd0a3a5c46c",
+      "shaMatchesFixture": true,
+      "navigationStartedAt": 1792983012601,
+      "readyAt": 1792983018902
+    },
+    "firstWebSocket": {
+      "connectedAt": 1792983018322,
+      "connectedAfterNavigationMs": 5721,
+      "transitions": [
+        {
+          "status": "connecting",
+          "at": 1792983018127
+        },
+        {
+          "status": "connected",
+          "at": 1792983018322
+        },
+        {
+          "status": "connecting",
+          "at": 1792983018462
+        },
+        {
+          "status": "connected",
+          "at": 1792983018502
+        }
+      ]
+    },
+    "input": {
+      "inputsPerRound": 100,
+      "rounds": 3,
+      "method": "beforeinput (capture) -> input listener on .cm-content (installed after CodeMirror, so after the editor transaction) -> next animation frame; measured inside the page with performance.now()",
+      "model": {
+        "count": 300,
+        "min": 250.6,
+        "p50": 262.9,
+        "p95": 459,
+        "max": 588.5
+      },
+      "nextFrame": {
+        "count": 300,
+        "min": 251.2,
+        "p50": 263.7,
+        "p95": 459.7,
+        "max": 589.8
+      },
+      "roundStats": [
+        {
+          "round": 1,
+          "sampleCount": 100,
+          "editorLengthBefore": 6788895,
+          "editorLengthAfter": 6788995,
+          "oneCharacterTransactions": 100,
+          "viewIdBefore": 2,
+          "viewIdAfter": 2,
+          "model": {
+            "count": 100,
+            "min": 250.6,
+            "p50": 256.6,
+            "p95": 276.4,
+            "max": 306.5
+          },
+          "nextFrame": {
+            "count": 100,
+            "min": 251.2,
+            "p50": 257.2,
+            "p95": 279.1,
+            "max": 308.5
+          },
+          "samples": [
+            {
+              "at": 1792983019224,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 276.4,
+              "inputToNextFrameMs": 279.1,
+              "count": 1
+            },
+            {
+              "at": 1792983019505,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 274.9,
+              "inputToNextFrameMs": 276.2,
+              "count": 2
+            },
+            {
+              "at": 1792983019789,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281,
+              "inputToNextFrameMs": 281.9,
+              "count": 3
+            },
+            {
+              "at": 1792983020315,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253,
+              "inputToNextFrameMs": 253.9,
+              "count": 4
+            },
+            {
+              "at": 1792983020839,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.8,
+              "inputToNextFrameMs": 259.6,
+              "count": 5
+            },
+            {
+              "at": 1792983021343,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.8,
+              "inputToNextFrameMs": 252.6,
+              "count": 6
+            },
+            {
+              "at": 1792983021858,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.2,
+              "inputToNextFrameMs": 253.9,
+              "count": 7
+            },
+            {
+              "at": 1792983022364,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.4,
+              "inputToNextFrameMs": 252.2,
+              "count": 8
+            },
+            {
+              "at": 1792983022872,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.9,
+              "inputToNextFrameMs": 256.8,
+              "count": 9
+            },
+            {
+              "at": 1792983023381,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 250.9,
+              "inputToNextFrameMs": 251.6,
+              "count": 10
+            },
+            {
+              "at": 1792983023885,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.5,
+              "inputToNextFrameMs": 254.2,
+              "count": 11
+            },
+            {
+              "at": 1792983024425,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.2,
+              "inputToNextFrameMs": 262,
+              "count": 12
+            },
+            {
+              "at": 1792983024943,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.7,
+              "inputToNextFrameMs": 263.4,
+              "count": 13
+            },
+            {
+              "at": 1792983025477,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.1,
+              "inputToNextFrameMs": 256.8,
+              "count": 14
+            },
+            {
+              "at": 1792983026012,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 269.3,
+              "inputToNextFrameMs": 270,
+              "count": 15
+            },
+            {
+              "at": 1792983026563,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.9,
+              "inputToNextFrameMs": 262.8,
+              "count": 16
+            },
+            {
+              "at": 1792983027080,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 260.2,
+              "inputToNextFrameMs": 261,
+              "count": 17
+            },
+            {
+              "at": 1792983027617,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 275.9,
+              "inputToNextFrameMs": 276.6,
+              "count": 18
+            },
+            {
+              "at": 1792983027881,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.1,
+              "inputToNextFrameMs": 261.6,
+              "count": 19
+            },
+            {
+              "at": 1792983028149,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 265.4,
+              "inputToNextFrameMs": 266.1,
+              "count": 20
+            },
+            {
+              "at": 1792983028414,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.9,
+              "inputToNextFrameMs": 263.7,
+              "count": 21
+            },
+            {
+              "at": 1792983028681,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 264.1,
+              "inputToNextFrameMs": 264.8,
+              "count": 22
+            },
+            {
+              "at": 1792983029204,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 264.4,
+              "inputToNextFrameMs": 265,
+              "count": 23
+            },
+            {
+              "at": 1792983029469,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.4,
+              "inputToNextFrameMs": 263.4,
+              "count": 24
+            },
+            {
+              "at": 1792983029730,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.6,
+              "inputToNextFrameMs": 258.2,
+              "count": 25
+            },
+            {
+              "at": 1792983030013,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 280.1,
+              "inputToNextFrameMs": 280.7,
+              "count": 26
+            },
+            {
+              "at": 1792983030274,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259.4,
+              "inputToNextFrameMs": 260.1,
+              "count": 27
+            },
+            {
+              "at": 1792983030788,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.4,
+              "inputToNextFrameMs": 256.2,
+              "count": 28
+            },
+            {
+              "at": 1792983031048,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.5,
+              "inputToNextFrameMs": 259.2,
+              "count": 29
+            },
+            {
+              "at": 1792983031306,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.4,
+              "inputToNextFrameMs": 256.1,
+              "count": 30
+            },
+            {
+              "at": 1792983031573,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 263.8,
+              "inputToNextFrameMs": 264.5,
+              "count": 31
+            },
+            {
+              "at": 1792983031829,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.6,
+              "inputToNextFrameMs": 254.3,
+              "count": 32
+            },
+            {
+              "at": 1792983032342,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256,
+              "inputToNextFrameMs": 256.7,
+              "count": 33
+            },
+            {
+              "at": 1792983032602,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.2,
+              "inputToNextFrameMs": 258.3,
+              "count": 34
+            },
+            {
+              "at": 1792983032862,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.6,
+              "inputToNextFrameMs": 257.3,
+              "count": 35
+            },
+            {
+              "at": 1792983033118,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.8,
+              "inputToNextFrameMs": 253.5,
+              "count": 36
+            },
+            {
+              "at": 1792983033373,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.7,
+              "inputToNextFrameMs": 253.4,
+              "count": 37
+            },
+            {
+              "at": 1792983033912,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 264.7,
+              "inputToNextFrameMs": 265.4,
+              "count": 38
+            },
+            {
+              "at": 1792983034166,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.4,
+              "inputToNextFrameMs": 253,
+              "count": 39
+            },
+            {
+              "at": 1792983034422,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.5,
+              "inputToNextFrameMs": 253.1,
+              "count": 40
+            },
+            {
+              "at": 1792983034679,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.6,
+              "inputToNextFrameMs": 255.4,
+              "count": 41
+            },
+            {
+              "at": 1792983034938,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.8,
+              "inputToNextFrameMs": 257.5,
+              "count": 42
+            },
+            {
+              "at": 1792983035193,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.7,
+              "inputToNextFrameMs": 253.4,
+              "count": 43
+            },
+            {
+              "at": 1792983035446,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 250.6,
+              "inputToNextFrameMs": 251.4,
+              "count": 44
+            },
+            {
+              "at": 1792983035970,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 270.2,
+              "inputToNextFrameMs": 271.1,
+              "count": 45
+            },
+            {
+              "at": 1792983036235,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.3,
+              "inputToNextFrameMs": 263.2,
+              "count": 46
+            },
+            {
+              "at": 1792983036518,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 279.4,
+              "inputToNextFrameMs": 280.1,
+              "count": 47
+            },
+            {
+              "at": 1792983036793,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 273.1,
+              "inputToNextFrameMs": 273.8,
+              "count": 48
+            },
+            {
+              "at": 1792983037057,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 260.6,
+              "inputToNextFrameMs": 261.3,
+              "count": 49
+            },
+            {
+              "at": 1792983037591,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 269.2,
+              "inputToNextFrameMs": 270,
+              "count": 50
+            },
+            {
+              "at": 1792983037857,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 264.2,
+              "inputToNextFrameMs": 264.8,
+              "count": 51
+            },
+            {
+              "at": 1792983038114,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.2,
+              "inputToNextFrameMs": 254.9,
+              "count": 52
+            },
+            {
+              "at": 1792983038374,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.1,
+              "inputToNextFrameMs": 258.7,
+              "count": 53
+            },
+            {
+              "at": 1792983038628,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.4,
+              "inputToNextFrameMs": 252,
+              "count": 54
+            },
+            {
+              "at": 1792983039141,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.4,
+              "inputToNextFrameMs": 256.2,
+              "count": 55
+            },
+            {
+              "at": 1792983039395,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.5,
+              "inputToNextFrameMs": 252.1,
+              "count": 56
+            },
+            {
+              "at": 1792983039653,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.4,
+              "inputToNextFrameMs": 256.2,
+              "count": 57
+            },
+            {
+              "at": 1792983039909,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.3,
+              "count": 58
+            },
+            {
+              "at": 1792983040167,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.6,
+              "inputToNextFrameMs": 255.6,
+              "count": 59
+            },
+            {
+              "at": 1792983040709,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 267.6,
+              "inputToNextFrameMs": 268.3,
+              "count": 60
+            },
+            {
+              "at": 1792983040975,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 264.1,
+              "inputToNextFrameMs": 265,
+              "count": 61
+            },
+            {
+              "at": 1792983041285,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 306.5,
+              "inputToNextFrameMs": 308.5,
+              "count": 62
+            },
+            {
+              "at": 1792983041559,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 269.6,
+              "inputToNextFrameMs": 270.1,
+              "count": 63
+            },
+            {
+              "at": 1792983041820,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259.5,
+              "inputToNextFrameMs": 260.6,
+              "count": 64
+            },
+            {
+              "at": 1792983042355,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 260.9,
+              "inputToNextFrameMs": 261.6,
+              "count": 65
+            },
+            {
+              "at": 1792983042612,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.8,
+              "inputToNextFrameMs": 255.5,
+              "count": 66
+            },
+            {
+              "at": 1792983042870,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.5,
+              "inputToNextFrameMs": 256.1,
+              "count": 67
+            },
+            {
+              "at": 1792983043131,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.4,
+              "inputToNextFrameMs": 259.1,
+              "count": 68
+            },
+            {
+              "at": 1792983043392,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259.1,
+              "inputToNextFrameMs": 259.7,
+              "count": 69
+            },
+            {
+              "at": 1792983043904,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.8,
+              "inputToNextFrameMs": 254.4,
+              "count": 70
+            },
+            {
+              "at": 1792983044163,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.7,
+              "inputToNextFrameMs": 257.2,
+              "count": 71
+            },
+            {
+              "at": 1792983044421,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.6,
+              "inputToNextFrameMs": 256.3,
+              "count": 72
+            },
+            {
+              "at": 1792983044696,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 271.7,
+              "inputToNextFrameMs": 272.5,
+              "count": 73
+            },
+            {
+              "at": 1792983044960,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261,
+              "inputToNextFrameMs": 261.7,
+              "count": 74
+            },
+            {
+              "at": 1792983045471,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.6,
+              "inputToNextFrameMs": 257.1,
+              "count": 75
+            },
+            {
+              "at": 1792983045736,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.9,
+              "inputToNextFrameMs": 263.8,
+              "count": 76
+            },
+            {
+              "at": 1792983045996,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.2,
+              "inputToNextFrameMs": 257.1,
+              "count": 77
+            },
+            {
+              "at": 1792983046255,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.6,
+              "inputToNextFrameMs": 257.1,
+              "count": 78
+            },
+            {
+              "at": 1792983046512,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.5,
+              "inputToNextFrameMs": 255.2,
+              "count": 79
+            },
+            {
+              "at": 1792983047089,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 265.9,
+              "inputToNextFrameMs": 266.5,
+              "count": 80
+            },
+            {
+              "at": 1792983047346,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.5,
+              "count": 81
+            },
+            {
+              "at": 1792983047601,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253,
+              "inputToNextFrameMs": 253.6,
+              "count": 82
+            },
+            {
+              "at": 1792983047856,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.8,
+              "inputToNextFrameMs": 252.5,
+              "count": 83
+            },
+            {
+              "at": 1792983048117,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.8,
+              "inputToNextFrameMs": 259.5,
+              "count": 84
+            },
+            {
+              "at": 1792983048374,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.9,
+              "inputToNextFrameMs": 254.6,
+              "count": 85
+            },
+            {
+              "at": 1792983048630,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.5,
+              "inputToNextFrameMs": 254.1,
+              "count": 86
+            },
+            {
+              "at": 1792983049136,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.9,
+              "inputToNextFrameMs": 255.7,
+              "count": 87
+            },
+            {
+              "at": 1792983049389,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 250.6,
+              "inputToNextFrameMs": 251.2,
+              "count": 88
+            },
+            {
+              "at": 1792983049646,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.3,
+              "count": 89
+            },
+            {
+              "at": 1792983049901,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253,
+              "inputToNextFrameMs": 253.9,
+              "count": 90
+            },
+            {
+              "at": 1792983050159,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.1,
+              "inputToNextFrameMs": 255.7,
+              "count": 91
+            },
+            {
+              "at": 1792983050664,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.9,
+              "inputToNextFrameMs": 252.6,
+              "count": 92
+            },
+            {
+              "at": 1792983051180,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.2,
+              "inputToNextFrameMs": 258,
+              "count": 93
+            },
+            {
+              "at": 1792983051687,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.9,
+              "inputToNextFrameMs": 256.7,
+              "count": 94
+            },
+            {
+              "at": 1792983052270,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 292.5,
+              "inputToNextFrameMs": 293.2,
+              "count": 95
+            },
+            {
+              "at": 1792983052787,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.5,
+              "inputToNextFrameMs": 258.1,
+              "count": 96
+            },
+            {
+              "at": 1792983053304,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258,
+              "inputToNextFrameMs": 258.8,
+              "count": 97
+            },
+            {
+              "at": 1792983053808,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.2,
+              "inputToNextFrameMs": 251.9,
+              "count": 98
+            },
+            {
+              "at": 1792983054316,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.6,
+              "inputToNextFrameMs": 256.4,
+              "count": 99
+            },
+            {
+              "at": 1792983054820,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254,
+              "inputToNextFrameMs": 254.8,
+              "count": 100
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "sampleCount": 100,
+          "editorLengthBefore": 6788995,
+          "editorLengthAfter": 6789095,
+          "oneCharacterTransactions": 100,
+          "viewIdBefore": 2,
+          "viewIdAfter": 2,
+          "model": {
+            "count": 100,
+            "min": 250.7,
+            "p50": 257.7,
+            "p95": 281.9,
+            "max": 329.9
+          },
+          "nextFrame": {
+            "count": 100,
+            "min": 251.4,
+            "p50": 258.4,
+            "p95": 282.6,
+            "max": 330.6
+          },
+          "samples": [
+            {
+              "at": 1792983055356,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 271.5,
+              "inputToNextFrameMs": 272.1,
+              "count": 1
+            },
+            {
+              "at": 1792983055624,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 265.2,
+              "inputToNextFrameMs": 266,
+              "count": 2
+            },
+            {
+              "at": 1792983056135,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.2,
+              "inputToNextFrameMs": 258.2,
+              "count": 3
+            },
+            {
+              "at": 1792983056650,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.8,
+              "inputToNextFrameMs": 255.3,
+              "count": 4
+            },
+            {
+              "at": 1792983057157,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.1,
+              "inputToNextFrameMs": 256.8,
+              "count": 5
+            },
+            {
+              "at": 1792983057742,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 265.1,
+              "inputToNextFrameMs": 265.6,
+              "count": 6
+            },
+            {
+              "at": 1792983058249,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.9,
+              "inputToNextFrameMs": 255.4,
+              "count": 7
+            },
+            {
+              "at": 1792983058505,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.1,
+              "inputToNextFrameMs": 254.7,
+              "count": 8
+            },
+            {
+              "at": 1792983058760,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.8,
+              "inputToNextFrameMs": 253.5,
+              "count": 9
+            },
+            {
+              "at": 1792983059295,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.3,
+              "inputToNextFrameMs": 258.9,
+              "count": 10
+            },
+            {
+              "at": 1792983059551,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.6,
+              "inputToNextFrameMs": 255.3,
+              "count": 11
+            },
+            {
+              "at": 1792983059807,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.6,
+              "inputToNextFrameMs": 254.3,
+              "count": 12
+            },
+            {
+              "at": 1792983060069,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.9,
+              "inputToNextFrameMs": 259.9,
+              "count": 13
+            },
+            {
+              "at": 1792983060327,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.3,
+              "inputToNextFrameMs": 256,
+              "count": 14
+            },
+            {
+              "at": 1792983060835,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.3,
+              "inputToNextFrameMs": 254.1,
+              "count": 15
+            },
+            {
+              "at": 1792983061092,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.3,
+              "count": 16
+            },
+            {
+              "at": 1792983061346,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.2,
+              "inputToNextFrameMs": 252.9,
+              "count": 17
+            },
+            {
+              "at": 1792983061617,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 268.3,
+              "inputToNextFrameMs": 269,
+              "count": 18
+            },
+            {
+              "at": 1792983061875,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.8,
+              "inputToNextFrameMs": 255.5,
+              "count": 19
+            },
+            {
+              "at": 1792983062379,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.6,
+              "inputToNextFrameMs": 253.3,
+              "count": 20
+            },
+            {
+              "at": 1792983062653,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 272.7,
+              "inputToNextFrameMs": 273.7,
+              "count": 21
+            },
+            {
+              "at": 1792983062967,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 302.2,
+              "inputToNextFrameMs": 302.9,
+              "count": 22
+            },
+            {
+              "at": 1792983063232,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 263.5,
+              "inputToNextFrameMs": 264,
+              "count": 23
+            },
+            {
+              "at": 1792983063492,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.2,
+              "inputToNextFrameMs": 258.9,
+              "count": 24
+            },
+            {
+              "at": 1792983064004,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.9,
+              "inputToNextFrameMs": 255.6,
+              "count": 25
+            },
+            {
+              "at": 1792983064268,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.6,
+              "inputToNextFrameMs": 262.3,
+              "count": 26
+            },
+            {
+              "at": 1792983064533,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.5,
+              "inputToNextFrameMs": 263.1,
+              "count": 27
+            },
+            {
+              "at": 1792983064790,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.1,
+              "inputToNextFrameMs": 255.7,
+              "count": 28
+            },
+            {
+              "at": 1792983065048,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.6,
+              "inputToNextFrameMs": 256.3,
+              "count": 29
+            },
+            {
+              "at": 1792983065570,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.2,
+              "inputToNextFrameMs": 255.9,
+              "count": 30
+            },
+            {
+              "at": 1792983065828,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.7,
+              "inputToNextFrameMs": 256.4,
+              "count": 31
+            },
+            {
+              "at": 1792983066087,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.5,
+              "inputToNextFrameMs": 257.3,
+              "count": 32
+            },
+            {
+              "at": 1792983066345,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.4,
+              "inputToNextFrameMs": 256,
+              "count": 33
+            },
+            {
+              "at": 1792983066599,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.8,
+              "inputToNextFrameMs": 252.4,
+              "count": 34
+            },
+            {
+              "at": 1792983067108,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.9,
+              "inputToNextFrameMs": 252.6,
+              "count": 35
+            },
+            {
+              "at": 1792983067364,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.9,
+              "inputToNextFrameMs": 254.6,
+              "count": 36
+            },
+            {
+              "at": 1792983067623,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.9,
+              "inputToNextFrameMs": 257.5,
+              "count": 37
+            },
+            {
+              "at": 1792983067893,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 268.3,
+              "inputToNextFrameMs": 268.9,
+              "count": 38
+            },
+            {
+              "at": 1792983068225,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 329.9,
+              "inputToNextFrameMs": 330.6,
+              "count": 39
+            },
+            {
+              "at": 1792983068734,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.6,
+              "inputToNextFrameMs": 255.5,
+              "count": 40
+            },
+            {
+              "at": 1792983068994,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.4,
+              "inputToNextFrameMs": 257,
+              "count": 41
+            },
+            {
+              "at": 1792983069249,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.1,
+              "inputToNextFrameMs": 253.7,
+              "count": 42
+            },
+            {
+              "at": 1792983069504,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.9,
+              "inputToNextFrameMs": 253.6,
+              "count": 43
+            },
+            {
+              "at": 1792983069758,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.4,
+              "inputToNextFrameMs": 251.9,
+              "count": 44
+            },
+            {
+              "at": 1792983070266,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.8,
+              "inputToNextFrameMs": 252.5,
+              "count": 45
+            },
+            {
+              "at": 1792983070522,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.3,
+              "count": 46
+            },
+            {
+              "at": 1792983070777,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.2,
+              "inputToNextFrameMs": 252.9,
+              "count": 47
+            },
+            {
+              "at": 1792983071033,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254,
+              "inputToNextFrameMs": 254.7,
+              "count": 48
+            },
+            {
+              "at": 1792983071293,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.9,
+              "inputToNextFrameMs": 258.5,
+              "count": 49
+            },
+            {
+              "at": 1792983071804,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259.2,
+              "inputToNextFrameMs": 259.8,
+              "count": 50
+            },
+            {
+              "at": 1792983072061,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.2,
+              "inputToNextFrameMs": 255.9,
+              "count": 51
+            },
+            {
+              "at": 1792983072315,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.4,
+              "inputToNextFrameMs": 252,
+              "count": 52
+            },
+            {
+              "at": 1792983072590,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 265.5,
+              "inputToNextFrameMs": 266.3,
+              "count": 53
+            },
+            {
+              "at": 1792983072866,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 272.8,
+              "inputToNextFrameMs": 273.6,
+              "count": 54
+            },
+            {
+              "at": 1792983073450,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 310.6,
+              "inputToNextFrameMs": 311.3,
+              "count": 55
+            },
+            {
+              "at": 1792983073730,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 277.7,
+              "inputToNextFrameMs": 278.3,
+              "count": 56
+            },
+            {
+              "at": 1792983074008,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 275.5,
+              "inputToNextFrameMs": 276.1,
+              "count": 57
+            },
+            {
+              "at": 1792983074280,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 270,
+              "inputToNextFrameMs": 270.7,
+              "count": 58
+            },
+            {
+              "at": 1792983074564,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.9,
+              "inputToNextFrameMs": 282.6,
+              "count": 59
+            },
+            {
+              "at": 1792983074839,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 272.5,
+              "inputToNextFrameMs": 273.3,
+              "count": 60
+            },
+            {
+              "at": 1792983075112,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 270.6,
+              "inputToNextFrameMs": 271.2,
+              "count": 61
+            },
+            {
+              "at": 1792983075631,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.1,
+              "inputToNextFrameMs": 261.8,
+              "count": 62
+            },
+            {
+              "at": 1792983075887,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 253.7,
+              "inputToNextFrameMs": 254.4,
+              "count": 63
+            },
+            {
+              "at": 1792983076152,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 263.2,
+              "inputToNextFrameMs": 263.8,
+              "count": 64
+            },
+            {
+              "at": 1792983076412,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.9,
+              "inputToNextFrameMs": 258.6,
+              "count": 65
+            },
+            {
+              "at": 1792983076680,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 266,
+              "inputToNextFrameMs": 266.7,
+              "count": 66
+            },
+            {
+              "at": 1792983076948,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 263,
+              "inputToNextFrameMs": 263.6,
+              "count": 67
+            },
+            {
+              "at": 1792983077213,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.2,
+              "inputToNextFrameMs": 262.9,
+              "count": 68
+            },
+            {
+              "at": 1792983077733,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259.2,
+              "inputToNextFrameMs": 259.8,
+              "count": 69
+            },
+            {
+              "at": 1792983077992,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.5,
+              "inputToNextFrameMs": 257.6,
+              "count": 70
+            },
+            {
+              "at": 1792983078497,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 250.7,
+              "inputToNextFrameMs": 251.4,
+              "count": 71
+            },
+            {
+              "at": 1792983078807,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 308,
+              "inputToNextFrameMs": 308.6,
+              "count": 72
+            },
+            {
+              "at": 1792983079072,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.7,
+              "inputToNextFrameMs": 263.3,
+              "count": 73
+            },
+            {
+              "at": 1792983079332,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.7,
+              "inputToNextFrameMs": 258.4,
+              "count": 74
+            },
+            {
+              "at": 1792983079593,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 259,
+              "inputToNextFrameMs": 260.1,
+              "count": 75
+            },
+            {
+              "at": 1792983080106,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.7,
+              "inputToNextFrameMs": 255.2,
+              "count": 76
+            },
+            {
+              "at": 1792983080370,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262,
+              "inputToNextFrameMs": 262.5,
+              "count": 77
+            },
+            {
+              "at": 1792983080635,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.6,
+              "inputToNextFrameMs": 263.3,
+              "count": 78
+            },
+            {
+              "at": 1792983081138,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 251.7,
+              "inputToNextFrameMs": 252.5,
+              "count": 79
+            },
+            {
+              "at": 1792983081647,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.2,
+              "inputToNextFrameMs": 252.8,
+              "count": 80
+            },
+            {
+              "at": 1792983082160,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 260,
+              "inputToNextFrameMs": 261.2,
+              "count": 81
+            },
+            {
+              "at": 1792983082420,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.8,
+              "inputToNextFrameMs": 257.4,
+              "count": 82
+            },
+            {
+              "at": 1792983082930,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 252.9,
+              "inputToNextFrameMs": 253.6,
+              "count": 83
+            },
+            {
+              "at": 1792983083439,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.9,
+              "inputToNextFrameMs": 257.5,
+              "count": 84
+            },
+            {
+              "at": 1792983083950,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 255.5,
+              "inputToNextFrameMs": 256,
+              "count": 85
+            },
+            {
+              "at": 1792983084521,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.9,
+              "inputToNextFrameMs": 259.3,
+              "count": 86
+            },
+            {
+              "at": 1792983085040,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 257.8,
+              "inputToNextFrameMs": 258.5,
+              "count": 87
+            },
+            {
+              "at": 1792983085552,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 256.4,
+              "inputToNextFrameMs": 257,
+              "count": 88
+            },
+            {
+              "at": 1792983086061,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.3,
+              "inputToNextFrameMs": 255,
+              "count": 89
+            },
+            {
+              "at": 1792983086573,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 258.3,
+              "inputToNextFrameMs": 258.9,
+              "count": 90
+            },
+            {
+              "at": 1792983087083,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 254.6,
+              "inputToNextFrameMs": 255.2,
+              "count": 91
+            },
+            {
+              "at": 1792983087598,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 260.9,
+              "inputToNextFrameMs": 261.5,
+              "count": 92
+            },
+            {
+              "at": 1792983088113,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 261.1,
+              "inputToNextFrameMs": 261.7,
+              "count": 93
+            },
+            {
+              "at": 1792983088631,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.8,
+              "inputToNextFrameMs": 263.7,
+              "count": 94
+            },
+            {
+              "at": 1792983088896,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 263,
+              "inputToNextFrameMs": 263.6,
+              "count": 95
+            },
+            {
+              "at": 1792983089166,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 267.8,
+              "inputToNextFrameMs": 268.4,
+              "count": 96
+            },
+            {
+              "at": 1792983089757,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 277.3,
+              "inputToNextFrameMs": 278,
+              "count": 97
+            },
+            {
+              "at": 1792983090030,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 269.1,
+              "inputToNextFrameMs": 269.6,
+              "count": 98
+            },
+            {
+              "at": 1792983090300,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 266.9,
+              "inputToNextFrameMs": 267.6,
+              "count": 99
+            },
+            {
+              "at": 1792983090615,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 313.3,
+              "inputToNextFrameMs": 314,
+              "count": 100
+            }
+          ]
+        },
+        {
+          "round": 3,
+          "sampleCount": 100,
+          "editorLengthBefore": 6789095,
+          "editorLengthAfter": 6789195,
+          "oneCharacterTransactions": 100,
+          "viewIdBefore": 2,
+          "viewIdAfter": 2,
+          "model": {
+            "count": 100,
+            "min": 262.2,
+            "p50": 313.6,
+            "p95": 490,
+            "max": 588.5
+          },
+          "nextFrame": {
+            "count": 100,
+            "min": 262.9,
+            "p50": 314.4,
+            "p95": 491.1,
+            "max": 589.8
+          },
+          "samples": [
+            {
+              "at": 1792983090897,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 273,
+              "inputToNextFrameMs": 273.6,
+              "count": 1
+            },
+            {
+              "at": 1792983091187,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 287.3,
+              "inputToNextFrameMs": 287.9,
+              "count": 2
+            },
+            {
+              "at": 1792983091746,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 277.7,
+              "inputToNextFrameMs": 278.3,
+              "count": 3
+            },
+            {
+              "at": 1792983092020,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 271.5,
+              "inputToNextFrameMs": 272.1,
+              "count": 4
+            },
+            {
+              "at": 1792983092445,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 422,
+              "inputToNextFrameMs": 423,
+              "count": 5
+            },
+            {
+              "at": 1792983092902,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 453.5,
+              "inputToNextFrameMs": 454.1,
+              "count": 6
+            },
+            {
+              "at": 1792983093241,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 336.3,
+              "inputToNextFrameMs": 337,
+              "count": 7
+            },
+            {
+              "at": 1792983093773,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 262.2,
+              "inputToNextFrameMs": 262.9,
+              "count": 8
+            },
+            {
+              "at": 1792983094043,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 267.9,
+              "inputToNextFrameMs": 268.6,
+              "count": 9
+            },
+            {
+              "at": 1792983094327,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.9,
+              "inputToNextFrameMs": 282.8,
+              "count": 10
+            },
+            {
+              "at": 1792983094606,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 276,
+              "inputToNextFrameMs": 276.7,
+              "count": 11
+            },
+            {
+              "at": 1792983094968,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 360.3,
+              "inputToNextFrameMs": 360.9,
+              "count": 12
+            },
+            {
+              "at": 1792983095564,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 313.6,
+              "inputToNextFrameMs": 314.4,
+              "count": 13
+            },
+            {
+              "at": 1792983095846,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 278.2,
+              "inputToNextFrameMs": 278.9,
+              "count": 14
+            },
+            {
+              "at": 1792983096123,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 275,
+              "inputToNextFrameMs": 275.9,
+              "count": 15
+            },
+            {
+              "at": 1792983096406,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 280.2,
+              "inputToNextFrameMs": 280.9,
+              "count": 16
+            },
+            {
+              "at": 1792983096716,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 307.6,
+              "inputToNextFrameMs": 308.7,
+              "count": 17
+            },
+            {
+              "at": 1792983097349,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 316.1,
+              "inputToNextFrameMs": 316.8,
+              "count": 18
+            },
+            {
+              "at": 1792983097632,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.6,
+              "inputToNextFrameMs": 282.3,
+              "count": 19
+            },
+            {
+              "at": 1792983097916,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.2,
+              "inputToNextFrameMs": 281.9,
+              "count": 20
+            },
+            {
+              "at": 1792983098199,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 280.7,
+              "inputToNextFrameMs": 281.4,
+              "count": 21
+            },
+            {
+              "at": 1792983098485,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 283.1,
+              "inputToNextFrameMs": 283.9,
+              "count": 22
+            },
+            {
+              "at": 1792983098875,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 387.7,
+              "inputToNextFrameMs": 389,
+              "count": 23
+            },
+            {
+              "at": 1792983099301,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 422.3,
+              "inputToNextFrameMs": 423.3,
+              "count": 24
+            },
+            {
+              "at": 1792983100274,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 490,
+              "inputToNextFrameMs": 491.1,
+              "count": 25
+            },
+            {
+              "at": 1792983100659,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 379.9,
+              "inputToNextFrameMs": 381.3,
+              "count": 26
+            },
+            {
+              "at": 1792983101039,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 376,
+              "inputToNextFrameMs": 376.9,
+              "count": 27
+            },
+            {
+              "at": 1792983101419,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 376.6,
+              "inputToNextFrameMs": 377.2,
+              "count": 28
+            },
+            {
+              "at": 1792983101750,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 328.3,
+              "inputToNextFrameMs": 329.3,
+              "count": 29
+            },
+            {
+              "at": 1792983102112,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 359.2,
+              "inputToNextFrameMs": 360.5,
+              "count": 30
+            },
+            {
+              "at": 1792983102493,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 377.9,
+              "inputToNextFrameMs": 379.1,
+              "count": 31
+            },
+            {
+              "at": 1792983103048,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 550.2,
+              "inputToNextFrameMs": 551.7,
+              "count": 32
+            },
+            {
+              "at": 1792983103615,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 562.9,
+              "inputToNextFrameMs": 564.1,
+              "count": 33
+            },
+            {
+              "at": 1792983104525,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 445.4,
+              "inputToNextFrameMs": 446.6,
+              "count": 34
+            },
+            {
+              "at": 1792983104997,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 467.3,
+              "inputToNextFrameMs": 468.7,
+              "count": 35
+            },
+            {
+              "at": 1792983105469,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 468.3,
+              "inputToNextFrameMs": 469.3,
+              "count": 36
+            },
+            {
+              "at": 1792983106064,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 588.5,
+              "inputToNextFrameMs": 589.8,
+              "count": 37
+            },
+            {
+              "at": 1792983106650,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 578.8,
+              "inputToNextFrameMs": 579.9,
+              "count": 38
+            },
+            {
+              "at": 1792983107146,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 484.6,
+              "inputToNextFrameMs": 486.1,
+              "count": 39
+            },
+            {
+              "at": 1792983107617,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 466.3,
+              "inputToNextFrameMs": 467.1,
+              "count": 40
+            },
+            {
+              "at": 1792983108067,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 446.9,
+              "inputToNextFrameMs": 447.8,
+              "count": 41
+            },
+            {
+              "at": 1792983108535,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 464.7,
+              "inputToNextFrameMs": 466.1,
+              "count": 42
+            },
+            {
+              "at": 1792983109007,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 466.9,
+              "inputToNextFrameMs": 468.2,
+              "count": 43
+            },
+            {
+              "at": 1792983109937,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 484.2,
+              "inputToNextFrameMs": 485.7,
+              "count": 44
+            },
+            {
+              "at": 1792983110427,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 487.1,
+              "inputToNextFrameMs": 487.9,
+              "count": 45
+            },
+            {
+              "at": 1792983110821,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 388.7,
+              "inputToNextFrameMs": 389.4,
+              "count": 46
+            },
+            {
+              "at": 1792983111473,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 300.4,
+              "inputToNextFrameMs": 301.1,
+              "count": 47
+            },
+            {
+              "at": 1792983112231,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 438,
+              "inputToNextFrameMs": 438.6,
+              "count": 48
+            },
+            {
+              "at": 1792983112909,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 354.3,
+              "inputToNextFrameMs": 354.9,
+              "count": 49
+            },
+            {
+              "at": 1792983113708,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 407.8,
+              "inputToNextFrameMs": 409,
+              "count": 50
+            },
+            {
+              "at": 1792983114364,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 337.3,
+              "inputToNextFrameMs": 338.4,
+              "count": 51
+            },
+            {
+              "at": 1792983115098,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 401.1,
+              "inputToNextFrameMs": 401.8,
+              "count": 52
+            },
+            {
+              "at": 1792983115728,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 331.6,
+              "inputToNextFrameMs": 332.5,
+              "count": 53
+            },
+            {
+              "at": 1792983116360,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 320.8,
+              "inputToNextFrameMs": 321.5,
+              "count": 54
+            },
+            {
+              "at": 1792983117262,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 463,
+              "inputToNextFrameMs": 463.6,
+              "count": 55
+            },
+            {
+              "at": 1792983118416,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 495.6,
+              "inputToNextFrameMs": 496.4,
+              "count": 56
+            },
+            {
+              "at": 1792983118877,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 459,
+              "inputToNextFrameMs": 459.7,
+              "count": 57
+            },
+            {
+              "at": 1792983119216,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 336.1,
+              "inputToNextFrameMs": 337.1,
+              "count": 58
+            },
+            {
+              "at": 1792983119527,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 307.6,
+              "inputToNextFrameMs": 308.5,
+              "count": 59
+            },
+            {
+              "at": 1792983119819,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 288.8,
+              "inputToNextFrameMs": 289.6,
+              "count": 60
+            },
+            {
+              "at": 1792983120128,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 306.9,
+              "inputToNextFrameMs": 307.6,
+              "count": 61
+            },
+            {
+              "at": 1792983120429,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 298.8,
+              "inputToNextFrameMs": 299.7,
+              "count": 62
+            },
+            {
+              "at": 1792983120992,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.3,
+              "inputToNextFrameMs": 281.9,
+              "count": 63
+            },
+            {
+              "at": 1792983121266,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 270.3,
+              "inputToNextFrameMs": 271,
+              "count": 64
+            },
+            {
+              "at": 1792983121541,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 272.6,
+              "inputToNextFrameMs": 273.2,
+              "count": 65
+            },
+            {
+              "at": 1792983121811,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 268.1,
+              "inputToNextFrameMs": 268.7,
+              "count": 66
+            },
+            {
+              "at": 1792983122080,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 266.5,
+              "inputToNextFrameMs": 267.1,
+              "count": 67
+            },
+            {
+              "at": 1792983122633,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 270.8,
+              "inputToNextFrameMs": 271.6,
+              "count": 68
+            },
+            {
+              "at": 1792983123034,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 398.4,
+              "inputToNextFrameMs": 399,
+              "count": 69
+            },
+            {
+              "at": 1792983123337,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 300.8,
+              "inputToNextFrameMs": 301.5,
+              "count": 70
+            },
+            {
+              "at": 1792983123620,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 280.7,
+              "inputToNextFrameMs": 281.4,
+              "count": 71
+            },
+            {
+              "at": 1792983123890,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 268.1,
+              "inputToNextFrameMs": 268.8,
+              "count": 72
+            },
+            {
+              "at": 1792983124444,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 272.6,
+              "inputToNextFrameMs": 273.7,
+              "count": 73
+            },
+            {
+              "at": 1792983124725,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 276.9,
+              "inputToNextFrameMs": 277.7,
+              "count": 74
+            },
+            {
+              "at": 1792983125015,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 286.6,
+              "inputToNextFrameMs": 287.5,
+              "count": 75
+            },
+            {
+              "at": 1792983125298,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281,
+              "inputToNextFrameMs": 281.6,
+              "count": 76
+            },
+            {
+              "at": 1792983125575,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 275,
+              "inputToNextFrameMs": 277.1,
+              "count": 77
+            },
+            {
+              "at": 1792983125849,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 269.6,
+              "inputToNextFrameMs": 270.3,
+              "count": 78
+            },
+            {
+              "at": 1792983126133,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 281.7,
+              "inputToNextFrameMs": 282.7,
+              "count": 79
+            },
+            {
+              "at": 1792983126775,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 329.6,
+              "inputToNextFrameMs": 330.4,
+              "count": 80
+            },
+            {
+              "at": 1792983127077,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 298.9,
+              "inputToNextFrameMs": 299.5,
+              "count": 81
+            },
+            {
+              "at": 1792983127392,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 312.3,
+              "inputToNextFrameMs": 313.2,
+              "count": 82
+            },
+            {
+              "at": 1792983127675,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 280.1,
+              "inputToNextFrameMs": 280.8,
+              "count": 83
+            },
+            {
+              "at": 1792983127961,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 283.2,
+              "inputToNextFrameMs": 284.2,
+              "count": 84
+            },
+            {
+              "at": 1792983128655,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 318.3,
+              "inputToNextFrameMs": 319.6,
+              "count": 85
+            },
+            {
+              "at": 1792983129024,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 364.9,
+              "inputToNextFrameMs": 365.9,
+              "count": 86
+            },
+            {
+              "at": 1792983129351,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 323.1,
+              "inputToNextFrameMs": 323.7,
+              "count": 87
+            },
+            {
+              "at": 1792983129700,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 346.6,
+              "inputToNextFrameMs": 347.4,
+              "count": 88
+            },
+            {
+              "at": 1792983130021,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 318.4,
+              "inputToNextFrameMs": 319.2,
+              "count": 89
+            },
+            {
+              "at": 1792983130319,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 294.8,
+              "inputToNextFrameMs": 295.5,
+              "count": 90
+            },
+            {
+              "at": 1792983130612,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 291.1,
+              "inputToNextFrameMs": 291.8,
+              "count": 91
+            },
+            {
+              "at": 1792983131198,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 287.5,
+              "inputToNextFrameMs": 288.1,
+              "count": 92
+            },
+            {
+              "at": 1792983131556,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 354.7,
+              "inputToNextFrameMs": 355.3,
+              "count": 93
+            },
+            {
+              "at": 1792983131861,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 303.1,
+              "inputToNextFrameMs": 303.6,
+              "count": 94
+            },
+            {
+              "at": 1792983132150,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 286.2,
+              "inputToNextFrameMs": 286.9,
+              "count": 95
+            },
+            {
+              "at": 1792983132467,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 314.6,
+              "inputToNextFrameMs": 315.3,
+              "count": 96
+            },
+            {
+              "at": 1792983132761,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 283.5,
+              "inputToNextFrameMs": 284.1,
+              "count": 97
+            },
+            {
+              "at": 1792983133076,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 313.5,
+              "inputToNextFrameMs": 314.1,
+              "count": 98
+            },
+            {
+              "at": 1792983133730,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 369.1,
+              "inputToNextFrameMs": 370.1,
+              "count": 99
+            },
+            {
+              "at": 1792983134046,
+              "inputType": "insertText",
+              "dataLength": 1,
+              "inputToModelMs": 312.9,
+              "inputToNextFrameMs": 313.5,
+              "count": 100
+            }
+          ]
+        }
+      ],
+      "totalSamples": 300
+    },
+    "redux": {
+      "available": true,
+      "bytes": 241,
+      "keys": [
+        "connection",
+        "document",
+        "realtime"
+      ],
+      "containsFixtureMarker": false,
+      "containsLine99999": false
+    },
+    "reconnect": {
+      "iterations": 3,
+      "method": "window.__perf.setOffline(true) closes the live /ws socket and rewrites new /ws sockets to ws://127.0.0.1:9/ws; setOffline(false) restores; duration ends on the real connection-status badge becoming connected",
+      "restoreToConnectedMs": {
+        "count": 3,
+        "min": 771,
+        "p50": 772,
+        "p95": 772,
+        "max": 772
+      },
+      "offlineToConnectedMs": {
+        "count": 3,
+        "min": 1035,
+        "p50": 1036,
+        "p95": 1036,
+        "max": 1038
+      },
+      "offlineObservedMs": {
+        "count": 3,
+        "min": 3,
+        "p50": 5,
+        "p95": 5,
+        "max": 5
+      },
+      "samples": [
+        {
+          "iteration": 1,
+          "disconnectedStatus": "reconnecting",
+          "offlineObservedMs": 5,
+          "restoreToConnectedMs": 772,
+          "offlineToConnectedMs": 1038,
+          "connectedAt": 1792983135090
+        },
+        {
+          "iteration": 2,
+          "disconnectedStatus": "reconnecting",
+          "offlineObservedMs": 5,
+          "restoreToConnectedMs": 772,
+          "offlineToConnectedMs": 1036,
+          "connectedAt": 1792983136639
+        },
+        {
+          "iteration": 3,
+          "disconnectedStatus": "reconnecting",
+          "offlineObservedMs": 3,
+          "restoreToConnectedMs": 771,
+          "offlineToConnectedMs": 1035,
+          "connectedAt": 1792983138190
+        }
+      ]
+    },
+    "longTasks": {
+      "supported": true,
+      "instrumentation": "test-only PerformanceObserver({ type: \"longtask\", buffered: true }); not production telemetry",
+      "count": 399,
+      "totalDurationMs": 114626,
+      "maxDurationMs": 655,
+      "p50Ms": 262,
+      "p95Ms": 447,
+      "samples": [
+        {
+          "startTime": 5374.5,
+          "duration": 55,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983017982
+        },
+        {
+          "startTime": 5921,
+          "duration": 357,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983018528
+        },
+        {
+          "startTime": 6341.5,
+          "duration": 277,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983018949
+        },
+        {
+          "startTime": 6623.200000047684,
+          "duration": 275,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983019230
+        },
+        {
+          "startTime": 6901.5,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983019509
+        },
+        {
+          "startTime": 7184,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983019791
+        },
+        {
+          "startTime": 7455.5,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983020063
+        },
+        {
+          "startTime": 7710.300000071526,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983020317
+        },
+        {
+          "startTime": 7973.200000047684,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983020580
+        },
+        {
+          "startTime": 8234.100000023842,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983020841
+        },
+        {
+          "startTime": 8484.700000047684,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983021092
+        },
+        {
+          "startTime": 8738.300000071526,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983021345
+        },
+        {
+          "startTime": 8998.300000071526,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983021605
+        },
+        {
+          "startTime": 9253.5,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983021861
+        },
+        {
+          "startTime": 9505.899999976158,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983022113
+        },
+        {
+          "startTime": 9759.300000071526,
+          "duration": 249,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983022366
+        },
+        {
+          "startTime": 10009.200000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983022616
+        },
+        {
+          "startTime": 10268.899999976158,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983022876
+        },
+        {
+          "startTime": 10523.600000023842,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983023131
+        },
+        {
+          "startTime": 10776.100000023842,
+          "duration": 248,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983023383
+        },
+        {
+          "startTime": 11024.700000047684,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983023632
+        },
+        {
+          "startTime": 11280.399999976158,
+          "duration": 277,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983023887
+        },
+        {
+          "startTime": 11557.399999976158,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983024164
+        },
+        {
+          "startTime": 11820.300000071526,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983024427
+        },
+        {
+          "startTime": 12074,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983024681
+        },
+        {
+          "startTime": 12338.899999976158,
+          "duration": 275,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983024946
+        },
+        {
+          "startTime": 12614.700000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983025222
+        },
+        {
+          "startTime": 12872.5,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983025480
+        },
+        {
+          "startTime": 13136,
+          "duration": 269,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983025743
+        },
+        {
+          "startTime": 13407,
+          "duration": 287,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983026014
+        },
+        {
+          "startTime": 13694.399999976158,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983026301
+        },
+        {
+          "startTime": 13958.100000023842,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983026565
+        },
+        {
+          "startTime": 14213.100000023842,
+          "duration": 260,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983026820
+        },
+        {
+          "startTime": 14475.300000071526,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983027082
+        },
+        {
+          "startTime": 14734.899999976158,
+          "duration": 276,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983027342
+        },
+        {
+          "startTime": 15013.5,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983027621
+        },
+        {
+          "startTime": 15276.700000047684,
+          "duration": 265,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983027884
+        },
+        {
+          "startTime": 15544.700000047684,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983028152
+        },
+        {
+          "startTime": 15809.899999976158,
+          "duration": 264,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983028417
+        },
+        {
+          "startTime": 16075.899999976158,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983028683
+        },
+        {
+          "startTime": 16333.200000047684,
+          "duration": 264,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983028940
+        },
+        {
+          "startTime": 16600.5,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983029208
+        },
+        {
+          "startTime": 16866,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983029473
+        },
+        {
+          "startTime": 17126,
+          "duration": 280,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983029733
+        },
+        {
+          "startTime": 17408,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983030015
+        },
+        {
+          "startTime": 17669.200000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983030276
+        },
+        {
+          "startTime": 17925.700000047684,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983030533
+        },
+        {
+          "startTime": 18183.300000071526,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983030790
+        },
+        {
+          "startTime": 18444.399999976158,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983031051
+        },
+        {
+          "startTime": 18702.200000047684,
+          "duration": 264,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983031309
+        },
+        {
+          "startTime": 18968.700000047684,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983031576
+        },
+        {
+          "startTime": 19223.899999976158,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983031831
+        },
+        {
+          "startTime": 19479.899999976158,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983032087
+        },
+        {
+          "startTime": 19738.5,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983032346
+        },
+        {
+          "startTime": 19998.800000071526,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983032606
+        },
+        {
+          "startTime": 20258.200000047684,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983032865
+        },
+        {
+          "startTime": 20514,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983033121
+        },
+        {
+          "startTime": 20768.700000047684,
+          "duration": 271,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983033376
+        },
+        {
+          "startTime": 21040.600000023842,
+          "duration": 265,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983033648
+        },
+        {
+          "startTime": 21307.600000023842,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983033915
+        },
+        {
+          "startTime": 21562.5,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983034170
+        },
+        {
+          "startTime": 21817.600000023842,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983034425
+        },
+        {
+          "startTime": 22074.700000047684,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983034682
+        },
+        {
+          "startTime": 22333.600000023842,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983034941
+        },
+        {
+          "startTime": 22588.600000023842,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983035196
+        },
+        {
+          "startTime": 22841,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983035448
+        },
+        {
+          "startTime": 23093.200000047684,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983035700
+        },
+        {
+          "startTime": 23366.200000047684,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983035973
+        },
+        {
+          "startTime": 23631.600000023842,
+          "duration": 279,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983036239
+        },
+        {
+          "startTime": 23913.700000047684,
+          "duration": 273,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983036521
+        },
+        {
+          "startTime": 24189.5,
+          "duration": 260,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983036797
+        },
+        {
+          "startTime": 24451.800000071526,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983037059
+        },
+        {
+          "startTime": 24715.100000023842,
+          "duration": 269,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983037322
+        },
+        {
+          "startTime": 24986.700000047684,
+          "duration": 264,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983037594
+        },
+        {
+          "startTime": 25253,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983037860
+        },
+        {
+          "startTime": 25509.700000047684,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983038117
+        },
+        {
+          "startTime": 25770.600000023842,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983038378
+        },
+        {
+          "startTime": 26023.399999976158,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983038630
+        },
+        {
+          "startTime": 26279.100000023842,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983038886
+        },
+        {
+          "startTime": 26537,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983039144
+        },
+        {
+          "startTime": 26791.200000047684,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983039398
+        },
+        {
+          "startTime": 27049.300000071526,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983039656
+        },
+        {
+          "startTime": 27305.5,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983039913
+        },
+        {
+          "startTime": 27562.800000071526,
+          "duration": 272,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983040170
+        },
+        {
+          "startTime": 27834.899999976158,
+          "duration": 267,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983040442
+        },
+        {
+          "startTime": 28104.600000023842,
+          "duration": 264,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983040712
+        },
+        {
+          "startTime": 28371.5,
+          "duration": 306,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983040979
+        },
+        {
+          "startTime": 28682.700000047684,
+          "duration": 269,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983041290
+        },
+        {
+          "startTime": 28954.300000071526,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983041561
+        },
+        {
+          "startTime": 29216.100000023842,
+          "duration": 271,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983041823
+        },
+        {
+          "startTime": 29487.899999976158,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983042095
+        },
+        {
+          "startTime": 29751,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983042358
+        },
+        {
+          "startTime": 30008.100000023842,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983042615
+        },
+        {
+          "startTime": 30266,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983042873
+        },
+        {
+          "startTime": 30526.800000071526,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983043134
+        },
+        {
+          "startTime": 30787.700000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983043395
+        },
+        {
+          "startTime": 31044.200000047684,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983043651
+        },
+        {
+          "startTime": 31300.100000023842,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983043907
+        },
+        {
+          "startTime": 31558.700000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983044166
+        },
+        {
+          "startTime": 31817.600000023842,
+          "duration": 272,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983044425
+        },
+        {
+          "startTime": 32092.300000071526,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983044699
+        },
+        {
+          "startTime": 32354.5,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983044962
+        },
+        {
+          "startTime": 32608.300000071526,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983045215
+        },
+        {
+          "startTime": 32866.89999997616,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983045474
+        },
+        {
+          "startTime": 33132.800000071526,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983045740
+        },
+        {
+          "startTime": 33391.800000071526,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983045999
+        },
+        {
+          "startTime": 33650.60000002384,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983046258
+        },
+        {
+          "startTime": 33906.700000047684,
+          "duration": 309,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983046514
+        },
+        {
+          "startTime": 34216.200000047684,
+          "duration": 266,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983046823
+        },
+        {
+          "startTime": 34485.39999997616,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983047092
+        },
+        {
+          "startTime": 34741.200000047684,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983047348
+        },
+        {
+          "startTime": 34997.39999997616,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983047604
+        },
+        {
+          "startTime": 35251.700000047684,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983047859
+        },
+        {
+          "startTime": 35513.700000047684,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983048121
+        },
+        {
+          "startTime": 35769.800000071526,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983048377
+        },
+        {
+          "startTime": 36024.89999997616,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983048632
+        },
+        {
+          "startTime": 36275.10000002384,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983048882
+        },
+        {
+          "startTime": 36532.200000047684,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983049139
+        },
+        {
+          "startTime": 36785.5,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983049393
+        },
+        {
+          "startTime": 37041.60000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983049649
+        },
+        {
+          "startTime": 37297.5,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983049905
+        },
+        {
+          "startTime": 37554,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983050161
+        },
+        {
+          "startTime": 37806,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983050413
+        },
+        {
+          "startTime": 38059.60000002384,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983050667
+        },
+        {
+          "startTime": 38315.89999997616,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983050923
+        },
+        {
+          "startTime": 38575,
+          "duration": 249,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983051182
+        },
+        {
+          "startTime": 38825,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983051432
+        },
+        {
+          "startTime": 39082.700000047684,
+          "duration": 288,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983051690
+        },
+        {
+          "startTime": 39370.89999997616,
+          "duration": 292,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983051978
+        },
+        {
+          "startTime": 39665.10000002384,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983052272
+        },
+        {
+          "startTime": 39923,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983052530
+        },
+        {
+          "startTime": 40182.5,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983052790
+        },
+        {
+          "startTime": 40439.800000071526,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983053047
+        },
+        {
+          "startTime": 40699.60000002384,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983053307
+        },
+        {
+          "startTime": 40950.200000047684,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983053557
+        },
+        {
+          "startTime": 41203.10000002384,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983053810
+        },
+        {
+          "startTime": 41454,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983054061
+        },
+        {
+          "startTime": 41711.39999997616,
+          "duration": 247,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983054318
+        },
+        {
+          "startTime": 41959.200000047684,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983054566
+        },
+        {
+          "startTime": 42214.800000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983054822
+        },
+        {
+          "startTime": 42478,
+          "duration": 271,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983055085
+        },
+        {
+          "startTime": 42752.10000002384,
+          "duration": 265,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983055359
+        },
+        {
+          "startTime": 43019,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983055626
+        },
+        {
+          "startTime": 43270.89999997616,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983055878
+        },
+        {
+          "startTime": 43531.5,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983056139
+        },
+        {
+          "startTime": 43788.800000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983056396
+        },
+        {
+          "startTime": 44045,
+          "duration": 249,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983056652
+        },
+        {
+          "startTime": 44294.39999997616,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983056901
+        },
+        {
+          "startTime": 44552.300000071526,
+          "duration": 318,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983057159
+        },
+        {
+          "startTime": 44871,
+          "duration": 265,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983057478
+        },
+        {
+          "startTime": 45137.300000071526,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983057744
+        },
+        {
+          "startTime": 45387.5,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983057995
+        },
+        {
+          "startTime": 45644.39999997616,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983058251
+        },
+        {
+          "startTime": 45900.60000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983058508
+        },
+        {
+          "startTime": 46155.200000047684,
+          "duration": 274,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983058762
+        },
+        {
+          "startTime": 46429.800000071526,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983059037
+        },
+        {
+          "startTime": 46690,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983059297
+        },
+        {
+          "startTime": 46947.39999997616,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983059554
+        },
+        {
+          "startTime": 47203.300000071526,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983059810
+        },
+        {
+          "startTime": 47465.10000002384,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983060072
+        },
+        {
+          "startTime": 47722.10000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983060329
+        },
+        {
+          "startTime": 47975.39999997616,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983060582
+        },
+        {
+          "startTime": 48231.89999997616,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983060839
+        },
+        {
+          "startTime": 48487.700000047684,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983061095
+        },
+        {
+          "startTime": 48742.5,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983061350
+        },
+        {
+          "startTime": 49013.300000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983061620
+        },
+        {
+          "startTime": 49269.800000071526,
+          "duration": 249,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983061877
+        },
+        {
+          "startTime": 49519.60000002384,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983062127
+        },
+        {
+          "startTime": 49774.300000071526,
+          "duration": 273,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983062381
+        },
+        {
+          "startTime": 50057.89999997616,
+          "duration": 302,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983062665
+        },
+        {
+          "startTime": 50362.200000047684,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983062969
+        },
+        {
+          "startTime": 50627.800000071526,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983063235
+        },
+        {
+          "startTime": 50887.39999997616,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983063494
+        },
+        {
+          "startTime": 51142.39999997616,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983063749
+        },
+        {
+          "startTime": 51399.60000002384,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983064007
+        },
+        {
+          "startTime": 51663.89999997616,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983064271
+        },
+        {
+          "startTime": 51928.800000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983064536
+        },
+        {
+          "startTime": 52185.800000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983064793
+        },
+        {
+          "startTime": 52442.89999997616,
+          "duration": 265,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983065050
+        },
+        {
+          "startTime": 52708.200000047684,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983065315
+        },
+        {
+          "startTime": 52965.60000002384,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983065573
+        },
+        {
+          "startTime": 53223.60000002384,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983065831
+        },
+        {
+          "startTime": 53483,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983066090
+        },
+        {
+          "startTime": 53740.60000002384,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983066348
+        },
+        {
+          "startTime": 53993.800000071526,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983066601
+        },
+        {
+          "startTime": 54249.300000071526,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983066856
+        },
+        {
+          "startTime": 54503.700000047684,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983067111
+        },
+        {
+          "startTime": 54759.89999997616,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983067367
+        },
+        {
+          "startTime": 55018.700000047684,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983067626
+        },
+        {
+          "startTime": 55288.89999997616,
+          "duration": 330,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983067896
+        },
+        {
+          "startTime": 55620.60000002384,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983068228
+        },
+        {
+          "startTime": 55873.300000071526,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983068480
+        },
+        {
+          "startTime": 56130.800000071526,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983068738
+        },
+        {
+          "startTime": 56389.39999997616,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983068996
+        },
+        {
+          "startTime": 56644.60000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983069252
+        },
+        {
+          "startTime": 56899.700000047684,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983069507
+        },
+        {
+          "startTime": 57152.60000002384,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983069760
+        },
+        {
+          "startTime": 57407.700000047684,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983070015
+        },
+        {
+          "startTime": 57661.800000071526,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983070269
+        },
+        {
+          "startTime": 57918,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983070525
+        },
+        {
+          "startTime": 58172.39999997616,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983070779
+        },
+        {
+          "startTime": 58428.5,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983071036
+        },
+        {
+          "startTime": 58688,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983071295
+        },
+        {
+          "startTime": 58938.200000047684,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983071545
+        },
+        {
+          "startTime": 59199.60000002384,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983071807
+        },
+        {
+          "startTime": 59457.200000047684,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983072064
+        },
+        {
+          "startTime": 59710.700000047684,
+          "duration": 266,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983072318
+        },
+        {
+          "startTime": 59979.700000047684,
+          "duration": 273,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983072587
+        },
+        {
+          "startTime": 60254.5,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983072862
+        },
+        {
+          "startTime": 60525.200000047684,
+          "duration": 311,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983073132
+        },
+        {
+          "startTime": 60838.200000047684,
+          "duration": 278,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983073445
+        },
+        {
+          "startTime": 61118.300000071526,
+          "duration": 275,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983073725
+        },
+        {
+          "startTime": 61396.200000047684,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983074003
+        },
+        {
+          "startTime": 61668.300000071526,
+          "duration": 282,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983074275
+        },
+        {
+          "startTime": 61952.5,
+          "duration": 272,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983074560
+        },
+        {
+          "startTime": 62227.800000071526,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983074835
+        },
+        {
+          "startTime": 62500,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983075107
+        },
+        {
+          "startTime": 62755.700000047684,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983075363
+        },
+        {
+          "startTime": 63019,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983075626
+        },
+        {
+          "startTime": 63275,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983075882
+        },
+        {
+          "startTime": 63540,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983076147
+        },
+        {
+          "startTime": 63800.300000071526,
+          "duration": 266,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983076407
+        },
+        {
+          "startTime": 64071,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983076678
+        },
+        {
+          "startTime": 64336.89999997616,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983076944
+        },
+        {
+          "startTime": 64600.39999997616,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983077207
+        },
+        {
+          "startTime": 64860.10000002384,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983077467
+        },
+        {
+          "startTime": 65121.700000047684,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983077729
+        },
+        {
+          "startTime": 65380.60000002384,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983077988
+        },
+        {
+          "startTime": 65632.20000004768,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983078239
+        },
+        {
+          "startTime": 65885.39999997616,
+          "duration": 308,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983078492
+        },
+        {
+          "startTime": 66195.5,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983078803
+        },
+        {
+          "startTime": 66460.39999997616,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983079067
+        },
+        {
+          "startTime": 66720.20000004768,
+          "duration": 259,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983079327
+        },
+        {
+          "startTime": 66981.5,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983079589
+        },
+        {
+          "startTime": 67237.10000002384,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983079844
+        },
+        {
+          "startTime": 67493.89999997616,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983080101
+        },
+        {
+          "startTime": 67758.39999997616,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983080365
+        },
+        {
+          "startTime": 68022.60000002384,
+          "duration": 250,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983080630
+        },
+        {
+          "startTime": 68272.80000007153,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983080880
+        },
+        {
+          "startTime": 68526.30000007153,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983081133
+        },
+        {
+          "startTime": 68780.80000007153,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983081388
+        },
+        {
+          "startTime": 69034.70000004768,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983081642
+        },
+        {
+          "startTime": 69285.89999997616,
+          "duration": 260,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983081893
+        },
+        {
+          "startTime": 69549,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983082156
+        },
+        {
+          "startTime": 69807.30000007153,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983082414
+        },
+        {
+          "startTime": 70063.60000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983082671
+        },
+        {
+          "startTime": 70318.10000002384,
+          "duration": 249,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983082925
+        },
+        {
+          "startTime": 70567.89999997616,
+          "duration": 257,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983083175
+        },
+        {
+          "startTime": 70826.39999997616,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983083433
+        },
+        {
+          "startTime": 71080.30000007153,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983083687
+        },
+        {
+          "startTime": 71337.60000002384,
+          "duration": 311,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983083945
+        },
+        {
+          "startTime": 71648.89999997616,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983084256
+        },
+        {
+          "startTime": 71909.70000004768,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983084517
+        },
+        {
+          "startTime": 72168.5,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983084776
+        },
+        {
+          "startTime": 72428,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983085035
+        },
+        {
+          "startTime": 72681.89999997616,
+          "duration": 256,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983085289
+        },
+        {
+          "startTime": 72940.10000002384,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983085547
+        },
+        {
+          "startTime": 73193.20000004768,
+          "duration": 254,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983085800
+        },
+        {
+          "startTime": 73449.10000002384,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983086056
+        },
+        {
+          "startTime": 73701,
+          "duration": 258,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983086308
+        },
+        {
+          "startTime": 73962,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983086569
+        },
+        {
+          "startTime": 74214.70000004768,
+          "duration": 255,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983086822
+        },
+        {
+          "startTime": 74470.89999997616,
+          "duration": 252,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983087078
+        },
+        {
+          "startTime": 74723.39999997616,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983087330
+        },
+        {
+          "startTime": 74986.39999997616,
+          "duration": 251,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983087593
+        },
+        {
+          "startTime": 75238.10000002384,
+          "duration": 261,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983087845
+        },
+        {
+          "startTime": 75500.80000007153,
+          "duration": 253,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983088108
+        },
+        {
+          "startTime": 75754,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983088361
+        },
+        {
+          "startTime": 76019.60000002384,
+          "duration": 263,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983088627
+        },
+        {
+          "startTime": 76284.5,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983088892
+        },
+        {
+          "startTime": 76553.89999997616,
+          "duration": 312,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983089161
+        },
+        {
+          "startTime": 76866.30000007153,
+          "duration": 277,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983089473
+        },
+        {
+          "startTime": 77147.30000007153,
+          "duration": 269,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983089754
+        },
+        {
+          "startTime": 77418.80000007153,
+          "duration": 267,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983090026
+        },
+        {
+          "startTime": 77687.80000007153,
+          "duration": 313,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983090295
+        },
+        {
+          "startTime": 78010.20000004768,
+          "duration": 273,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983090617
+        },
+        {
+          "startTime": 78285.89999997616,
+          "duration": 287,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983090893
+        },
+        {
+          "startTime": 78574.89999997616,
+          "duration": 279,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983091182
+        },
+        {
+          "startTime": 78854.60000002384,
+          "duration": 278,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983091462
+        },
+        {
+          "startTime": 79134.89999997616,
+          "duration": 271,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983091742
+        },
+        {
+          "startTime": 79409.20000004768,
+          "duration": 422,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983092016
+        },
+        {
+          "startTime": 79834.60000002384,
+          "duration": 453,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983092442
+        },
+        {
+          "startTime": 80290.60000002384,
+          "duration": 336,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983092898
+        },
+        {
+          "startTime": 80628.70000004768,
+          "duration": 267,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983093236
+        },
+        {
+          "startTime": 80896.5,
+          "duration": 262,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983093504
+        },
+        {
+          "startTime": 81161,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983093768
+        },
+        {
+          "startTime": 81431.39999997616,
+          "duration": 282,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983094038
+        },
+        {
+          "startTime": 81715.80000007153,
+          "duration": 276,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983094323
+        },
+        {
+          "startTime": 81993.80000007153,
+          "duration": 360,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983094601
+        },
+        {
+          "startTime": 82355.60000002384,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983094963
+        },
+        {
+          "startTime": 82636.70000004768,
+          "duration": 314,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983095244
+        },
+        {
+          "startTime": 82953.60000002384,
+          "duration": 278,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983095561
+        },
+        {
+          "startTime": 83234.20000004768,
+          "duration": 275,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983095841
+        },
+        {
+          "startTime": 83512.20000004768,
+          "duration": 280,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983096119
+        },
+        {
+          "startTime": 83794.80000007153,
+          "duration": 308,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983096402
+        },
+        {
+          "startTime": 84104.80000007153,
+          "duration": 313,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983096712
+        },
+        {
+          "startTime": 84418.5,
+          "duration": 316,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983097026
+        },
+        {
+          "startTime": 84736.70000004768,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983097344
+        },
+        {
+          "startTime": 85020.60000002384,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983097628
+        },
+        {
+          "startTime": 85304.10000002384,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983097911
+        },
+        {
+          "startTime": 85587.5,
+          "duration": 283,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983098195
+        },
+        {
+          "startTime": 85873.20000004768,
+          "duration": 388,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983098480
+        },
+        {
+          "startTime": 86264.70000004768,
+          "duration": 422,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983098872
+        },
+        {
+          "startTime": 86689.39999997616,
+          "duration": 480,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983099296
+        },
+        {
+          "startTime": 87170.39999997616,
+          "duration": 490,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983099777
+        },
+        {
+          "startTime": 87664.70000004768,
+          "duration": 380,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983100272
+        },
+        {
+          "startTime": 88048.89999997616,
+          "duration": 376,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983100656
+        },
+        {
+          "startTime": 88428.39999997616,
+          "duration": 376,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983101035
+        },
+        {
+          "startTime": 88807.60000002384,
+          "duration": 328,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983101415
+        },
+        {
+          "startTime": 89139.20000004768,
+          "duration": 359,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983101746
+        },
+        {
+          "startTime": 89501.70000004768,
+          "duration": 378,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983102109
+        },
+        {
+          "startTime": 89883.39999997616,
+          "duration": 550,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983102490
+        },
+        {
+          "startTime": 90438.10000002384,
+          "duration": 563,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983103045
+        },
+        {
+          "startTime": 91003.70000004768,
+          "duration": 462,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983103611
+        },
+        {
+          "startTime": 91465.89999997616,
+          "duration": 445,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983104073
+        },
+        {
+          "startTime": 91915.30000007153,
+          "duration": 467,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983104522
+        },
+        {
+          "startTime": 92386.39999997616,
+          "duration": 468,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983104993
+        },
+        {
+          "startTime": 92861,
+          "duration": 589,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983105468
+        },
+        {
+          "startTime": 93457.20000004768,
+          "duration": 579,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983106064
+        },
+        {
+          "startTime": 94047.39999997616,
+          "duration": 485,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983106654
+        },
+        {
+          "startTime": 94536.89999997616,
+          "duration": 466,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983107144
+        },
+        {
+          "startTime": 95006.10000002384,
+          "duration": 447,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983107613
+        },
+        {
+          "startTime": 95456,
+          "duration": 465,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983108063
+        },
+        {
+          "startTime": 95925.89999997616,
+          "duration": 467,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983108533
+        },
+        {
+          "startTime": 96396.60000002384,
+          "duration": 441,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983109004
+        },
+        {
+          "startTime": 96838.5,
+          "duration": 484,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983109446
+        },
+        {
+          "startTime": 97326.39999997616,
+          "duration": 487,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983109933
+        },
+        {
+          "startTime": 97818.20000004768,
+          "duration": 389,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983110425
+        },
+        {
+          "startTime": 98208.60000002384,
+          "duration": 350,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983110816
+        },
+        {
+          "startTime": 98559,
+          "duration": 300,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983111166
+        },
+        {
+          "startTime": 98861.20000004768,
+          "duration": 317,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983111468
+        },
+        {
+          "startTime": 99179.10000002384,
+          "duration": 438,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983111786
+        },
+        {
+          "startTime": 99618.89999997616,
+          "duration": 321,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983112226
+        },
+        {
+          "startTime": 99940.89999997616,
+          "duration": 354,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983112548
+        },
+        {
+          "startTime": 100297.80000007153,
+          "duration": 388,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983112905
+        },
+        {
+          "startTime": 100686.70000004768,
+          "duration": 408,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983113294
+        },
+        {
+          "startTime": 101097.60000002384,
+          "duration": 315,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983113705
+        },
+        {
+          "startTime": 101412.89999997616,
+          "duration": 337,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983114020
+        },
+        {
+          "startTime": 101752.60000002384,
+          "duration": 330,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983114360
+        },
+        {
+          "startTime": 102083,
+          "duration": 401,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983114690
+        },
+        {
+          "startTime": 102485.89999997616,
+          "duration": 296,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983115093
+        },
+        {
+          "startTime": 102782.39999997616,
+          "duration": 332,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983115389
+        },
+        {
+          "startTime": 103116.10000002384,
+          "duration": 309,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983115723
+        },
+        {
+          "startTime": 103425.80000007153,
+          "duration": 321,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983116033
+        },
+        {
+          "startTime": 103748.30000007153,
+          "duration": 436,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983116355
+        },
+        {
+          "startTime": 104184.80000007153,
+          "duration": 463,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983116792
+        },
+        {
+          "startTime": 104650.30000007153,
+          "duration": 655,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983117257
+        },
+        {
+          "startTime": 105306.20000004768,
+          "duration": 496,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983117913
+        },
+        {
+          "startTime": 105804.60000002384,
+          "duration": 459,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983118412
+        },
+        {
+          "startTime": 106266.39999997616,
+          "duration": 336,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983118873
+        },
+        {
+          "startTime": 106605.5,
+          "duration": 308,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983119213
+        },
+        {
+          "startTime": 106916.30000007153,
+          "duration": 289,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983119523
+        },
+        {
+          "startTime": 107207.39999997616,
+          "duration": 307,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983119814
+        },
+        {
+          "startTime": 107516.80000007153,
+          "duration": 299,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983120124
+        },
+        {
+          "startTime": 107817.70000004768,
+          "duration": 278,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983120425
+        },
+        {
+          "startTime": 108096.60000002384,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983120704
+        },
+        {
+          "startTime": 108381.39999997616,
+          "duration": 270,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983120988
+        },
+        {
+          "startTime": 108654.10000002384,
+          "duration": 272,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983121261
+        },
+        {
+          "startTime": 108929.30000007153,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983121536
+        },
+        {
+          "startTime": 109199.60000002384,
+          "duration": 266,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983121807
+        },
+        {
+          "startTime": 109467.89999997616,
+          "duration": 280,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983122075
+        },
+        {
+          "startTime": 109748.10000002384,
+          "duration": 271,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983122355
+        },
+        {
+          "startTime": 110021.70000004768,
+          "duration": 398,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983122629
+        },
+        {
+          "startTime": 110422.10000002384,
+          "duration": 301,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983123029
+        },
+        {
+          "startTime": 110725.20000004768,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983123332
+        },
+        {
+          "startTime": 111008.20000004768,
+          "duration": 268,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983123615
+        },
+        {
+          "startTime": 111277.89999997616,
+          "duration": 279,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983123885
+        },
+        {
+          "startTime": 111557.89999997616,
+          "duration": 272,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983124165
+        },
+        {
+          "startTime": 111834.39999997616,
+          "duration": 277,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983124441
+        },
+        {
+          "startTime": 112114.30000007153,
+          "duration": 286,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983124721
+        },
+        {
+          "startTime": 112403.20000004768,
+          "duration": 281,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983125010
+        },
+        {
+          "startTime": 112686.39999997616,
+          "duration": 275,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983125293
+        },
+        {
+          "startTime": 112965.60000002384,
+          "duration": 269,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983125573
+        },
+        {
+          "startTime": 113237.30000007153,
+          "duration": 282,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983125844
+        },
+        {
+          "startTime": 113521.30000007153,
+          "duration": 310,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983126128
+        },
+        {
+          "startTime": 113831.70000004768,
+          "duration": 329,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983126439
+        },
+        {
+          "startTime": 114164.10000002384,
+          "duration": 299,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983126771
+        },
+        {
+          "startTime": 114465.5,
+          "duration": 312,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983127073
+        },
+        {
+          "startTime": 114781.10000002384,
+          "duration": 280,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983127388
+        },
+        {
+          "startTime": 115063.89999997616,
+          "duration": 283,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983127671
+        },
+        {
+          "startTime": 115349.10000002384,
+          "duration": 374,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983127956
+        },
+        {
+          "startTime": 115723.20000004768,
+          "duration": 318,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983128330
+        },
+        {
+          "startTime": 116044.80000007153,
+          "duration": 365,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983128652
+        },
+        {
+          "startTime": 116413.80000007153,
+          "duration": 323,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983129021
+        },
+        {
+          "startTime": 116739.60000002384,
+          "duration": 346,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983129347
+        },
+        {
+          "startTime": 117089,
+          "duration": 318,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983129696
+        },
+        {
+          "startTime": 117410.10000002384,
+          "duration": 295,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983130017
+        },
+        {
+          "startTime": 117707.10000002384,
+          "duration": 291,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983130314
+        },
+        {
+          "startTime": 117999.80000007153,
+          "duration": 297,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983130607
+        },
+        {
+          "startTime": 118297,
+          "duration": 287,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983130904
+        },
+        {
+          "startTime": 118586.89999997616,
+          "duration": 355,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983131194
+        },
+        {
+          "startTime": 118944.10000002384,
+          "duration": 303,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983131551
+        },
+        {
+          "startTime": 119249.60000002384,
+          "duration": 286,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983131857
+        },
+        {
+          "startTime": 119538.80000007153,
+          "duration": 314,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983132146
+        },
+        {
+          "startTime": 119855.80000007153,
+          "duration": 283,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983132463
+        },
+        {
+          "startTime": 120141.80000007153,
+          "duration": 313,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983132749
+        },
+        {
+          "startTime": 120456.89999997616,
+          "duration": 282,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983133064
+        },
+        {
+          "startTime": 120739.20000004768,
+          "duration": 369,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983133346
+        },
+        {
+          "startTime": 121111.5,
+          "duration": 313,
+          "name": "self",
+          "entryType": "longtask",
+          "at": 1792983133719
+        }
+      ]
+    },
+    "bundle": {
+      "directory": "apps/web/dist/assets",
+      "files": [
+        {
+          "file": "apps/web/dist/assets/index-lKQ_6B_M.js",
+          "rawBytes": 970442,
+          "gzipBytes": 317000
+        },
+        {
+          "file": "apps/web/dist/assets/ClerkRoot-FDGySvAh.js",
+          "rawBytes": 85786,
+          "gzipBytes": 22694
+        },
+        {
+          "file": "apps/web/dist/assets/y-indexeddb-CnNDAczR.js",
+          "rawBytes": 2913,
+          "gzipBytes": 1271
+        }
+      ],
+      "totalRawBytes": 1059141,
+      "totalGzipBytes": 340965,
+      "fileCount": 3
+    },
+    "memory": {
+      "status": "AVAILABLE (Chrome non-standard performance.memory)",
+      "currentUsedJSHeapSize": 46211761,
+      "peakUsedJSHeapSize": 46211761,
+      "minUsedJSHeapSize": 46206473,
+      "jsHeapSizeLimit": 4395630592,
+      "sampleCount": 5,
+      "samples": [
+        {
+          "at": 1792983138706,
+          "usedJSHeapSize": 46206473,
+          "totalJSHeapSize": 85146877,
+          "jsHeapSizeLimit": 4395630592
+        },
+        {
+          "at": 1792983138916,
+          "usedJSHeapSize": 46209301,
+          "totalJSHeapSize": 85146877,
+          "jsHeapSizeLimit": 4395630592
+        },
+        {
+          "at": 1792983139119,
+          "usedJSHeapSize": 46210121,
+          "totalJSHeapSize": 85146877,
+          "jsHeapSizeLimit": 4395630592
+        },
+        {
+          "at": 1792983139323,
+          "usedJSHeapSize": 46210941,
+          "totalJSHeapSize": 85146877,
+          "jsHeapSizeLimit": 4395630592
+        },
+        {
+          "at": 1792983139529,
+          "usedJSHeapSize": 46211761,
+          "totalJSHeapSize": 85146877,
+          "jsHeapSizeLimit": 4395630592
+        }
+      ]
+    }
+  },
+  "observations": [
+    "399 Long Tasks were observed (114626 ms summed, 262 ms p50, 447 ms p95). Count alone is not a verdict; it is flagged because the task brief asks for an explicit observation when Long Tasks are frequent."
+  ]
+}

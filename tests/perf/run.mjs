@@ -825,6 +825,9 @@ async function main() {
       `[perf] input p50/p95/max (next frame): ${input.nextFrame.p50}/${input.nextFrame.p95}/${input.nextFrame.max} ms over ${input.totalSamples} samples`,
     );
 
+    const redux = await page.evaluate(() => window.__perf.reduxSnapshot());
+    console.log(`[perf] redux snapshot: ${JSON.stringify(redux)}`);
+
     const reconnect = await measureReconnect(page);
     console.log(
       `[perf] reconnect p50/p95/max (restore -> connected): ${reconnect.restoreToConnectedMs.p50}/${reconnect.restoreToConnectedMs.p95}/${reconnect.restoreToConnectedMs.max} ms`,
@@ -868,6 +871,7 @@ async function main() {
       },
       firstWebSocket,
       input,
+      redux,
       reconnect,
       longTasks,
       bundle,
@@ -902,6 +906,7 @@ async function main() {
         'launch real Chrome; open app; wait for session; switch to a6-perf-100k',
         `wait until EditorView text length == ${fixture.characters}; hash editor text and compare`,
         `3 rounds x 100 real Input.insertText("x") at document start`,
+        'capture a Redux state snapshot and assert the 100k body is not mirrored into it',
         '3 iterations setOffline(true) -> 250 ms -> setOffline(false) -> connected',
         'collect Long Tasks, performance.memory, bundle sizes',
       ],
