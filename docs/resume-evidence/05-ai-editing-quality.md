@@ -162,15 +162,15 @@ So the correct status is **IMPLEMENTED / NOT LIVE-VERIFIED** (`D-081:3384`;
 | `apps/web/src/features/ai/apply.ts:92-136` | validate then apply all operations in one AI-origin transaction | `applySuggestion` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/apply.ts#L92-L136 |
 | `apps/web/src/features/ai/provider.ts:74-75` | the provider port; no write access to the document | `AiProvider` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/provider.ts#L74-L75 |
 | `apps/web/src/features/ai/provider.ts:185-218` | draft → anchors + diff + `baseRevision`; refuse stale snapshot | `buildSuggestion` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/provider.ts#L185-L218 |
-| `apps/web/src/features/ai/remoteProvider.ts:156-197` | `POST /api/ai/suggest`; forward the abort signal; schema-check the body | `suggest` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/remoteProvider.ts#L156-L197 |
+| `apps/web/src/features/ai/remoteProvider.ts:145-197` | `POST /api/ai/suggest`; forward the abort signal; schema-check the body | `suggest` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/remoteProvider.ts#L145-L197 |
 | `apps/web/src/features/ai/localProvider.ts:26-37` | the deterministic five-intent table; unknown instruction throws | intent table | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/localProvider.ts#L26-L37 |
 | `apps/web/src/features/ai/aiProvider.ts:58-76` | default local; only the literal `remote` opts into the network | `readAiProviderMode`, `createAiProvider` | https://github.com/HE517/insighthub/blob/874f107/apps/web/src/features/ai/aiProvider.ts#L58-L76 |
 | `packages/shared/src/ai-suggestion.ts:99-108` | the on-screen suggestion shape (anchors + diff + baseRevision) | `aiEditSuggestionSchema` | https://github.com/HE517/insighthub/blob/874f107/packages/shared/src/ai-suggestion.ts#L99-L108 |
 | `packages/shared/src/ai-suggestion.ts:158-165` | the provider draft shape: summary + operations, no anchors | `aiSuggestionDraftSchema` | https://github.com/HE517/insighthub/blob/874f107/packages/shared/src/ai-suggestion.ts#L158-L165 |
 | `packages/shared/src/ai-anchor.ts:231-325` | revision → anchor → `expectedText` validation | `validateSuggestionAgainstDocument` | https://github.com/HE517/insighthub/blob/874f107/packages/shared/src/ai-anchor.ts#L231-L325 |
-| `apps/server/src/ai/route.ts:263-343` | body schema → `canRead` → provider → draft schema → 200 | `createSuggestHandler` | https://github.com/HE517/insighthub/blob/874f107/apps/server/src/ai/route.ts#L263-L343 |
+| `apps/server/src/ai/route.ts:206-343` | body schema → `canRead` → provider → draft schema → 200 | `createSuggestHandler` | https://github.com/HE517/insighthub/blob/874f107/apps/server/src/ai/route.ts#L206-L343 |
 | `apps/server/src/ai/kimi.ts:25-32` | the recorded Kimi 400 → prompt-only decision | module doc | https://github.com/HE517/insighthub/blob/874f107/apps/server/src/ai/kimi.ts#L25-L32 |
-| `apps/server/src/ai/live-smoke.ts:9-22` | opt-in live smoke; fail-closed exit codes | `main` (doc) | https://github.com/HE517/insighthub/blob/874f107/apps/server/src/ai/live-smoke.ts#L9-L22 |
+| `apps/server/src/ai/live-smoke.ts:9-22` | opt-in live smoke; fail-closed exit codes | exit-code doc (function body at :73) | https://github.com/HE517/insighthub/blob/874f107/apps/server/src/ai/live-smoke.ts#L9-L22 |
 | `packages/shared/src/binary-frame.ts:134-138` | undo tracks local + AI only | `UNDO_TRACKED_ORIGINS` | https://github.com/HE517/insighthub/blob/874f107/packages/shared/src/binary-frame.ts#L134-L138 |
 
 ---

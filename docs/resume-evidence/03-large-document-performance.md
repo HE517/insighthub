@@ -228,11 +228,11 @@ difference (bundled vs on-demand transform), not an optimisation.
 | `tests/perf/fixture.mjs:20-43` | 100k line count, fixed template, deterministic build | `LINE_COUNT`, `buildFixtureText` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/fixture.mjs#L20-L43 |
 | `tests/perf/fixture.mjs:57-103` | double-generation sha256 + on-disk check | `ensureFixture` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/fixture.mjs#L57-L103 |
 | `tests/perf/instrument.mjs:94-141` | fiber → Redux store → serialise → body-marker check | `perf.reduxSnapshot` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/instrument.mjs#L94-L141 |
-| `tests/perf/instrument.mjs:144-168` | `PerformanceObserver({type:'longtask'})`, test-only | Long Task observer | https://github.com/HE517/insighthub/blob/874f107/tests/perf/instrument.mjs#L144-L190 |
+| `tests/perf/instrument.mjs:144-168` | `PerformanceObserver({type:'longtask'})`, test-only | Long Task observer | https://github.com/HE517/insighthub/blob/874f107/tests/perf/instrument.mjs#L144-L168 |
 | `tests/perf/run.mjs:1-27` | harness contract: no thresholds; real input/reconnect | module doc | https://github.com/HE517/insighthub/blob/874f107/tests/perf/run.mjs#L1-L27 |
 | `tests/perf/run.mjs:43-51` | 3 rounds, 100 inputs/round, 3 reconnects | `INPUT_ROUNDS`, `INPUTS_PER_ROUND`, `RECONNECT_ITERATIONS` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/run.mjs#L43-L51 |
 | `tests/perf/aggregate.mjs:30-43` | nearest-rank p50/p95/max over pooled runs | `stats` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/aggregate.mjs#L30-L43 |
-| `tests/perf/build-stack.mjs:1-12` | built server + built web, Express static, no Vite | `BuildStack` (doc) | https://github.com/HE517/insighthub/blob/874f107/tests/perf/build-stack.mjs#L1-L12 |
+| `tests/perf/build-stack.mjs:1-19` | built server + built web, Express static, no Vite | `BuildStack` | https://github.com/HE517/insighthub/blob/874f107/tests/perf/build-stack.mjs#L1-L19 |
 | `tests/perf/profile.mjs` | trace + CPU profile over a fixed 20-input window; `--scaling` probe | — | https://github.com/HE517/insighthub/blob/874f107/tests/perf/profile.mjs |
 | `tests/perf/block-benchmark.mjs` | block-structured variant measurement + CPU profile | — | https://github.com/HE517/insighthub/blob/874f107/tests/perf/block-benchmark.mjs |
 
@@ -286,12 +286,16 @@ for reconnect. A p95 with n=3 is the max of three observations, not a distributi
 per-run values are kept so a cold outlier is visible, not averaged away
 (`PERF-BASELINE-100K-MULTIROUND.md:5,20`).
 
-**Evidence-hygiene finding (no code change made).** The aggregate JSON
+**Evidence-hygiene finding (no code change at `874f107`).** The aggregate JSON
 `perf-production-multiround.json` carries a `caution` string that says "Vite dev server for
 interaction timing"; that text is hard-coded in `aggregate.mjs:80-81` and is stale for the
 production-build aggregate. The per-run JSON correctly records
 `servingMode = "build (Express static, no Vite)"`, and the Markdown report is correct. Treat the
 Markdown report + per-run JSON as the source of truth; do not quote the aggregate `caution` field.
+
+**Post-evidence:** `d1d8aec` (after this pack's evidence commit) made `aggregate.mjs` derive the
+`caution` from the run's `servingMode` and regenerated the two aggregate JSONs, so the paragraph
+above describes `874f107`, not the current tree. The numbers themselves were not re-measured.
 
 ---
 

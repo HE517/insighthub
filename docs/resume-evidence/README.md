@@ -57,7 +57,7 @@ the evidence, the report says so in §8 and the status below is downgraded.
 
 | Bullet | Implementation | Test evidence | Metrics | Status | Report | Interview confidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| **B1** business context / knowledge workbench | `App.tsx` → `AppShell` → `DocumentWorkspace`; demo/Clerk identity; `Y.Text` body; AI panel; server-authoritative permissions | No dedicated test (scope claim). Paths are exercised by `b125/1`, `editor/mounts-on-existing-ytext`, `p2/3`, `m3r/2` | None claimed for this bullet; 73/73 is the suite status, not a business metric | **SUPPORTED WITH LIMITATION** | [01-business-context.md](01-business-context.md) | **HIGH** |
+| **B1** business context / knowledge workbench | `App.tsx` → `AppShell` → `DocumentWorkspace`; demo/Clerk identity; `Y.Text` body; AI panel; server-authoritative permissions | No dedicated test (scope claim). Paths are exercised by `b125/1`, `editor/mounts-on-existing-ytext`, `p2/3`; `m3r/2` exists but is remote-gated (not part of the 73) | None claimed for this bullet; 73/73 is the suite status, not a business metric | **SUPPORTED WITH LIMITATION** | [01-business-context.md](01-business-context.md) | **HIGH** |
 | **B2** CodeMirror 6 + Yjs, single body source, WS increments, IndexedDB offline, two-user convergence | `collabTextBinding.ts`; `document-session.ts`; `sync-provider.ts`; `persistence.ts`; `room.ts` + `registry.ts` | `collab/independent-contexts`; `indexeddb/A..D`; `chaos/offline-reconnect`; `chaos/duplicate-inbound-frames`; `realtime/local-undo-does-not-revert-remote-text` | Two independent contexts; 56-char final text equal A = B = server; state-vector sha256 `bda0ea9c…` (19 B, 3 clients); 73/73 | **SUPPORTED WITH LIMITATION** | [02-collaboration-offline.md](02-collaboration-offline.md) | **HIGH** |
 | **B3** 100k / 6.8 MB, Redux 241 B, local production-build ready/reconnect P95 | `documentSlice.ts` (no body); `instrument.mjs` dynamic Redux probe; `tests/perf/**` | 3 independent perf processes; dynamic Redux snapshot after 300 inputs; deterministic fixture sha256 | ready **654 / 680 / 680 ms** (p50/p95/max, n=3); reconnect **763 / 770 / 770 ms** (n=9); input **268.8 / 371.3 / 511.4 ms** (n=900); Redux **241 B**; Long Tasks **400 / 397 / 397** | **SUPPORTED WITH LIMITATION** | [03-large-document-performance.md](03-large-document-performance.md) | **MEDIUM** |
 | **B4** permissions + stale-response ownership | `permission.ts`; `authz.ts`; `app.ts` HTTP guard; `registry.ts` join/frame auth; `capabilityGate.ts`; `AiDirectory.tsx`; `AiSuggestPanel.tsx` | `p2/1`, `p2/2`, `p2/3`, `p2/4`, `p2/5`, `p2/9`, `f1/1`, `f1/4`, `m3/10`, `stale/directory-list` | Real 200 held at CDP (4,640 B / 28 ids); abort after **69 ms** (README records **69–78 ms** across two runs); UI stays on B | **SUPPORTED WITH LIMITATION** | [04-permission-async-consistency.md](04-permission-async-consistency.md) | **MEDIUM** |
@@ -178,3 +178,12 @@ stands even after the bullet is corrected.
 IMPLEMENTED" lists in the reports should be read as still current for preview. The 73-scenario suite
 was re-run after that merge and stayed **73/73**; this does not retroactively change the evidence
 commit, and no benchmark was re-run.
+
+**Also after `874f107`.** `d1d8aec` made `aggregate.mjs` derive its `caution` from the run's
+`servingMode` and regenerated the two aggregate JSONs; report 03 §6's stale-caution finding
+describes `874f107`, not the current tree. The numbers were not re-measured.
+
+**Line drift.** The preview merge (`dc20ecb`) changed
+`apps/web/src/features/editor/CollaborativeMarkdownEditor.tsx` and `.../DocumentWorkspace.tsx`; a
+`:line` reference to those two files is valid only against `874f107`. Use
+`git show 874f107:<path>` — every permalink in this pack already does.
