@@ -74,19 +74,19 @@ either is occupied, and its postflight prints whether both were released again.
 
 The default run measures the **frozen default configuration**: `AI_PROVIDER` is not set, so
 `POST /api/ai/suggest` answers `503`, and `VITE_AI_PROVIDER` is not set, so the client uses the
-deterministic local provider. That is what the 73 default scenarios assert, so a globally remote
+deterministic local provider. That is what the 78 default scenarios assert, so a globally remote
 Vite would invalidate them.
 
 The remote evidence is a separate group that exists only when asked for:
 
 ```bash
-INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 78 = 73 + 5
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 83 = 78 + 5
 ```
 
 The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
 
 `INSIGHTHUB_E2E_AI_MODE` gates **registration** of `suite/33-m3-remote.mjs`; the default run is
-still exactly 73 scenarios and none of their assertions change. At the group boundary (the file
+still exactly 78 scenarios and none of their assertions change. At the group boundary (the file
 sorts last) the first `m3r/*` scenario stops Vite, restarts the backend on a fresh durable store
 with `AI_PROVIDER=stub`, and starts Vite with `VITE_AI_PROVIDER=remote`; every scenario in the
 group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) works too.
@@ -94,7 +94,7 @@ group calls the same idempotent switch, so a filtered run (`--filter m3r/3`) wor
 `setWebEnv`; an `undefined` value deletes the key), and with no mode env the two children receive
 exactly the same environment as before.
 
-Why not start the whole run remote: the 73 scenarios measure the default configuration (intent
+Why not start the whole run remote: the 78 scenarios measure the default configuration (intent
 chips, local copy), and one Vite process has one `VITE_AI_PROVIDER`. Why not a second stack: two
 servers on `127.0.0.1` share one browser cookie jar while sessions are process-scoped, and the
 ports would double.
@@ -327,7 +327,8 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
 | `32-design-fidelity.mjs` | M4 UI fidelity (`ui/1..8`): logo hover transform, switcher focus ring, avatar hover/tooltip/Tab focus, undo button states (including the disabled viewer state), connection pill pulse, editor focus-within, reduced-motion (0 s transitions, pulse off), and notice copy that never claims a false "saved" |
 | `32b-m4-b125.mjs` | M4 B12.5 `New document` (D-084 #2/#6/#7) in the **default** configuration: one click → real `POST /api/documents` (201) → switch to the server UUID → panel closed → `owner` room + editable editor → exactly one `aria-current` row; an offline click shows `new-document-error[data-create-error="network"]` with nothing changed and succeeds after recovery; two clicks in one task create one document. It sorts before `33` because that group changes the stack's configuration and must stay last |
-| `33-m3-remote.mjs` | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
+| `34-markdown-preview.mjs` | Markdown Preview V1 (D-087): switching `编辑`/`预览` keeps exactly one live `EditorView` (same DOM node, mount counters, text and keyboard selection); a rich document renders semantic DOM; a remote edit made **while preview is visible** appears only after the 400 ms debounce; `<script>`/`<img onerror>`/`<iframe>`/`javascript:` never become nodes/attributes and safe links keep `rel="noopener noreferrer"`; a 20k-line document seeded through the production store shows identical `Y.Text`/state-vector/durable digests after previewing, and preview adds no Redux slice or body mirror. The 100k-line browser attempt is **not** claimed: it did not reach `data-state="ready"` within the 420 s scenario budget (2026-10-26). |
+| 33-m3-remote.mjs | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
 
 ### The M2 Phase 2 scenarios and the acceptance IDs they map to
 
