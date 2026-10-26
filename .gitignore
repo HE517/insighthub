@@ -30,7 +30,7 @@ pnpm-debug.log*
 # Durable store + authorization database created by running the app or the dev server.
 # The path is `INSIGHTHUB_DATA_PATH` (default `./.insighthub-data`, resolved against the
 # process CWD), so it can appear at the repo root or under `apps/server/`. D-070: tests must
-# use their own temporary directories, so only a *dev server* should ever create this — and a
+# use their own temporary directories, so only a *dev server* should ever create this 鈥?and a
 # dev server's data directory must never dirty the working tree.
 **/.insighthub-data/
 
@@ -40,3 +40,6 @@ tests/browser/artifacts/
 # worktree-local agent role overlay: never committed (see docs/agent-governance/harness-setup.md).
 # Each agent worktree carries its own, untracked, so one worktree cannot leak its role into another.
 AGENTS.local.md
+
+# Generated diagnostic fixture (deterministic generator in tests/perf/fixture-block.mjs).
+tests/perf/fixtures/100k-block.md

@@ -1,0 +1,182 @@
+{
+  "generatedAt": "2026-10-26T04:20:36.037Z",
+  "servingMode": "build (Express static, no Vite)",
+  "fixture": {
+    "lines": 100000,
+    "characters": 6859314,
+    "bytes": 6875982,
+    "sha256": "294af99db06f8231c30d76fc9fe8c620d294e95f34d987ec6bb8c000029d0c4a",
+    "file": "D:\\前端\\react\\项目\\面试项目\\Insighthub\\tests\\perf\\fixtures\\100k-block.md"
+  },
+  "host": {
+    "platform": "win32",
+    "version": "Windows 11 Home China",
+    "cpus": "13th Gen Intel(R) Core(TM) i5-1340P",
+    "node": "v22.14.0"
+  },
+  "chrome": "Chrome/155.0.8059.85",
+  "readyMs": 453,
+  "input": {
+    "rounds": [
+      {
+        "round": 1,
+        "model": {
+          "count": 100,
+          "p50": 2.4,
+          "p95": 3.3,
+          "max": 7.6
+        },
+        "nextFrame": {
+          "count": 100,
+          "p50": 15.3,
+          "p95": 16.1,
+          "max": 16.5
+        }
+      },
+      {
+        "round": 2,
+        "model": {
+          "count": 100,
+          "p50": 2.2,
+          "p95": 3.2,
+          "max": 4.2
+        },
+        "nextFrame": {
+          "count": 100,
+          "p50": 15.3,
+          "p95": 16,
+          "max": 16.3
+        }
+      },
+      {
+        "round": 3,
+        "model": {
+          "count": 100,
+          "p50": 2.5,
+          "p95": 3.6,
+          "max": 4.6
+        },
+        "nextFrame": {
+          "count": 100,
+          "p50": 15.4,
+          "p95": 16.1,
+          "max": 16.7
+        }
+      }
+    ],
+    "totalSamples": 300
+  },
+  "longTasks": {
+    "count": 2,
+    "totalMs": 179,
+    "maxMs": 126,
+    "p50": 53,
+    "p95": 126
+  },
+  "cpu": {
+    "totalProfiledMs": 5040.58,
+    "top": [
+      {
+        "functionName": "(idle)",
+        "url": "(native)",
+        "selfMs": 3630.5,
+        "sharePct": 72.03
+      },
+      {
+        "functionName": "(program)",
+        "url": "(native)",
+        "selfMs": 697.16,
+        "sharePct": 13.83
+      },
+      {
+        "functionName": "nextChild",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 46.9,
+        "sharePct": 0.93
+      },
+      {
+        "functionName": "(anonymous)",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 39.49,
+        "sharePct": 0.78
+      },
+      {
+        "functionName": "measure",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 29.07,
+        "sharePct": 0.58
+      },
+      {
+        "functionName": "getBoundingClientRect",
+        "url": "(native)",
+        "selfMs": 20.85,
+        "sharePct": 0.41
+      },
+      {
+        "functionName": "(anonymous)",
+        "url": "(native)",
+        "selfMs": 18.23,
+        "sharePct": 0.36
+      },
+      {
+        "functionName": "LU",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 15.77,
+        "sharePct": 0.31
+      },
+      {
+        "functionName": "transaction",
+        "url": "(native)",
+        "selfMs": 14.63,
+        "sharePct": 0.29
+      },
+      {
+        "functionName": "get",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 12.26,
+        "sharePct": 0.24
+      },
+      {
+        "functionName": "_parse",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 11.15,
+        "sharePct": 0.22
+      },
+      {
+        "functionName": "hasNode",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 10.94,
+        "sharePct": 0.22
+      },
+      {
+        "functionName": "getClientRects",
+        "url": "(native)",
+        "selfMs": 10.03,
+        "sharePct": 0.2
+      },
+      {
+        "functionName": "update",
+        "url": "http://127.0.0.1:3347/assets/index-Dm35hFbk.js",
+        "selfMs": 9.79,
+        "sharePct": 0.19
+      },
+      {
+        "functionName": "add",
+        "url": "(native)",
+        "selfMs": 9.77,
+        "sharePct": 0.19
+      }
+    ]
+  },
+  "redux": {
+    "available": true,
+    "bytes": 253,
+    "keys": [
+      "connection",
+      "document",
+      "realtime"
+    ],
+    "containsFixtureMarker": false,
+    "containsLine99999": false
+  }
+}
