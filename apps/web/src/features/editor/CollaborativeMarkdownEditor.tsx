@@ -62,12 +62,28 @@
  * touching `Y.Text`: text typed before the demotion stays in the document. The view is
  * created once per session (`[session]`), so this prop must never be added to that effect's
  * dependencies — a role change is not a document change.
+ *
+ * ## Hidden by preview mode (`hidden`)
+ *
+ * Preview mode hides this component with CSS (`DocumentCanvas` adds `canvas-pane--hidden`).
+ * The component is **not** unmounted: the `EditorView`, its `Y.Text` binding, its undo history
+ * and its selection all survive. This prop therefore only tells the editor to manage what CSS
+ * cannot preserve:
+ *
+ * - while visible, the latest `scrollDOM` offset is remembered on every scroll;
+ * - when it becomes visible again, that offset is restored (twice: in a layout effect and on
+ *   the next animation frame, because restoring can cause CodeMirror to re-measure) and the
+ *   view is focused **only if it had focus before** — the mode button the user just pressed
+ *   keeps focus otherwise.
+ *
+ * The effect is keyed on the boolean, never on `[session]`: hiding and showing must not
+ * rebuild the editor or re-seed it from `Y.Text`.
  */
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import type { CollaborativeSession } from '@insighthub/shared';
 
@@ -85,6 +101,11 @@ export interface CollaborativeMarkdownEditorProps {
    * `owner`/`editor` **and** for the unknown role, which must stay editable (R10, §17.9).
    */
   readOnly?: boolean;
+  /**
+   * `true` while preview mode is showing above this (still mounted) editor. Presentation only:
+   * it never changes the document, the binding or the undo history.
+   */
+  hidden?: boolean;
   /** Optional handle so a parent can flush pending edits before tearing down. */
   bindingRef?: (binding: CollabTextBinding | null) => void;
   /** Diagnostics: called when the binding had to resync wholesale. */
@@ -113,12 +134,29 @@ const noCursors: Extension = [];
 export function CollaborativeMarkdownEditor({
   session,
   readOnly = false,
+  hidden = false,
   bindingRef,
   onResync,
   selectionRef,
 }: CollaborativeMarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+
+  /**
+   * Mirrors `hidden` for event handlers created once per view. The scroll listener must know
+   * whether the pane is visible *now* (a scroll fired while display:none is meaningless), and
+   * the view-creation effect deliberately does not depend on this prop.
+   */
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+
+  /** The last `scrollDOM` offset observed while the pane was visible. */
+  const scrollMemory = useRef({ top: 0, left: 0 });
+  /**
+   * Whether the user ever put focus in the editor. Used to decide if returning to edit mode
+   * should restore focus; a reader who never typed keeps focus on the mode button.
+   */
+  const hadFocus = useRef(false);
 
   // Callbacks are held in refs so a new inline arrow from the parent cannot tear
   // down and rebuild the editor.
@@ -252,10 +290,28 @@ export function CollaborativeMarkdownEditor({
     const initialRange = view.state.selection.main;
     publishEditorPresence(session, { anchor: initialRange.anchor, head: initialRange.head });
 
+    /*
+     * Remember the scroll offset while the pane is visible. CodeMirror's scroller is the
+     * element preview mode hides, and `display: none` resets its `scrollTop`; capturing on
+     * every scroll is the only reliable way to have the value before that happens.
+     */
+    const scroller = view.scrollDOM;
+    const rememberScroll = (): void => {
+      if (hiddenRef.current) return;
+      scrollMemory.current = { top: scroller.scrollTop, left: scroller.scrollLeft };
+    };
+    const rememberFocus = (): void => {
+      hadFocus.current = true;
+    };
+    scroller.addEventListener('scroll', rememberScroll, { passive: true });
+    view.contentDOM.addEventListener('focus', rememberFocus);
+
     return () => {
       // Teardown order matters: flush what the user typed, then stop observing
       // Y.Text, then destroy the view. A queued edit must not be dropped, and the
       // view must not be dispatched to after the session has moved on.
+      scroller.removeEventListener('scroll', rememberScroll);
+      view.contentDOM.removeEventListener('focus', rememberFocus);
       binding?.flushLocalEdits();
       binding?.destroy();
       bindingRefCb.current?.(null);
@@ -264,6 +320,37 @@ export function CollaborativeMarkdownEditor({
       view.destroy();
     };
   }, [session]);
+
+  /**
+   * Restore the editing state when the pane becomes visible again.
+   *
+   * `hidden` is a primitive, so this effect cannot rebuild the editor; it only touches the
+   * existing `scrollDOM`. The offset is applied twice — synchronously (before paint) and on
+   * the next frame — because CodeMirror re-measures after a `display: none` → visible change
+   * and a first-paint restore can otherwise be clamped to the stale layout. The animation
+   * frame is cancelled if the pane is hidden again immediately.
+   *
+   * Selection is **not** written here: it lives in `EditorState` and survives the hide. Focus
+   * is restored only when the editor had focus at least once, so pressing `预览` and back does
+   * not steal focus from a reader who was never in the editor.
+   */
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (view === null || hidden) return;
+
+    const scroller = view.scrollDOM;
+    const { top, left } = scrollMemory.current;
+    scroller.scrollTop = top;
+    scroller.scrollLeft = left;
+    if (hadFocus.current) view.focus();
+
+    const frame = requestAnimationFrame(() => {
+      scroller.scrollTop = top;
+      scroller.scrollLeft = left;
+    });
+    return () => cancelAnimationFrame(frame);
+    // `viewRef` is deliberately absent: the effect belongs to visibility changes only.
+  }, [hidden]);
 
   /**
    * Flip the read-only flags on the **existing** view when the gate changes.
