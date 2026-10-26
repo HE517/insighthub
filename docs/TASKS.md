@@ -879,3 +879,5 @@ M3 kickoff 时必须逐条决定：在 M3 内解决、或明确接受并写进�
 
 
 **Performance Evidence Gate（独立，不阻塞 M4）**：`tests/perf/**` + `PERF-BASELINE-100K.md` 已合入。current baseline（Windows 11 / Chrome 155 / commit `9f4879f`）：100k 行 fixture sha256 `0d12688d…`；ready **3246 ms**；input n=300 → p50 **423.8** / p95 **535.9** / max **715.0 ms**；Long Task **385**（total 163356 ms，max 715）；WS reconnect restore→connected p50 **775** / max **812 ms**；bundle 合计 **1,058,970 B raw / 340,811 B gzip**；memory sampled 49,159,347 B（Chrome 非标准 API）。**production performance = NOT VERIFIED**；未做优化。
+
+**Markdown Preview V1（D-087，新增功能）**：A2 `789a41f` → 合入 `dc20ecb`；`编辑|预览` 切换、CodeMirror 不重挂载、lazy renderer（48.99 kB gzip）、400ms debounce、XSS 用例、100k 进入预览不改文档（node 端 719ms 待 A6 浏览器复测）。vitest **608**。**A6 浏览器场景与 E2E 证据待补。**

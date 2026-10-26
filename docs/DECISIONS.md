@@ -3735,3 +3735,38 @@ PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描�
 - **`requestId` ownership guard 未被压测**：接受为 residual。要压测需产品侧注入“不 abort”开关，
   属于产品改动，不在 A6 授权内，也不为证据新增。
 - **远程 AI 模式 78**：本轮不跑（与 A/C 无关）。
+---
+
+## D-087 · 2026-10-26 · accepted · Markdown Preview V1（新增功能，非 WYSIWYG）
+
+**背景。** D-086 §3 曾按当时的 V1 范围写明“不含 Markdown preview”；Owner 随后明确要求新增该
+功能。本条是**新的产品决定**，不追溯改写 D-086 的历史记录，只声明其范围已被本条取代。
+
+### 1. 范围
+
+- `编辑 | 预览` 两种模式，**不做 WYSIWYG**；
+- Preview 是 **只读派生视图**：`Y.Text -> derived string -> renderer -> DOM`；
+- 不改变 CodeMirror/Yjs/IndexedDB/WebSocket 协同链路、AI proposal/Diff/Accept、Undo 语义；
+- Redux 不新增正文状态；Preview 不写回 `Y.Text`。
+
+### 2. 安全模型
+
+- renderer 为 `react-markdown` + `remark-gfm`；**不启用 raw HTML**、无 `dangerouslySetInnerHTML`、
+  无 `rehype-raw`、无独立 sanitizer；
+- 链接：`rel="noopener noreferrer"`、无 `target`；危险协议由默认 URL transform 拦截；
+- 图片不渲染 `<img>`，只显示 alt（避免外部请求）；
+- XSS 用例（script / onerror / javascript: / iframe）必须有测试。
+
+### 3. 性能与更新策略
+
+- Preview 渲染器 **lazy chunk**，不进入主包；
+- 仅在预览可见时订阅 `Y.Text`；编辑后 **400ms debounce** 再渲染；进入预览立即渲染一次；
+- 100k 文档进入预览不得修改文档（hash/state-vector 不变）；浏览器渲染耗时实测后才可对外表述。
+
+### 4. 已知限制
+
+- 100k 的 node 端 parse+render ~719ms；**浏览器渲染耗时在 A6 证据前不作为对外数字**；
+- Clerk 模式下的 preview 尚未实测；
+- 不提供 preview 内的编辑、评论、搜索或导出。
+
+**后果。** Preview 作为**新功能**进入 V1；D-086 §3 的“不含 preview”表述由本条取代，历史记录保留。
