@@ -13,10 +13,14 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const dir = 'tests/perf/results';
+const prefix = process.argv[2] ?? 'perf-run';
+const outputName =
+  process.argv[3] ?? (prefix === 'perf-run' ? 'perf-baseline-100k-multiround.json' : `${prefix}-multiround.json`);
+const pattern = new RegExp(`^${prefix}-\\d+\\.json$`);
 const files = readdirSync(dir)
-  .filter((name) => /^perf-run-\d+\.json$/.test(name))
+  .filter((name) => pattern.test(name))
   .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
-if (files.length === 0) throw new Error('no perf-run-*.json to aggregate');
+if (files.length === 0) throw new Error(`no ${prefix}-*.json to aggregate`);
 
 const runs = files.map((file) => ({
   file,
@@ -120,7 +124,7 @@ const aggregate = {
   chromeVersion: last.chrome.product,
 };
 
-const output = path.join(dir, 'perf-baseline-100k-multiround.json');
+const output = path.join(dir, outputName);
 writeFileSync(output, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify(aggregate.aggregate, null, 2));
 console.log(`wrote ${output}`);

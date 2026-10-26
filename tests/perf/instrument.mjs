@@ -40,6 +40,58 @@ export const PERF_INIT_SCRIPT = String.raw`
   window.__perf = perf;
 
   /*
+   * Production-build access to the live EditorView.
+   *
+   * The browser suite finds it by re-importing Vite's module URL, which only exists in dev. A built
+   * bundle has no such URL, so this walks the React fiber tree for the ref that holds the view.
+   * Read-only: it never dispatches or mutates the document.
+   */
+  perf.findEditorView = () => {
+    const root = document.querySelector('#root');
+    if (root === null) return null;
+    const containerKey = Object.keys(root).find((key) => key.startsWith('__reactContainer$'));
+    if (containerKey === undefined) return null;
+    const seen = new Set();
+    const queue = [root[containerKey]];
+    while (queue.length > 0 && seen.size < 30000) {
+      const fiber = queue.shift();
+      if (fiber === null || typeof fiber !== 'object' || seen.has(fiber)) continue;
+      seen.add(fiber);
+      let hook = fiber.memoizedState;
+      for (let depth = 0; hook !== null && typeof hook === 'object' && depth < 200; depth += 1) {
+        const candidate = hook.memoizedState;
+        const view = candidate !== null && typeof candidate === 'object' ? candidate.current : null;
+        if (
+          view !== null &&
+          typeof view === 'object' &&
+          view.state !== undefined &&
+          view.state.doc !== undefined &&
+          typeof view.state.doc.length === 'number' &&
+          typeof view.dispatch === 'function'
+        ) {
+          return view;
+        }
+        hook = hook.next;
+      }
+      if (fiber.child) queue.push(fiber.child);
+      if (fiber.sibling) queue.push(fiber.sibling);
+    }
+    return null;
+  };
+
+  perf.editorLength = () => perf.findEditorView()?.state.doc.length ?? null;
+
+  perf.editorTextSha256 = async () => {
+    const view = perf.findEditorView();
+    if (view === null) return null;
+    const text = view.state.doc.toString();
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0'));
+    return { length: text.length, sha256: hex.join('') };
+  };
+
+  /*
    * Dynamic Redux check (test instrumentation only): find the Provider store through the React
    * fiber tree and prove the document body is NOT mirrored into it — the behavioural counterpart
    * of "content lives only in Y.Text" (AGENTS.md R11).

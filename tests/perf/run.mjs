@@ -36,6 +36,7 @@ import { installEditorProbe, loadInstrumentSource, setDocumentId, waitForSession
 import { newPage, sleep } from '../browser/lib/cdp.mjs';
 import { Browser } from '../browser/lib/chrome.mjs';
 import { DevStack, isPortClosed } from '../browser/lib/stack.mjs';
+import { BuildStack } from './build-stack.mjs';
 import { ensureFixture, repoRoot } from './fixture.mjs';
 import { PERF_INIT_SCRIPT } from './instrument.mjs';
 
@@ -49,14 +50,17 @@ const READY_TIMEOUT_MS = 180_000;
 const RESULTS_RELATIVE_PATH = 'tests/perf/results/perf-baseline-100k.json';
 const REPORT_RELATIVE_PATH = 'docs/agent-governance/PERF-BASELINE-100K.md';
 
-const resultsPath = path.join(repoRoot, RESULTS_RELATIVE_PATH);
-const reportPath = path.join(repoRoot, REPORT_RELATIVE_PATH);
+let resultsPath = path.join(repoRoot, RESULTS_RELATIVE_PATH);
+let reportPath = path.join(repoRoot, REPORT_RELATIVE_PATH);
 const tsxCli = path.join(repoRoot, 'apps', 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 function parseArgs(argv) {
-  const options = { headed: false };
+  const options = { headed: false, build: false, out: null, report: null };
   for (const argument of argv) {
     if (argument === '--headed') options.headed = true;
+    else if (argument === '--build') options.build = true;
+    else if (argument.startsWith('--out=')) options.out = argument.slice('--out='.length);
+    else if (argument.startsWith('--report=')) options.report = argument.slice('--report='.length);
     else throw new Error(`unknown argument: ${argument}`);
   }
   return options;
@@ -292,8 +296,109 @@ async function editorTextSha256(page) {
   });
 }
 
-async function waitForInputSample(page, expectedCount, timeoutMs = 5_000) {
+/**
+ * Readiness in a **built** bundle: there is no Vite module URL to re-import, so the live
+ * `EditorView` is reached through the harness instrumentation (`__perf.editorLength`, fiber walk).
+ */
+async function waitForBuildReady(page, expectedLength, timeoutMs) {
   return await page.evaluate(
+    async ({ expected, timeout }) => {
+      const started = Date.now();
+      for (;;) {
+        const length = window.__perf.editorLength();
+        if (length === expected) return { at: Date.now(), length };
+        if (Date.now() - started > timeout) {
+          throw new Error(`the built editor never held ${expected} chars; current ${String(length)}`);
+        }
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    },
+    { expected: expectedLength, timeout: timeoutMs },
+  );
+}
+
+/**
+ * The same 3 × 100 real input transactions as {@link measureInputLatency}, but proving the model
+ * growth through the fiber-reached `EditorView` instead of the dev-only prototype patch.
+ */
+async function measureInputLatencyBuild(page) {
+  await page.click('.cm-content');
+  const rounds = [];
+
+  for (let round = 1; round <= INPUT_ROUNDS; round += 1) {
+    await page.pressKey('Home', { modifiers: 2 });
+    await page.evaluate(() => {
+      window.__perf.input.length = 0;
+    });
+    const before = await page.evaluate(() => window.__perf.editorLength());
+    console.log(`[perf] input round ${round} starting (${String(before)} chars)`);
+
+    const samples = [];
+    for (let index = 1; index <= INPUTS_PER_ROUND; index += 1) {
+      await page.insertText('x');
+      const sample = await waitForInputSample(page, index);
+      if (sample.error !== undefined) throw new Error(`round ${round}: ${sample.error}`);
+      samples.push(sample);
+    }
+
+    const after = await page.evaluate(() => window.__perf.editorLength());
+    if (after === null || before === null) throw new Error(`round ${round}: no live editor`);
+    if (after - before !== INPUTS_PER_ROUND) {
+      throw new Error(
+        `round ${round}: the model changed by ${after - before}, expected ${INPUTS_PER_ROUND}`,
+      );
+    }
+    rounds.push({
+      round,
+      sampleCount: samples.length,
+      editorLengthBefore: before,
+      editorLengthAfter: after,
+      model: stats(samples.map((sample) => sample.inputToModelMs)),
+      nextFrame: stats(samples.map((sample) => sample.inputToNextFrameMs)),
+      samples,
+    });
+  }
+
+  const allModel = rounds.flatMap((round) => round.samples.map((sample) => sample.inputToModelMs));
+  const allFrames = rounds.flatMap((round) =>
+    round.samples.map((sample) => sample.inputToNextFrameMs),
+  );
+  return {
+    inputsPerRound: INPUTS_PER_ROUND,
+    rounds: INPUT_ROUNDS,
+    method:
+      'beforeinput (capture) -> input listener on .cm-content -> next animation frame; model growth verified through the live EditorView found in the React fiber tree (built bundle, no module probe)',
+    model: stats(allModel),
+    nextFrame: stats(allFrames),
+    roundStats: rounds,
+    totalSamples: allModel.length,
+  };
+}
+
+/**
+ * Switch documents in a **built** bundle. `setDocumentId` from the browser suite installs the
+ * dev-only module probe as part of its contract, so build mode drives the same real switcher
+ * input directly and waits on the DOM instead.
+ */
+async function setDocumentIdBuild(page, documentId) {
+  await page.evaluate((id) => {
+    const input = document.querySelector('input[aria-label="Document id"]');
+    if (input === null) throw new Error('no document switcher input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, id);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  }, documentId);
+
+  await page.waitFor(
+    (id) =>
+      document.querySelector('[data-testid="active-document"]')?.textContent?.trim() === id &&
+      document.querySelector('.cm-content') !== null,
+    { timeoutMs: 60_000, label: `document ${documentId} (build)`, args: [documentId] },
+  );
+}
+
+async function waitForInputSample(page, expectedCount, timeoutMs = 5_000) {  return await page.evaluate(
     async ({ expected, timeout }) => {
       const started = performance.now();
       for (;;) {
@@ -720,6 +825,8 @@ function renderReport({ generatedAt, gitInfo, host, chrome, fixture, seed, ports
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.out !== null) resultsPath = path.resolve(options.out);
+  if (options.report !== null) reportPath = path.resolve(options.report);
   const generatedAt = new Date().toISOString();
   const fixture = await ensureFixture();
   console.log(
@@ -737,17 +844,24 @@ async function main() {
    * start on, so the directory is created here and passed to the constructor.
    */
   const dataPath = await mkdtemp(path.join(os.tmpdir(), 'insighthub-a6-perf-100k-'));
-  const stack = new DevStack({
-    repoRoot,
-    serverPort: ports.serverPort,
-    webPort: ports.webPort,
-    dataPath,
-    // The backend's development default is http://localhost:5173. The perf
-    // harness may run on a different pair of ports, so the allowed origin must
-    // name the actual Vite origin or both HTTP bootstrap and the WS upgrade are
-    // refused with origin_not_allowed.
-    serverEnv: { CORS_ORIGIN: `http://127.0.0.1:${ports.webPort}` },
-  });
+  /*
+   * `--build` serves the **built** web client from the **built** server (no Vite). The demo
+   * bootstrap stays available because NODE_ENV is unset; this is a local production-build run,
+   * not a production-semantics claim.
+   */
+  const stack = options.build
+    ? new BuildStack({ repoRoot, serverPort: ports.serverPort, dataPath })
+    : new DevStack({
+        repoRoot,
+        serverPort: ports.serverPort,
+        webPort: ports.webPort,
+        dataPath,
+        // The backend's development default is http://localhost:5173. The perf
+        // harness may run on a different pair of ports, so the allowed origin must
+        // name the actual Vite origin or both HTTP bootstrap and the WS upgrade are
+        // refused with origin_not_allowed.
+        serverEnv: { CORS_ORIGIN: `http://127.0.0.1:${ports.webPort}` },
+      });
   let browser;
   let page;
   try {
@@ -786,20 +900,31 @@ async function main() {
     await page.goto(stack.appUrl);
     await waitForSessionActive(page);
     /*
-     * Patch `EditorView.prototype.dispatch` **before** the 100k document is
-     * opened. CodeMirror binds `view.dispatch` to the instance in its
-     * constructor, so a view created before the patch keeps the original bound
-     * method; installing the probe while the default document is live makes the
-     * 100k view (created by the switch) record its transactions.
+     * Dev mode patches `EditorView.prototype.dispatch` through Vite's module URL before the 100k
+     * document is opened (CodeMirror binds `dispatch` in its constructor, so the patch must exist
+     * before the view). A built bundle has no module URL: the readiness/length/hash come from the
+     * fiber-reached view instead, and no prototype patch is used.
      */
-    await installEditorProbe(page);
-    await setDocumentId(page, DOCUMENT_ID);
+    if (!options.build) {
+      await installEditorProbe(page);
+    }
+    if (options.build) {
+      await setDocumentIdBuild(page, DOCUMENT_ID);
+    } else {
+      await setDocumentId(page, DOCUMENT_ID);
+    }
     await waitForSessionActive(page);
-    await installEditorProbe(page);
+    if (!options.build) {
+      await installEditorProbe(page);
+    }
 
-    const ready = await waitForReady(page, fixture.characters, READY_TIMEOUT_MS);
+    const ready = options.build
+      ? await waitForBuildReady(page, fixture.characters, READY_TIMEOUT_MS)
+      : await waitForReady(page, fixture.characters, READY_TIMEOUT_MS);
     const readyDurationMs = ready.at - navigationStartedAt;
-    const editorHash = await editorTextSha256(page);
+    const editorHash = options.build
+      ? await page.evaluate(() => window.__perf.editorTextSha256())
+      : await editorTextSha256(page);
     if (editorHash === null) throw new Error('the editor text could not be hashed');
     if (editorHash.length !== fixture.characters) {
       throw new Error(`the editor held ${editorHash.length} chars, expected ${fixture.characters}`);
@@ -820,7 +945,9 @@ async function main() {
       transitions: connectionTransitions,
     };
 
-    const input = await measureInputLatency(page);
+    const input = options.build
+      ? await measureInputLatencyBuild(page)
+      : await measureInputLatency(page);
     console.log(
       `[perf] input p50/p95/max (next frame): ${input.nextFrame.p50}/${input.nextFrame.p95}/${input.nextFrame.max} ms over ${input.totalSamples} samples`,
     );
@@ -887,7 +1014,10 @@ async function main() {
     const payload = {
       schemaVersion: 1,
       generatedAt,
-      evidenceType: 'current baseline; no PASS/FAIL thresholds',
+      evidenceType: options.build
+      ? 'local production-build current baseline; no PASS/FAIL thresholds'
+      : 'dev-mode current baseline; no PASS/FAIL thresholds',
+    servingMode: options.build ? 'build (Express static, no Vite)' : 'dev (Vite + tsx server)',
       caution:
         'Long Tasks and input timings are test instrumentation, not production telemetry. Local host only; production performance NOT VERIFIED.',
       git: gitInfo,
@@ -901,7 +1031,9 @@ async function main() {
         'pnpm build; pnpm typecheck; pnpm test',
         'generate fixture twice and compare sha256',
         'create temporary dataPath; openDocumentStore; Y.Doc getText("content").insert(fixture); store.append; close',
-        'start real server and real Vite dev server',
+        options.build
+          ? 'start the built server (apps/server/dist) serving apps/web/dist, no Vite'
+          : 'start real server and real Vite dev server',
         'arrange demo-ada owner membership for a6-perf-100k',
         'launch real Chrome; open app; wait for session; switch to a6-perf-100k',
         `wait until EditorView text length == ${fixture.characters}; hash editor text and compare`,
