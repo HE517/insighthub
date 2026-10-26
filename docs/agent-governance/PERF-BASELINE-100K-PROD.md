@@ -49,8 +49,9 @@ comparison** — there is no pre-optimization commit, and no optimisation was ap
 - dev: peak sampled 46,211,761 B
 - build: peak sampled **62,111,484 B** (5 samples, 200 ms apart)
 
-Different heap numbers between serving paths are expected (dev keeps Vite's module graph in the
-page); they are sampled values, not a peak guarantee.
+`diagnostic sampled values only; cross-mode difference not causally attributed` — `performance.memory`
+is non-standard and sampled, and the current data does not support a causal claim about the
+difference.
 
 ### Redux no-body-mirror assertion (dynamic)
 

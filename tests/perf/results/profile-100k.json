@@ -1,0 +1,570 @@
+{
+  "window": {
+    "start": 1792987750247,
+    "end": 1792987757795,
+    "inputs": 20
+  },
+  "eventCount": 24109,
+  "completeCount": 19024,
+  "longTasksInWindow": {
+    "thresholdMs": 50,
+    "count": 21,
+    "totalMs": 5574.748,
+    "maxMs": 282.228,
+    "p50": 264.766,
+    "p95": 278.111,
+    "inputs": 20
+  },
+  "traceDurationMs": 5631.657,
+  "elapsedWindowMs": 7548,
+  "categories": {
+    "taskRoots": {
+      "selfMs": 5505.904,
+      "totalMs": 11123.793,
+      "count": 3993
+    },
+    "styleLayout": {
+      "selfMs": 13.648,
+      "totalMs": 40.953,
+      "count": 12258
+    },
+    "other": {
+      "selfMs": 5706.738,
+      "totalMs": 17160.721,
+      "count": 2116
+    },
+    "scripting": {
+      "selfMs": 1.475,
+      "totalMs": 10875.342,
+      "count": 297
+    },
+    "paintComposite": {
+      "selfMs": 10.285,
+      "totalMs": 27.457,
+      "count": 360
+    }
+  },
+  "top": [
+    {
+      "name": "RunTask",
+      "count": 3993,
+      "totalMs": 11123.793,
+      "selfMs": 5505.904,
+      "category": "taskRoots"
+    },
+    {
+      "name": "",
+      "count": 147,
+      "totalMs": 5311.788,
+      "selfMs": 5256.512,
+      "category": "other"
+    },
+    {
+      "name": "work",
+      "count": 1,
+      "totalMs": 256.238,
+      "selfMs": 256.236,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL",
+      "count": 18,
+      "totalMs": 46.317,
+      "selfMs": 46.317,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE",
+      "count": 5,
+      "totalMs": 45.973,
+      "selfMs": 45.208,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_MC_BACKGROUND_MARKING",
+      "count": 10,
+      "totalMs": 34.739,
+      "selfMs": 34.685,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_SCAVENGER",
+      "count": 5,
+      "totalMs": 47.02,
+      "selfMs": 20.208,
+      "category": "other"
+    },
+    {
+      "name": "GPUTask",
+      "count": 24,
+      "totalMs": 8.648,
+      "selfMs": 8.648,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_MC_BACKGROUND_SWEEPING",
+      "count": 10,
+      "totalMs": 4.165,
+      "selfMs": 4.129,
+      "category": "other"
+    },
+    {
+      "name": "V8.GC_MC_INCREMENTAL",
+      "count": 92,
+      "totalMs": 4.317,
+      "selfMs": 3.856,
+      "category": "other"
+    },
+    {
+      "name": "run",
+      "count": 20,
+      "totalMs": 3.739,
+      "selfMs": 3.739,
+      "category": "other"
+    },
+    {
+      "name": "Document::UpdateStyleAndLayout",
+      "count": 5010,
+      "totalMs": 12.642,
+      "selfMs": 3.516,
+      "category": "styleLayout"
+    },
+    {
+      "name": "Blink.ForcedStyleAndLayout.UpdateTime",
+      "count": 4834,
+      "totalMs": 9.118,
+      "selfMs": 3.054,
+      "category": "styleLayout"
+    },
+    {
+      "name": "LocalFrameView::UpdateStyleAndLayout",
+      "count": 2224,
+      "totalMs": 5.871,
+      "selfMs": 2.715,
+      "category": "styleLayout"
+    },
+    {
+      "name": "Paint",
+      "count": 40,
+      "totalMs": 3.662,
+      "selfMs": 2.609,
+      "category": "paintComposite"
+    },
+    {
+      "name": "RasterTask",
+      "count": 40,
+      "totalMs": 2.376,
+      "selfMs": 2.376,
+      "category": "paintComposite"
+    },
+    {
+      "name": "LocalFrameView::performLayout",
+      "count": 20,
+      "totalMs": 2.322,
+      "selfMs": 2.322,
+      "category": "styleLayout"
+    },
+    {
+      "name": "WebFrameWidgetImpl::BeginMainFrame",
+      "count": 20,
+      "totalMs": 18.779,
+      "selfMs": 2.259,
+      "category": "other"
+    },
+    {
+      "name": "TypingCommand::InsertText",
+      "count": 20,
+      "totalMs": 8.47,
+      "selfMs": 2.21,
+      "category": "other"
+    },
+    {
+      "name": "EventDispatch",
+      "count": 66,
+      "totalMs": 5313.943,
+      "selfMs": 1.882,
+      "category": "other"
+    },
+    {
+      "name": "FrameRequestCallbackCollection::ExecuteFrameCallbacks",
+      "count": 20,
+      "totalMs": 15.274,
+      "selfMs": 1.673,
+      "category": "other"
+    },
+    {
+      "name": "PaintArtifactCompositor::Update",
+      "count": 20,
+      "totalMs": 1.505,
+      "selfMs": 1.505,
+      "category": "paintComposite"
+    },
+    {
+      "name": "Commit",
+      "count": 20,
+      "totalMs": 2.083,
+      "selfMs": 1.462,
+      "category": "paintComposite"
+    },
+    {
+      "name": "v8.callFunction",
+      "count": 290,
+      "totalMs": 10874.816,
+      "selfMs": 1.441,
+      "category": "scripting"
+    },
+    {
+      "name": "Document::recalcStyle",
+      "count": 20,
+      "totalMs": 1.386,
+      "selfMs": 1.386,
+      "category": "other"
+    },
+    {
+      "name": "dispatchDiscreteEvent",
+      "count": 86,
+      "totalMs": 1.352,
+      "selfMs": 1.352,
+      "category": "other"
+    },
+    {
+      "name": "Blink.Paint.UpdateTime",
+      "count": 20,
+      "totalMs": 3.881,
+      "selfMs": 0.958,
+      "category": "paintComposite"
+    },
+    {
+      "name": "Editor::SyncSelection",
+      "count": 20,
+      "totalMs": 1.066,
+      "selfMs": 0.956,
+      "category": "other"
+    },
+    {
+      "name": "SerializedScriptValueFactory::create",
+      "count": 85,
+      "totalMs": 0.874,
+      "selfMs": 0.874,
+      "category": "other"
+    },
+    {
+      "name": "Blink.CompositingInputs.UpdateTime",
+      "count": 40,
+      "totalMs": 0.965,
+      "selfMs": 0.863,
+      "category": "other"
+    }
+  ],
+  "serialization": {
+    "count": 0,
+    "totalMs": 0,
+    "names": {}
+  },
+  "cpu": {
+    "sampleCount": 3851,
+    "totalProfiledMs": 5987.742,
+    "subsystems": {
+      "other": {
+        "selfMs": 615.216
+      },
+      "CodeMirror": {
+        "selfMs": 5368.3
+      },
+      "React": {
+        "selfMs": 4.226
+      }
+    },
+    "top": [
+      {
+        "functionName": "parseInline",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 2287.439,
+        "samples": 1356,
+        "sharePct": 38.202
+      },
+      {
+        "functionName": "finishLeaf",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 2155.213,
+        "samples": 1291,
+        "sharePct": 35.994
+      },
+      {
+        "functionName": "(program)",
+        "url": "(native)",
+        "selfMs": 410.629,
+        "samples": 310,
+        "sharePct": 6.858
+      },
+      {
+        "functionName": "HardBreak",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 241.235,
+        "samples": 145,
+        "sharePct": 4.029
+      },
+      {
+        "functionName": "Escape",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 109.424,
+        "samples": 60,
+        "sharePct": 1.827
+      },
+      {
+        "functionName": "Entity",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 94.244,
+        "samples": 54,
+        "sharePct": 1.574
+      },
+      {
+        "functionName": "Emphasis",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 82.423,
+        "samples": 51,
+        "sharePct": 1.377
+      },
+      {
+        "functionName": "InlineCode",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 80.095,
+        "samples": 45,
+        "sharePct": 1.338
+      },
+      {
+        "functionName": "LinkEnd",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 77.333,
+        "samples": 42,
+        "sharePct": 1.292
+      },
+      {
+        "functionName": "Link",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 76.703,
+        "samples": 46,
+        "sharePct": 1.281
+      },
+      {
+        "functionName": "Image",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 59.997,
+        "samples": 37,
+        "sharePct": 1.002
+      },
+      {
+        "functionName": "(garbage collector)",
+        "url": "(native)",
+        "selfMs": 56.41,
+        "samples": 34,
+        "sharePct": 0.942
+      },
+      {
+        "functionName": "HTMLTag",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 52.769,
+        "samples": 32,
+        "sharePct": 0.881
+      },
+      {
+        "functionName": "advance",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-T6UPSAAC.js?v=c04b256d",
+        "selfMs": 45.935,
+        "samples": 30,
+        "sharePct": 0.767
+      },
+      {
+        "functionName": "(idle)",
+        "url": "(native)",
+        "selfMs": 31.999,
+        "samples": 20,
+        "sharePct": 0.534
+      },
+      {
+        "functionName": "nextInner",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-WVU7FEEC.js?v=c04b256d",
+        "selfMs": 31.621,
+        "samples": 20,
+        "sharePct": 0.528
+      },
+      {
+        "functionName": "advance",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 16.154,
+        "samples": 14,
+        "sharePct": 0.27
+      },
+      {
+        "functionName": "run",
+        "url": "(native)",
+        "selfMs": 16.022,
+        "samples": 114,
+        "sharePct": 0.268
+      },
+      {
+        "functionName": "readLine",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 14.855,
+        "samples": 9,
+        "sharePct": 0.248
+      },
+      {
+        "functionName": "forwardInner",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 11.882,
+        "samples": 9,
+        "sharePct": 0.198
+      },
+      {
+        "functionName": "exports.jsxDEV",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=c04b256d",
+        "selfMs": 5.731,
+        "samples": 10,
+        "sharePct": 0.096
+      },
+      {
+        "functionName": "(anonymous)",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 5.69,
+        "samples": 5,
+        "sharePct": 0.095
+      },
+      {
+        "functionName": "transaction",
+        "url": "(native)",
+        "selfMs": 3.427,
+        "samples": 2,
+        "sharePct": 0.057
+      },
+      {
+        "functionName": "ensureAddr",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-WVU7FEEC.js?v=c04b256d",
+        "selfMs": 3.104,
+        "samples": 2,
+        "sharePct": 0.052
+      },
+      {
+        "functionName": "(anonymous)",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-LCOIHZTS.js?v=c04b256d",
+        "selfMs": 1.938,
+        "samples": 1,
+        "sharePct": 0.032
+      },
+      {
+        "functionName": "update",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-PI374FB7.js?v=c04b256d",
+        "selfMs": 1.731,
+        "samples": 1,
+        "sharePct": 0.029
+      },
+      {
+        "functionName": "enqueueConcurrentRenderForLane",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/react-dom_client.js?v=c04b256d",
+        "selfMs": 1.691,
+        "samples": 1,
+        "sharePct": 0.028
+      },
+      {
+        "functionName": "moveRangeI",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 1.683,
+        "samples": 1,
+        "sharePct": 0.028
+      },
+      {
+        "functionName": "tryGcDeleteSet",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-LCOIHZTS.js?v=c04b256d",
+        "selfMs": 1.514,
+        "samples": 1,
+        "sharePct": 0.025
+      },
+      {
+        "functionName": "transact",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-LCOIHZTS.js?v=c04b256d",
+        "selfMs": 1.159,
+        "samples": 1,
+        "sharePct": 0.019
+      },
+      {
+        "functionName": "DefaultEndLeaf",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/@codemirror_lang-markdown.js?v=c04b256d",
+        "selfMs": 0.997,
+        "samples": 1,
+        "sharePct": 0.017
+      },
+      {
+        "functionName": "pushHostContext",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/react-dom_client.js?v=c04b256d",
+        "selfMs": 0.993,
+        "samples": 1,
+        "sharePct": 0.017
+      },
+      {
+        "functionName": "renderWithHooks",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/react-dom_client.js?v=c04b256d",
+        "selfMs": 0.902,
+        "samples": 1,
+        "sharePct": 0.015
+      },
+      {
+        "functionName": "scrollBy",
+        "url": "(native)",
+        "selfMs": 0.72,
+        "samples": 1,
+        "sharePct": 0.012
+      },
+      {
+        "functionName": "prepareFreshStack",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/react-dom_client.js?v=c04b256d",
+        "selfMs": 0.64,
+        "samples": 80,
+        "sharePct": 0.011
+      },
+      {
+        "functionName": "scrollRectIntoView",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-PI374FB7.js?v=c04b256d",
+        "selfMs": 0.567,
+        "samples": 1,
+        "sharePct": 0.009
+      },
+      {
+        "functionName": "scrollIntoView",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-PI374FB7.js?v=c04b256d",
+        "selfMs": 0.521,
+        "samples": 1,
+        "sharePct": 0.009
+      },
+      {
+        "functionName": "getClientRects",
+        "url": "(native)",
+        "selfMs": 0.436,
+        "samples": 1,
+        "sharePct": 0.007
+      },
+      {
+        "functionName": "getBoundingClientRect",
+        "url": "(native)",
+        "selfMs": 0.29,
+        "samples": 1,
+        "sharePct": 0.005
+      },
+      {
+        "functionName": "measure",
+        "url": "http://127.0.0.1:5210/node_modules/.vite/deps/chunk-PI374FB7.js?v=c04b256d",
+        "selfMs": 0.232,
+        "samples": 1,
+        "sharePct": 0.004
+      }
+    ]
+  },
+  "environment": {
+    "chrome": "Chrome/155.0.8059.85",
+    "host": "Windows 11 Home China",
+    "node": "v22.14.0",
+    "fixtureLines": 100000,
+    "fixtureChars": 6788890,
+    "serving": "Vite dev (unminified names; product code unchanged)"
+  },
+  "traceBytes": 3662148
+}

@@ -1,0 +1,43 @@
+{
+  "sizes": [
+    5000,
+    25000,
+    50000,
+    100000
+  ],
+  "rows": [
+    {
+      "size": 5000,
+      "chars": 333890,
+      "samples": 20,
+      "p50": 16,
+      "p95": 16.9,
+      "max": 29.7
+    },
+    {
+      "size": 25000,
+      "chars": 1688890,
+      "samples": 20,
+      "p50": 70,
+      "p95": 301.2,
+      "max": 307.1
+    },
+    {
+      "size": 50000,
+      "chars": 3388890,
+      "samples": 20,
+      "p50": 585.9,
+      "p95": 606,
+      "max": 618.1
+    },
+    {
+      "size": 100000,
+      "chars": 6788890,
+      "samples": 20,
+      "p50": 1182.3,
+      "p95": 1209,
+      "max": 1256
+    }
+  ],
+  "note": "diagnostic scaling probe, 20 inputs per size; not a benchmark claim"
+}
