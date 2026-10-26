@@ -32,12 +32,25 @@
  * the panel is what `canEdit` gates. `aria-expanded`/`aria-controls` describe the panel it owns,
  * and no existing selector (`active-document`, `connection-status`, `role: …`,
  * `collaborator-list`, `undo-state`, `markdown-editor`) changes shape or meaning.
+ *
+ * ## The mode switch (V1 Markdown preview)
+ *
+ * `[编辑] [预览]` is a two-button segmented control. It is **controlled**: `mode` and
+ * `onModeChange` come from `DocumentWorkspace`, which owns the single mode bit. The header
+ * still holds no state and still reads no document — preview is a UI mode, not content.
+ *
+ * `aria-pressed` is the state (exactly one button is `true`), so the control is operable and
+ * announced by assistive technology without a custom roving-tabindex widget. Neither button
+ * is disabled for a viewer: preview is read-only by nature and editing is already gated by the
+ * read-only compartment. Test ids `mode-editor` / `mode-preview` are the UI contract for the
+ * browser suite.
  */
 import type { ConnectionStatus, CollaboratorInfo, UndoState } from '@insighthub/shared';
 
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
 import { CollaboratorList } from '../collaborators/CollaboratorList.js';
 import { ConnectionStatusBadge } from '../status/ConnectionStatusBadge.js';
+import type { EditorMode } from './editorMode.js';
 
 export interface DocumentHeaderProps {
   /** The active document id; also the title and the `active-document` contract text. */
@@ -55,6 +68,10 @@ export interface DocumentHeaderProps {
   aiOpen: boolean;
   /** Toggle the AI proposal panel — supplied by the workspace, which owns the panel's state. */
   onToggleAi: () => void;
+  /** The current surface mode. Owned by `DocumentWorkspace`, echoed here for `aria-pressed`. */
+  mode: EditorMode;
+  /** Switch between edit and preview. The workspace owns the mode state. */
+  onModeChange: (mode: EditorMode) => void;
 }
 
 export function DocumentHeader({
@@ -68,6 +85,8 @@ export function DocumentHeader({
   onRedo,
   aiOpen,
   onToggleAi,
+  mode,
+  onModeChange,
 }: DocumentHeaderProps) {
   const readOnly = gate.readOnly;
   const undoDisabled = readOnly || !undoState.canUndo;
@@ -78,6 +97,35 @@ export function DocumentHeader({
       <h1 className="doc-head__title" data-testid="active-document" title={documentId}>
         {documentId}
       </h1>
+
+      {/*
+        The V1 mode switch. A segmented control, not a tablist: the two buttons are views of
+        the same document, and `aria-pressed` states which one is active without implying
+        two independent tab panels. Both stay enabled for every role (preview is read-only,
+        editing is gated by the editor itself).
+      */}
+      <div className="doc-modes" role="group" aria-label="编辑模式">
+        <button
+          type="button"
+          className="doc-mode"
+          data-testid="mode-editor"
+          aria-pressed={mode === 'editor'}
+          title="编辑 Markdown 源文本"
+          onClick={() => onModeChange('editor')}
+        >
+          编辑
+        </button>
+        <button
+          type="button"
+          className="doc-mode"
+          data-testid="mode-preview"
+          aria-pressed={mode === 'preview'}
+          title="只读预览渲染后的文档"
+          onClick={() => onModeChange('preview')}
+        >
+          预览
+        </button>
+      </div>
 
       <ConnectionStatusBadge status={status} />
 

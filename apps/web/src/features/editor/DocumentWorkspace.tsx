@@ -64,6 +64,21 @@
  * `documentId`, so the switch destroys the old session and remounts the workspace (one socket,
  * one room — §5.4). The AI panel closes as part of that remount. That is intended: a proposal's
  * anchors belong to one replica and are never carried across documents (D-078 §4 R2-1).
+ *
+ * ## Edit / preview mode (V1 Markdown preview)
+ *
+ * The single mode bit is UI state and lives here (`useState<EditorMode>`, default `editor`).
+ * The header renders the switch; `DocumentCanvas` applies it:
+ *
+ * - `editor` mode: CodeMirror only.
+ * - `preview` mode: `MarkdownPreview` (read-only, lazy renderer) is shown and the editor pane
+ *   is hidden with CSS. The editor is **not** unmounted — same `EditorView`, same binding,
+ *   same undo history, same scroll offset when it comes back.
+ *
+ * The preview reads `session.doc.getText(DOCUMENT_TEXT_KEY)` directly; nothing about the
+ * document body enters this component's state (`AGENTS.md` R11). A document switch remounts the
+ * workspace, so the mode resets to `editor` and the preview of the old document cannot survive
+ * into the new one.
  */
 import { useCallback, useRef, useState } from 'react';
 
@@ -77,8 +92,11 @@ import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
 import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
 import { AiSuggestPanel } from './AiSuggestPanel.js';
 import { CollaborativeMarkdownEditor } from './CollaborativeMarkdownEditor.js';
+import { DocumentCanvas } from './DocumentCanvas.js';
 import { DocumentHeader } from './DocumentHeader.js';
+import { DEFAULT_EDITOR_MODE, type EditorMode } from './editorMode.js';
 import { runSessionHistory } from './editorEditability.js';
+import { MarkdownPreview } from './MarkdownPreview.js';
 import {
   useSessionCollaborators,
   useSessionConnectionStatus,
@@ -174,6 +192,11 @@ function ActiveDocument({
   // owns that) and never the document (the `Y.Text` owns that).
   const [aiOpen, setAiOpen] = useState(false);
   /**
+   * The one mode bit. UI state only — never persisted, never dispatched, and it carries no
+   * document content. Defaulting to `editor` is the pre-preview behaviour.
+   */
+  const [mode, setMode] = useState<EditorMode>(DEFAULT_EDITOR_MODE);
+  /**
    * The editor's read-only selection reader. Held in a ref because it must be the *current* editor
    * instance: the editor replaces it on every (re)mount and clears it on teardown, so a stale
    * reader can never answer for a document that is no longer on screen.
@@ -193,6 +216,8 @@ function ActiveDocument({
         onRedo={() => runSessionHistory(gate.readOnly, session, 'redo')}
         aiOpen={aiOpen}
         onToggleAi={() => setAiOpen((open) => !open)}
+        mode={mode}
+        onModeChange={setMode}
       />
 
       {/*
@@ -251,16 +276,28 @@ function ActiveDocument({
         />
       ) : null}
 
-      <div className="canvas">
-        <CollaborativeMarkdownEditor
-          session={session}
-          readOnly={gate.readOnly}
-          onResync={setResyncReason}
-          selectionRef={(read) => {
-            selectionReader.current = read;
-          }}
-        />
-      </div>
+      <DocumentCanvas
+        mode={mode}
+        editor={
+          <CollaborativeMarkdownEditor
+            session={session}
+            readOnly={gate.readOnly}
+            hidden={mode === 'preview'}
+            onResync={setResyncReason}
+            selectionRef={(read) => {
+              selectionReader.current = read;
+            }}
+          />
+        }
+        preview={
+          /*
+            Keyed by the replica: a new `Y.Doc` is a new preview instance, so a snapshot from
+            the previous document can never be shown for this one. Mounted only in preview mode
+            by `DocumentCanvas`, which is what ties the `Y.Text` subscription to visibility.
+          */
+          <MarkdownPreview key={session.localClientId} session={session} />
+        }
+      />
     </div>
   );
 }

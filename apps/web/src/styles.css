@@ -420,6 +420,56 @@ body {
   white-space: nowrap;
 }
 
+/*
+ * Mode switch: `[编辑] [预览]` (V1 Markdown preview).
+ *
+ * A segmented control, not a tablist: the two buttons are two views of one document, and
+ * `aria-pressed` is the state. The active segment sits on `--paper` so it reads as the raised
+ * half of the control; no new palette is introduced.
+ */
+.doc-modes {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+}
+
+.doc-mode {
+  min-width: 46px;
+  height: 23px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 680;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.doc-mode:hover {
+  color: var(--text);
+}
+
+.doc-mode[aria-pressed='true'] {
+  background: var(--paper);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgb(37 47 62 / 8%);
+}
+
+.doc-mode:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ------------------------------------------------------------------ *
  * Collaborator avatar group
  * ------------------------------------------------------------------ */
@@ -684,6 +734,15 @@ body {
   box-shadow: 0 16px 40px rgb(37 47 62 / 7%);
 }
 
+/*
+ * Canvas panes. Preview mode hides the editor with `display: none` — deliberately CSS, not
+ * unmount: the CodeMirror view, its Y.Text binding, undo history and selection must survive
+ * a mode switch (the offset is restored by the editor itself).
+ */
+.canvas-pane--hidden {
+  display: none;
+}
+
 /* Loading / failure shells share the canvas frame, so a switch never jumps the layout. */
 .canvas--status {
   display: flex;
@@ -820,6 +879,207 @@ body {
 
 .cm-remote-selection {
   background: rgb(57 119 233 / 18%);
+}
+
+/* ------------------------------------------------------------------ *
+ * Markdown preview (V1) — read-only rendering of the same `Y.Text`
+ *
+ * Typography only, from the existing Cloud tokens: `--text`, `--muted`, `--border`, `--panel`,
+ * `--accent`, `--mono`. No new design system, no webfont, no images (image syntax is reduced
+ * to its alt text, see `MarkdownPreviewRenderer.tsx`). The body is a normal document region,
+ * not an `aria-live` region: re-rendering a whole document must not be narrated.
+ * ------------------------------------------------------------------ */
+
+.markdown-preview {
+  min-height: 510px;
+  padding: 26px 34px 34px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+/* `data-state` is the rendering signal; it never changes layout, only a light dim. */
+.markdown-preview[data-state='rendering'] .markdown-preview__body {
+  opacity: 0.82;
+}
+
+.markdown-preview__body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-preview__body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview h6 {
+  margin: 1.5em 0 0.55em;
+  font-weight: 770;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.markdown-preview h1 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+  font-size: 28px;
+}
+
+.markdown-preview h2 {
+  font-size: 23px;
+}
+
+.markdown-preview h3 {
+  font-size: 19px;
+}
+
+.markdown-preview h4 {
+  font-size: 17px;
+}
+
+.markdown-preview h5 {
+  font-size: 15px;
+}
+
+.markdown-preview h6 {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.markdown-preview p {
+  margin: 0 0 1em;
+}
+
+.markdown-preview ul,
+.markdown-preview ol {
+  margin: 0 0 1em;
+  padding-left: 1.6em;
+}
+
+.markdown-preview li {
+  margin: 0.2em 0;
+}
+
+.markdown-preview li > ul,
+.markdown-preview li > ol {
+  margin: 0.2em 0;
+}
+
+.markdown-preview blockquote {
+  margin: 0 0 1em;
+  padding: 0.35em 0 0.35em 1em;
+  border-left: 3px solid var(--border);
+  color: #3c4a61;
+}
+
+.markdown-preview blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-preview code {
+  padding: 0.12em 0.35em;
+  border-radius: 5px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.markdown-preview pre {
+  margin: 0 0 1.1em;
+  padding: 13px 15px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #f6f8fb;
+  line-height: 1.55;
+}
+
+.markdown-preview pre code {
+  padding: 0;
+  background: none;
+  font-size: 12.5px;
+}
+
+.markdown-preview a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgb(57 119 233 / 30%);
+}
+
+.markdown-preview a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.markdown-preview a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.markdown-preview hr {
+  height: 1px;
+  margin: 1.8em 0;
+  border: 0;
+  background: var(--border);
+}
+
+.markdown-preview table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 1.2em;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown-preview th {
+  background: var(--panel);
+  font-weight: 700;
+}
+
+.markdown-preview tbody tr:nth-child(even) td {
+  background: #fbfcfe;
+}
+
+/* An image is shown as its alt text, never as a request. */
+.markdown-preview__image {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 1px 7px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* A link whose protocol was refused keeps its label, but is not a link. */
+.markdown-preview__link-blocked {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: rgb(135 148 167 / 60%);
+}
+
+.markdown-preview__loading,
+.markdown-preview__empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* Kept for `MessageLog.tsx`, which is deliberately not rendered (no dead-code cleanup). */
@@ -1564,8 +1824,14 @@ body {
   }
 
   .canvas,
-  .markdown-editor .cm-editor {
+  .markdown-editor .cm-editor,
+  .markdown-preview {
     min-height: 410px;
+  }
+
+  .markdown-preview {
+    padding: 16px 14px 22px;
+    font-size: 14.5px;
   }
 
   .markdown-editor .cm-content {
