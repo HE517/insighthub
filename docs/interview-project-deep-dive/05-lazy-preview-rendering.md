@@ -38,8 +38,8 @@
 
 - 只覆盖 **lazy / Preview / debounce（渲染侧）**。
 - AI 流式、Diff、Accept/Reject、provider 选型 → `06-ai-editing-llm-design.md`。
-- 协作文本同步、Yjs、IndexedDB → `02-collaboration-offline.md`（同目录系列）。
-- 100k 性能数字的环境与意义 → `03-large-document-performance.md`。
+- 协作文本同步、Yjs、IndexedDB → `02-collaboration-yjs-offline.md`（同目录系列）。
+- 100k 性能数字的环境与意义 → `03-performance-redux-codemirror.md`。
 
 ---
 
@@ -61,8 +61,7 @@
 
 ### 2.2 为什么「懒」是产品决策，不是技术炫技
 
-`react-markdown` + `remark-gfm` 的依赖树（micromark / mdast / hast 等）会给首屏增加约 **49 kB gzip**
-（§12）。但这 49 kB 对「打开文档开始打字」这件事**零贡献**：
+`react-markdown` + `remark-gfm` 的依赖树（micromark / mdast / hast 等）如果静态 import，会给首屏增加约 **49 kB gzip**（§12）；lazy 之后这份成本只落在预览 chunk 上，不进首屏。而它本来对「打开文档开始打字」这件事**零贡献**：
 
 - 默认模式是 `editor`（`editorMode.ts:15` `DEFAULT_EDITOR_MODE = 'editor'`），首屏根本不渲染 Markdown；
 - 演示路径（demo）必须与加入 preview 之前**逐字节等价**，包括 bundle 行为
@@ -462,7 +461,7 @@ renderer 用一个 `useEffect([source])` 调 `onRendered`。effect 在 paint 之
 | `<link rel="preload">` / `modulepreload` 预取预览 chunk | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 未做；做了会把 49 kB 又拉回首屏 |
 | Error boundary + chunk 重试 | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | **明确缺口**，不是已实现 |
 | SSE / 流式 Markdown 渲染 | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 无流式数据源 |
-| React Compiler | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 未启用；本项目的手写 memo 只有 `useCallback(markReady)` |
+| React Compiler | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 未启用；手写 memo 只有少量 `useCallback`（如 `MarkdownPreview.tsx:93` 的 `markReady`）与 `useCollaborativeSession.ts:46` 的一个 `useMemo` |
 | 路由级 code splitting | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 无 router |
 | `requestIdleCallback` 预热 | RELATED KNOWLEDGE / ALTERNATIVE — NOT IMPLEMENTED | 未做 |
 

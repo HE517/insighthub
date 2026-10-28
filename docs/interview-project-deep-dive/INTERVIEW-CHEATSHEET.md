@@ -1,6 +1,6 @@
 # InsightHub — 面试速查（2–3 页）
 
-> 所有源码锚点：`57a9bee`。数据口径见 [README](README.md) 与各报告 §10/§12。
+> 所有源码锚点：`57a9bee`。数据口径见 [README](README.md) 与各报告 §12。
 
 ## 1. 一句话项目
 
@@ -18,8 +18,8 @@
 | reconnect | **763 / 770 / 770 ms** | n=9，restore→connected，local build |
 | input | **268.8 / 371.3 / 511.4 ms** | n=900，病理单段落 |
 | Long Task | **397–400 / run**（~300 inputs） | test instrumentation |
-| bundle | 1,058,970 raw / **340,811 gzip** | production build |
-| preview chunk | **160.46 kB raw / 48.99 kB gzip**；主包 +0.99 kB | lazy |
+| bundle（Preview 前，c2ad879） | 1,058,970 raw / **340,811 gzip** | production build；HEAD 已更大 |
+| preview chunk（Preview 合入后） | **160.46 kB raw / 48.99 kB gzip**；主包 +0.99 kB | lazy；与上一行不是同一次构建 |
 | debounce | **400 ms（配置值）** | 不是可见延迟 P50 |
 | 浏览器套件 | 默认 **78/78**；remote **83 未跑** | 73 + 5 preview |
 | abort（目录 stale） | **69–78 ms** | CDP hold 200 后切换 |
@@ -75,7 +75,7 @@ canManageMembers) → HTTP guard / WS join+write / UI`；**server 才是边界**
 13. **100k Preview 为什么卡？** 单段落 → inline parser 全量扫描；浏览器 420 s 未 ready（limitation）。
 14. **AI 为什么不直接写 Y.Text？** 输出不可信、可能 stale、需用户确认、必须 CRDT 事务。
 15. **Accept 怎么防覆盖？** `baseRevision` + RelativePosition + `expectedText` 三校验，不匹配→stale。
-16. **为什么选 Kimi？** 国内 endpoint、成本、中文、OpenAI-compatible；默认 model `kimi-k3`（`kimi-k3.1-pro` 只是 Owner escalation tier）；架构仍可换 OpenAI（`AI_PROVIDER/AI_MODEL` + adapter）。
+16. **为什么选 Kimi？** 国内 endpoint、成本、中文、OpenAI-compatible；默认 model `kimi-k3`（`kimi-k3.1-pro` 是 Owner 决策的升级档，不是默认）；架构仍可换 OpenAI（`AI_PROVIDER/AI_MODEL` + adapter）。
 17. **外部模型验证过吗？** **NOT VERIFIED**：OpenAI 429 余额；Kimi 400 后改 prompt-only 未重试。
 18. **为什么 SQLite 不是 Postgres？** 单实例 V1；事务保证 document+owner membership 原子；扩展受限。
 19. **为什么不用 K8s/Redis？** V1 单实例允许短暂停机；不引入运维面。
@@ -88,5 +88,7 @@ canManageMembers) → HTTP guard / WS join+write / UI`；**server 才是边界**
 - 100k 是**病理 fixture**；正常 block 文档 ~3.5 ms，不代表产品整体慢。
 - 100k Preview 浏览器 **420 s 未 ready**。
 - AI 外部 live **无成功记录**；模型质量/成本/延迟未评估。
-- `document metadata stale` = **NOT APPLICABLE**；`requestId` guard 未压测。\n- “权限变化导致请求竞态”是错的说法：权限变化不发 HTTP，真实机制是**授权结论过期**（服务端逐帧重查，UI 滞后约 3 s）。\n- 性能数字测于 `c2ad879`（Preview 合入前）；HEAD 的 bundle 已更大，引用包体必须重新 build。
-- remote 78/83 **没有跑**；历史 flake 仍在 `FLAKE-LOG`。
+- `document metadata stale` = **NOT APPLICABLE**；`requestId` guard 未压测。
+- “权限变化导致请求竞态”是错的说法：权限变化不发 HTTP，真实机制是**授权结论过期**（服务端逐帧重查，UI 滞后约 3 s）。
+- 性能数字测于 `c2ad879`（Preview 合入前）；HEAD 的 bundle 已更大，引用包体必须重新 build。
+- remote 组（**83 个注册场景 = 78 + 5**）**没有跑**；历史 flake 仍在 `FLAKE-LOG`。
