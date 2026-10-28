@@ -168,7 +168,7 @@ stands even after the bullet is corrected.
 
 | Bullet | Required change | Why |
 | --- | --- | --- |
-| B5 | Replace **"使用 Playwright"** with **"真实 Chromium（CDP）"** | The 73/73 suite is a dependency-free CDP harness (`tests/browser/README.md:22-36`). `playwright-core` exists only for the opt-in deployed smoke (`tests/deployed/b13.mjs`), so "Playwright covers collaboration/offline/permissions" is factually false. Keep "73/73 default"; never "78/78". |
+| B5 | Replace **"使用 Playwright"** with **"真实 Chromium（CDP）"** | The 73/73 suite is a dependency-free CDP harness (`tests/browser/README.md:22-36`). `playwright-core` exists only for the opt-in deployed smoke (`tests/deployed/b13.mjs`), so "Playwright covers collaboration/offline/permissions" is factually false. At the evidence commit the default suite was 73/73; it is now 78/78 (73 + 5 preview scenarios). Never describe the remote group as "78/78 PASS" — it is registered, not run. |
 | B3 | Keep **"本地 production build"**; never shorten to "production P95" | 680/770 ms are built-server + built-web, local, no TLS/Clerk/Render. `production performance = NOT VERIFIED`. |
 | B4 | Say **"目录列表 stale + AbortController"**, not "document metadata stale" | The client issues no metadata HTTP request on open/switch, so metadata staleness is `NOT APPLICABLE`; the measured stale path is `GET /api/documents` (abort 69–78 ms). `requestId` guard is not stress-tested. |
 | B2 | Keep **"双用户 / two independent profiles"** | A third concurrent editor is not verified; offline windows measured 1–2 s, not 30 s. |
