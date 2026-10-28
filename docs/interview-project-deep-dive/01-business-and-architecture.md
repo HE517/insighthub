@@ -211,7 +211,7 @@
 | 文档正文 | `Y.Doc` / `Y.Text('content')` | IndexedDB（Yjs update 编码）+ 服务端 SQLite（snapshot+log） | **否** | 与 session 同生命周期；换文档即换实例 | 唯一权威；放进 Redux 会每键重渲染并产生第二份真相（R11 / `ARCHITECTURE.md:5-42`） |
 | `activeDocumentId` | Redux `document` slice | 否 | 是 | 进程生命周期 | 纯展示指针；它变化触发 workspace remount（`documentSlice.ts:28-35`） |
 | `pendingDocumentId` | Redux `document` slice | 否 | 是 | 输入框生命周期 | 切文档前的草稿输入，属于 UI（`AppShell.tsx:52-60`） |
-| `metadata` | Redux `document` slice | 否（服务端才是权威） | 是 | 当前文档 | 渲染用元数据；换文档时清空，避免旧元数据（`documentSlice.ts:61-65`） |
+| `metadata` | Redux `document` slice | 否（服务端才是权威） | 是 | 当前文档 | **字段预留，运行时恒为 `null`**：客户端打开/切换文档不发 metadata 请求，`documentMetadataReceived` 全仓库无 dispatcher（03 §5、04 §3 开头）；换文档时仍会清空，避免旧元数据（`documentSlice.ts:61-65`） |
 | 角色 / capability | `DocumentSession.roomRole` → `getRole()` | **否** | **否** | 房间生命周期；room 结束变 `null` | 服务端裁决；镜像到 Redux 会在"unknown"时给出错误猜测（`document-session.ts:259-266`、`capabilityGate.ts:53-81`） |
 | 连接状态 | `SyncProvider` → `DocumentSession.networkStatus` | 否 | 否 | socket 生命周期 | 高频、瞬时；只驱动 badge（`document-session.ts:364-368`） |
 | 协作者 presence | `y-protocols` `Awareness`（room 内） | **否**（明确不持久化） | 否 | 房间生命周期 + 30 s 过期 | 存在性数据，持久化会导致"幽灵协作者"（`room.ts:192`、`awareness.ts:24-36`） |
@@ -288,7 +288,7 @@ hydrate 需要 I/O，但把 `joinRoom` 改成 async 会重新打开中间态 bug
 每条只写**本项目**的真实理由；没有实测的地方明确说"没有对比实验"。
 
 - **Next.js**：本项目是"一个 SPA + 一个同源 API/WS 进程"。正文必须留在客户端 `Y.Text`，SSR/RSC 拿不到也不该拿正文；`COLLAB_SESSION_CONSTRAINTS` 明确写了 "Server-side rendering must not call this"（`collab-session.ts:409-420`）。引入 Next 会多一个 server runtime、多一套构建与路由，而 Express 已经承担了 API/WS/静态托管（`render.yaml` 同源）。`PROJECT.md:103-105` 把它列为明确不采用。
-- **NestJS**：服务端只有约 10 条路由（`app.ts:346-408`），复杂度在房间状态机与 SQLite 流水线，不在路由组合。装饰器 + DI 容器不会让 `registry.ts` 的 1100 行变简单，只会再加一层模块系统。故保持 Express 5 + 显式注入（`createApp(config, authz, aiProvider, identity, aiLimits, options)`）。
+- **NestJS**：服务端只有约 10 条路由（`app.ts:346-408`），复杂度在房间状态机与 SQLite 流水线，不在路由组合。装饰器 + DI 容器不会让 `registry.ts` 的约 1,100 行变简单，只会再加一层模块系统。故保持 Express 5 + 显式注入（`createApp(config, authz, aiProvider, identity, aiLimits, options)`）。
 - **Kubernetes / 容器编排**：V1 明确 single instance / single region / no HA / 可接受短暂停机（D-082 D2）。没有水平扩展，就没有编排要解决的问题；反而多出 probe、资源配额、ingress 与镜像流水线。
 - **Redis**：presence 是 Yjs awareness，room-scoped、内存态、随房间销毁；单实例下没有跨进程 fan-out 需求。引入 Redis 等于给 presence 造第二个通道——正是 D-021 删掉的东西。只有当"多实例 + 跨实例广播"成为真实需求时才成立，而那是 non-goal。
 - **Postgres**：单进程、单盘、单写者，SQLite 的事务/WAL 已够；`node:sqlite` 零新增依赖（D-041 还实测了 WAL、BLOB、回滚、快照替换）。Postgres 会引入第二个服务、连接串/凭据、迁移工具与网络跳。代价是同步 API 阻塞事件循环，所以 snapshot 压缩被移出热路径。
@@ -400,6 +400,8 @@ hydrate 需要 I/O，但把 `joinRoom` 改成 async 会重新打开中间态 bug
 机器与版本：Windows 11 10.0.26200 x64、i5-1340P（16 逻辑核）、15.7 GiB、Node v22.14.0、Chrome **155.0.8059.85 headless**（`host`/`chrome` 字段来自同一 JSON）。fixture：`tests/perf/fixtures/100k-lines.md`，100000 行、6,788,895 字符、sha256 `0d12688d…`。
 
 必须同时说出的三句话：① 这是**本地 production build**，不是线上；② **cold 只有 ready，重连是 warm**；③ **没有优化前后对比**，dev-server 的差异是"服务路径差异"，不是优化收益。
+
+另：表格里的数字测量于 `c2ad879`（Preview 合入前）；HEAD 的 bundle 已变大，引用包体前必须重新 build（见 03 §12.9）。
 
 ---
 

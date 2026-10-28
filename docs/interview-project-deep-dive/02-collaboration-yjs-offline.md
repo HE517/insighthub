@@ -457,6 +457,7 @@ Node 级补充（不是浏览器证据）：`convergence.test.ts:53`（重复 up
 - **n=9 的来源**：3 个独立 perf 进程 × 每进程 3 次 reconnect（`sampleCounts.reconnect=9`）。p95 是 nearest-rank，n=9 时接近最大值。
 - **cold/warm**：ready 是 cold（新页面/新进程）；reconnect 是 warm（`Y.Doc`、IndexedDB、undo 都在，只换 socket）。
 - **环境**：Windows 11 10.0.26200 x64、i5-1340P、15.7 GiB、Node v22.14.0、Chrome **155.0.8059.85 headless**；fixture 100k 行 / 6,788,895 字符 / sha256 `0d12688d…`。
+- **测量 commit**：全部数字来自 `c2ad879`（JSON 的 `git.commit` 自证；Preview 合入前）；HEAD 产品代码已变化，未重跑。
 - **不是线上**：没有 TLS/Clerk/Render；**不得**写成 "production P95"；**没有优化前后对比**，dev-server 的差异是 serving path 差异。
 
 ---

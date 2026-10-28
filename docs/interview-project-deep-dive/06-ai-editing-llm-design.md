@@ -5,8 +5,8 @@
 > **Permalink base:** `https://github.com/HE517/insighthub/blob/57a9bee5f2f8d6ff30f2a8373b61328546475183/`
 > **Runtime:** React **19**（`apps/web/package.json:26`）· Node 22 · Express · Yjs 13.6.33 · Zod
 > **Status vocabulary:** `IMPLEMENTED / VERIFIED` · `IMPLEMENTED / NOT VERIFIED` · `PLANNED / NOT IMPLEMENTED`
-> **一句话结论：** 提案 → Diff → Accept/Reject **已实现且有真实浏览器证据**；provider seam 与 production
-> integration path **已实现**；**外部大模型 live 调用 0 次成功（NOT VERIFIED）**；**流式 PLANNED，不存在**。
+> **一句话结论：** 提案 → Diff → Accept/Reject **已实现且有真实浏览器证据**；provider seam 与生产接入路径
+> （env → adapter → fail-closed）**已实现、未 live 验证**；**外部大模型 live 调用 0 次成功（NOT VERIFIED）**；**流式 PLANNED，不存在**。
 
 ---
 
@@ -14,15 +14,15 @@
 
 ### 1.1 原句（逐字，不改写）
 
-> 针对 AI 流式响应增量更新渲染内容……并支持生成结果 Diff / Accept / Reject 交互。
+> 加载与流式渲染优化：对 Markdown Preview、权限模块等非首屏模块进行 React.lazy 代码拆分；针对 AI 流式响应增量更新渲染内容，对远端协作更新进行批量合并与防抖，降低高频更新导致的渲染开销，并支持生成结果 Diff / Accept / Reject 交互。
 
-（结合项目实际 AI 能力：provider abstraction、结构化 draft、校验、Diff、Accept/Reject。）
+（B5 在证据包里拆成两半：lazy / Preview / debounce 归 `05`；AI 流式（未实现）与 Diff / Accept / Reject 归本报告。上面引用是整句逐字，不做删节；结合项目实际 AI 能力：provider abstraction、结构化 draft、校验、Diff、Accept/Reject。）
 
 ### 1.2 逐条裁决
 
 | # | 原句片段 | 判定 | 证据（pin 到本 commit） | 处理 |
 | --- | --- | --- | --- | --- |
-| C1 | 「针对 AI **流式响应**增量更新渲染内容」 | **PLANNED / NOT IMPLEMENTED** | 一次 `POST /api/ai/suggest` 返回**完整** draft；请求体 `stream: false`（`openai-compatible.ts:149-150`）；`apps/**` 无 `EventSource`/`ReadableStream`/`text/event-stream`/`stream: true`；面板只有 `generating → proposal`（`AiSuggestPanel.tsx:102-109`） | §1.4 明说「没做」；§14 Q14 讲「如果做怎么做」 |
+| C1 | 「针对 AI **流式响应**增量更新渲染内容」 | **PLANNED / NOT IMPLEMENTED** | 一次 `POST /api/ai/suggest` 返回**完整** draft；请求体 `stream: false`（`openai-compatible.ts:149-150`）；`apps/**` 无 `EventSource`/`ReadableStream`/`text/event-stream`/`stream: true`；面板只有 `generating → proposal`（`AiSuggestPanel.tsx:102-109`） | §1.4 明说「没做」；§14 Q6 讲「如果做怎么做」 |
 | C2 | 「支持生成结果 **Diff**」 | **IMPLEMENTED / VERIFIED** | diff 在 `buildSuggestion` 里由 `unifiedDiff` 一次算出（`provider.ts:203-207`），面板**逐字渲染**不重算（`AiSuggestPanel.tsx:421-433`），`aria-label="Unified diff preview"` | §7.3 |
 | C3 | 「支持 **Accept / Reject** 交互」 | **IMPLEMENTED / VERIFIED** | Accept：`AiSuggestPanel.tsx:248-279` → `applySuggestion`（`apply.ts:92-135`）→ **一个** `ai` origin 的 Yjs 事务；Reject：`:281-287` **只改面板状态** | §7.4、§11 |
 | C4 | 「**provider abstraction**」（项目补充） | **IMPLEMENTED** | `provider.ts:86-88` 的 `ServerAiProvider` 接口 + `provider.ts:162-186` 的工厂；`stub`/`openai`/`kimi`/`disabled` 四选一，**无 fallback** | §6.4 专章 |
@@ -204,10 +204,10 @@ remote（VITE_AI_PROVIDER=remote）
 | stale 原因 `staleReason` | 同上 | 同上 | 否 | 否 | `:161` |
 | 本地 revision 计数 | `createLocalRevisionTracker(doc)`（`useLayoutEffect` 创建） | 面板挂载 | **否**（刻意不持久化、不跨端） | 否 | `revision.ts:96-113`；`:39-47` 注释 |
 | 在飞请求 | `abortRef: AbortController \| null` | 面板挂载 | 否 | 否 | `AiSuggestPanel.tsx:182-189` |
-| draft（服务端） | provider 返回值，**只存在于响应中** | 一次请求 | 否 | 否 | `route.ts:325-343`；`route-invariants` 断言服务端没有文档正文源 |
+| draft（服务端） | provider 返回值，**只存在于响应中** | 一次请求 | 否 | 否 | `route.ts:325-343`；`route.invariants` 断言服务端没有文档正文源 |
 | provider 选择 | 服务端环境变量 / 客户端 `VITE_AI_PROVIDER` | 进程/构建 | 配置 | 否 | `provider.ts:162-186`、`aiProvider.ts:61-63` |
 | 预算计数 | `AiLimits` 实例（每 app 一个） | 进程（重启清零） | **否** | 否 | `limits.ts:137-147`、`:130-136` 注释 |
-| 服务端文档正文 | **不存在**（只有客户端上送 `content`） | 一次请求 | 否 | 否 | `route-invariants.test.ts:124-179` |
+| 服务端文档正文 | **不存在**（只有客户端上送 `content`） | 一次请求 | 否 | 否 | `route.invariants.test.ts:124-179` |
 
 **要能脱口而出的一句：** 提案是 UI 状态，正文是 `Y.Text`，计数是客户端局部数（且刻意不可跨端），
 预算在服务端内存。**没有任何一层把「AI 结果」当成文档状态。**
@@ -485,7 +485,7 @@ anchor 仍能解析（Yjs 保留被删内容的位置），但解析出的文本
 | 服务端 mint anchors | `RelativePosition` 是 replica 相关的，服务端锚点在客户端解析会 `null` | 客户端必须回传自己的 doc 状态，等于把服务端变成 CRDT 客户端 |
 | 字符串 replace（把 `oldText` 换成 `newText`） | 同一段文本可能出现多次；用户改过就匹配不到；无法表达「插入」 | 需要「出现第几次」的额外语义，且仍然没有并发判定 |
 | LLM function calling / tools 让它自己选操作 | 本产品的操作空间只有 insert/replace；让模型选工具等于把 schema 交给模型 | 输出更不可控，校验更难 |
-| 流式（SSE / 增量 draft） | **没做**；一旦流式，就必须处理「半个 JSON」与「半成品不得进 Accept」 | 见 §12.4 / §14 Q14 的 planned 方案 |
+| 流式（SSE / 增量 draft） | **没做**；一旦流式，就必须处理「半个 JSON」与「半成品不得进 Accept」 | 见 §12.4 / §14 Q6 的 planned 方案 |
 | 重试 / 指数退避 | 会放大 token 花费；且失败类别里 401/404 重试无意义 | 可用人工重试替代；系统级重试需要预算联动 |
 | 跨 provider fallback | 「OpenAI 失败就用 Kimi」= 静默改语义/成本/合规 | 需要产品决策 + 明确告知用户 |
 | OpenAI / Moonshot SDK | 一个 POST + JSON body 不值得一个生产依赖（R3） | 失去 SDK 的流式/重试便利（本项目不用） |
@@ -660,7 +660,7 @@ anchor 仍能解析（Yjs 保留被删内容的位置），但解析出的文本
 
 ### 11.5 全量
 
-- 默认浏览器套件 **73/73 PASS**（`874f107` 之前的证据轮）；preview 合入后默认套件 **78/78**
+- 默认浏览器套件 **73/73 PASS**（`1807ea1` 的证据轮）；preview 合入后默认套件 **78/78**
   （`7585263`），AI 场景数不变（`31-m3-ai` 7 个 + stale 1 个）。
 - **remote 组未跑**；外部 live **0 次成功**。
 
@@ -689,7 +689,7 @@ anchor 仍能解析（Yjs 保留被删内容的位置），但解析出的文本
 | --- | --- | --- | --- |
 | 默认浏览器套件 | **73/73**（preview 前）/ **78/78**（`7585263`） | 真实 Chromium/CDP | 不是 Playwright |
 | remote 场景 | **5 个已注册**（总数 83） | env-gated | **不是 PASS 数** |
-| AI 默认套件场景 | **7 + 1** | `31-m3-ai` + stale | — |
+| AI 默认套件场景 | **7**（`m3/5`–`m3/11`）+ **1** 条 stale（`stale/directory-list`，非 AI） | — |
 
 ### 12.3 明确「不得写」的数字
 
