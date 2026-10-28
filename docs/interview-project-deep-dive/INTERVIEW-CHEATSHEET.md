@@ -75,7 +75,7 @@ canManageMembers) → HTTP guard / WS join+write / UI`；**server 才是边界**
 13. **100k Preview 为什么卡？** 单段落 → inline parser 全量扫描；浏览器 420 s 未 ready（limitation）。
 14. **AI 为什么不直接写 Y.Text？** 输出不可信、可能 stale、需用户确认、必须 CRDT 事务。
 15. **Accept 怎么防覆盖？** `baseRevision` + RelativePosition + `expectedText` 三校验，不匹配→stale。
-16. **为什么选 Kimi？** 国内 endpoint、成本、中文、OpenAI-compatible；model `kimi-k3.1-pro`；架构仍可换 OpenAI（`AI_PROVIDER/AI_MODEL` + adapter）。
+16. **为什么选 Kimi？** 国内 endpoint、成本、中文、OpenAI-compatible；默认 model `kimi-k3`（`kimi-k3.1-pro` 只是 Owner escalation tier）；架构仍可换 OpenAI（`AI_PROVIDER/AI_MODEL` + adapter）。
 17. **外部模型验证过吗？** **NOT VERIFIED**：OpenAI 429 余额；Kimi 400 后改 prompt-only 未重试。
 18. **为什么 SQLite 不是 Postgres？** 单实例 V1；事务保证 document+owner membership 原子；扩展受限。
 19. **为什么不用 K8s/Redis？** V1 单实例允许短暂停机；不引入运维面。
