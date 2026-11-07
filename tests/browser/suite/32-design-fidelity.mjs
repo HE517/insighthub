@@ -48,8 +48,8 @@ import { WireOracle } from '../lib/oracle.mjs';
 import { waitForRoleTag } from '../lib/role-gate.mjs';
 
 /** The exact computed colours of `--accent` / `--accentSoft` in `styles.css`. */
-const ACCENT = 'rgb(57, 119, 233)';
-const ACCENT_SOFT = 'rgb(234, 242, 255)';
+const ACCENT = 'rgb(36, 84, 62)';
+const ACCENT_SOFT = 'rgb(229, 238, 227)';
 
 /** A per-run marker, so stale content can never satisfy an assertion. */
 function marker(prefix) {
@@ -570,7 +570,7 @@ export function register(runner) {
       await waitForExactStyle(page, '.switcher', 'transform', 'none', {
         label: 'the switcher to return to its unfocused position',
       });
-      await waitForExactStyle(page, '.switcher', 'border-color', 'rgb(220, 228, 237)', {
+      await waitForExactStyle(page, '.switcher', 'border-color', 'rgb(218, 221, 212)', {
         label: 'the switcher to return to its resting border',
       });
       const idle = await styleOf(page, '.switcher', ['border-color', 'box-shadow', 'transform']);
@@ -615,7 +615,7 @@ export function register(runner) {
         '.switcher',
         'box-shadow',
         (value) =>
-          typeof value === 'string' && value.includes('3px') && value.includes('57, 119, 233'),
+          typeof value === 'string' && value.includes('3px') && value.includes('36, 84, 62'),
         { label: 'the switcher 3px accent focus ring' },
       );
       const after = await styleOf(page, '.switcher', ['border-color', 'box-shadow', 'transform']);
@@ -628,7 +628,7 @@ export function register(runner) {
       });
 
       assertIncludes(shadow, '3px', 'the focus ring must be 3px thick');
-      assertIncludes(shadow, '57, 119, 233', 'the focus ring must use the accent colour');
+      assertIncludes(shadow, '36, 84, 62', 'the focus ring must use the accent colour');
       assert(focused.matrix !== null, 'the focused switcher transform must not be `none`');
       assertApprox(focused.matrix.ty, -1, 0.05, 'switcher focus translateY');
       assertEqual(

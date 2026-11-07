@@ -90,6 +90,7 @@ import { useAppDispatch } from '../../store/hooks.js';
 import { capabilityGate } from '../permissions/capabilityGate.js';
 import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
 import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
+import { AiDirectory } from './AiDirectory.js';
 import { AiSuggestPanel } from './AiSuggestPanel.js';
 import { CollaborativeMarkdownEditor } from './CollaborativeMarkdownEditor.js';
 import { DocumentCanvas } from './DocumentCanvas.js';
@@ -255,49 +256,76 @@ function ActiveDocument({
       </div>
 
       {/*
-        The AI proposal panel. Mounted only while open: closing it disposes the revision tracker
-        and aborts any generation in flight (the panel's own unmount effect). It renders between
-        the notices and the canvas because it is a review surface *of* the document below it.
-      */}
-      {/*
-        A proposal's anchors were minted against one `Y.Doc`. If the session is replaced (the
-        one-time identity remount does exactly that), the old proposal belongs to a replica that
-        no longer exists, so the panel is keyed on the session's `Y.Doc` client id: a new replica
-        remounts it and drops the proposal instead of applying it to a different document instance.
-      */}
-      {aiOpen ? (
-        <AiSuggestPanel
-          key={session.localClientId}
-          session={session}
-          gate={gate}
-          readSelection={() => selectionReader.current?.() ?? null}
-          onClose={() => setAiOpen(false)}
-          onSelectDocument={selectDocument}
-        />
-      ) : null}
+        Three-column workbench (D-088 UI-2): the read-only document directory moves out of the AI
+        panel into a permanent left rail, and the AI review surface becomes the right rail.
 
-      <DocumentCanvas
-        mode={mode}
-        editor={
-          <CollaborativeMarkdownEditor
-            session={session}
-            readOnly={gate.readOnly}
-            hidden={mode === 'preview'}
-            onResync={setResyncReason}
-            selectionRef={(read) => {
-              selectionReader.current = read;
-            }}
+        There is exactly **one** `AiDirectory` instance in the workspace. It used to mount inside
+        `AiSuggestPanel`, so moving it here must not add a second fetch, a second list state or a
+        second session: the same component, the same `GET /api/documents` path, the same
+        `documentSelected` action. Opening/closing the AI panel no longer mounts or aborts the
+        directory; switching documents still remounts the keyed workspace (one room per socket).
+      */}
+      <div className={aiOpen ? 'workbench workbench--ai' : 'workbench'}>
+        <aside className="doc-rail" data-testid="doc-rail" aria-label="Documents">
+          <AiDirectory
+            activeDocumentId={session.documentId}
+            onSelectDocument={selectDocument}
+            refreshKey={status}
           />
-        }
-        preview={
-          /*
-            Keyed by the replica: a new `Y.Doc` is a new preview instance, so a snapshot from
-            the previous document can never be shown for this one. Mounted only in preview mode
-            by `DocumentCanvas`, which is what ties the `Y.Text` subscription to visibility.
-          */
-          <MarkdownPreview key={session.localClientId} session={session} />
-        }
-      />
+        </aside>
+
+        <div className="doc-stage">
+          <DocumentCanvas
+            mode={mode}
+            editor={
+              <CollaborativeMarkdownEditor
+                session={session}
+                readOnly={gate.readOnly}
+                hidden={mode === 'preview'}
+                onResync={setResyncReason}
+                selectionRef={(read) => {
+                  selectionReader.current = read;
+                }}
+              />
+            }
+            preview={
+              /*
+                Keyed by the replica: a new `Y.Doc` is a new preview instance, so a snapshot from
+                the previous document can never be shown for this one. Mounted only in preview mode
+                by `DocumentCanvas`, which is what ties the `Y.Text` subscription to visibility.
+              */
+              <MarkdownPreview key={session.localClientId} session={session} />
+            }
+          />
+        </div>
+
+        {/*
+          The AI proposal panel. Mounted only while open: closing it disposes the revision tracker
+          and aborts any generation in flight (the panel's own unmount effect). It is the right
+          rail of the workbench, not a block above the canvas.
+        */}
+        {aiOpen ? (
+          <aside className="doc-assistant" aria-label="AI review">
+            <AiSuggestPanel
+              key={session.localClientId}
+              session={session}
+              gate={gate}
+              readSelection={() => selectionReader.current?.() ?? null}
+              onClose={() => {
+                setAiOpen(false);
+                // The opener is the header's `ai-open` button; returning focus there is what
+                // makes "close" reversible from the keyboard. The button is always in the DOM.
+                requestAnimationFrame(() => {
+                  document
+                    .querySelector<HTMLElement>('[data-testid="ai-open"]')
+                    ?.focus();
+                });
+              }}
+              onSelectDocument={selectDocument}
+            />
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 }

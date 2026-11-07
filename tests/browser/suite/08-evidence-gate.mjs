@@ -724,10 +724,13 @@ export function register(runner) {
       ctx.note('workspace after the switch, with the response still held', factsAfterSwitch);
       assertEqual(factsAfterSwitch.activeDocument, documentB, 'the active document must be B');
       assertEqual(factsAfterSwitch.editorText, BODY_B, 'the editor must hold B’s content');
+      // UI-2 moved the directory to a permanent left rail, so it is present after the switch
+      // (it belongs to the workspace, and the workspace was remounted). What must be gone is the
+      // AI panel that the old document had open; the rail's list is asserted below.
       assertEqual(
-        factsAfterSwitch.directoryPresent,
-        false,
-        'switching documents must unmount the directory (the panel belongs to the workspace)',
+        await page.evaluate(() => document.querySelector('[data-testid="ai-panel"]') === null),
+        true,
+        'switching documents must close the AI panel of the previous document',
       );
       assertEqual(
         factsAfterSwitch.directoryError,
@@ -805,7 +808,13 @@ export function register(runner) {
       );
       assertEqual(factsAfterRelease.editorText, BODY_B, 'the editor must still hold B’s content');
       assertEqual(staleMarkerRendered, false, 'no content from the stale response may reach the DOM');
-      assertEqual(factsAfterRelease.directoryPresent, false, 'the panel must stay closed');
+      // UI-2 moved the directory to a permanent left rail, so `directoryPresent` no longer means
+      // "the AI panel is open". The panel-closed intent is now asserted directly: no `ai-panel`.
+      assertEqual(
+        await page.evaluate(() => document.querySelector('[data-testid="ai-panel"]') === null),
+        true,
+        'the AI panel must stay closed (the directory is a permanent rail now)',
+      );
 
       // 9. Re-open the directory on B: its list must be the **server’s** list for B, with B marked
       //    current — i.e. the ownership decision was made by the new mount, not by the late answer.

@@ -64,8 +64,11 @@ describe('AiSuggestPanel provider modes', () => {
     expect(html).toContain('data-testid="ai-status"');
     expect(html).toContain('data-testid="ai-empty"');
     expect(html).toContain('data-testid="ai-close"');
-    expect(html).toContain('data-testid="ai-directory"');
-    expect(html).toContain('data-testid="ai-directory-refresh"');
+    // UI-2 moved the read-only directory to the workspace's permanent left rail. The panel must
+    // not mount a second directory (that would issue a second list request); the rail and its
+    // test ids are asserted by the browser suite instead.
+    expect(html).not.toContain('data-testid="ai-directory"');
+    expect(html).not.toContain('data-testid="ai-directory-refresh"');
     expect(html).toContain('data-phase="idle"');
     expect(occurrences(html, 'data-testid="ai-intent"')).toBe(5);
     expect(html).toContain('Deterministic suggestion provider — no model.');
@@ -85,8 +88,11 @@ describe('AiSuggestPanel provider modes', () => {
     expect(html).toContain('data-testid="ai-status"');
     expect(html).toContain('data-testid="ai-empty"');
     expect(html).toContain('data-testid="ai-close"');
-    expect(html).toContain('data-testid="ai-directory"');
-    expect(html).toContain('data-testid="ai-directory-refresh"');
+    // UI-2 moved the read-only directory to the workspace's permanent left rail. The panel must
+    // not mount a second directory (that would issue a second list request); the rail and its
+    // test ids are asserted by the browser suite instead.
+    expect(html).not.toContain('data-testid="ai-directory"');
+    expect(html).not.toContain('data-testid="ai-directory-refresh"');
     expect(html).toContain('data-phase="idle"');
 
     // No local-only promise survives into the remote copy.

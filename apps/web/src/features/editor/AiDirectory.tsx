@@ -96,10 +96,17 @@ export interface AiDirectoryProps {
    * component never talks to the store or the collaboration layer itself.
    */
   onSelectDocument: (documentId: string) => void;
+  /**
+   * A value that changes when the collaboration session becomes ready (the workspace passes
+   * the connection status). The rail is always mounted, so it must refresh when the room join
+   * has created/updated the document metadata; otherwise it would show the list fetched before
+   * the current document existed.
+   */
+  refreshKey?: string;
 }
 
 /** The stateful half: fetch, abort, retry, create. The view below is pure so it can be tested as markup. */
-export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryProps) {
+export function AiDirectory({ activeDocumentId, onSelectDocument, refreshKey = '' }: AiDirectoryProps) {
   const [state, setState] = useState<DirectoryState>({ kind: 'loading' });
   /** `true` between the click and the settled request; drives the button's `disabled`. */
   const [creating, setCreating] = useState(false);
@@ -182,7 +189,7 @@ export function AiDirectory({ activeDocumentId, onSelectDocument }: AiDirectoryP
       // workspace the user has already left. The flow reports an aborted run as `ignored`.
       flowRef.current?.abort();
     };
-  }, [load]);
+  }, [load, refreshKey]);
 
   const select = useCallback(
     (documentId: string): void => {
