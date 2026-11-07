@@ -18,7 +18,7 @@
   --text: #172235;
   --muted: #8794a7;
   --border: #dce4ed;
-  --accent: #3977e9;
+  --accent: #24543e;
   --accentSoft: #eaf2ff;
   --green: #249765;
   --greenSoft: #e7f7ef;
@@ -141,7 +141,7 @@ body {
 .switcher:focus-within {
   background: var(--paper);
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(57 119 233 / 10%);
+  box-shadow: 0 0 0 3px rgb(36 84 62 / 10%);
   transform: translateY(-1px);
 }
 
@@ -647,7 +647,7 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: 8px 12px;
-  border: 1px solid #bcd4fb;
+  border: 1px solid #bcd4c4;
   border-radius: 8px;
   background: var(--accentSoft);
   font-size: 12.5px;
@@ -655,7 +655,7 @@ body {
 }
 
 .read-only-notice__title {
-  color: #1f4fa8;
+  color: #1b3d2c;
   font-weight: 700;
 }
 
@@ -878,7 +878,7 @@ body {
 }
 
 .cm-remote-selection {
-  background: rgb(57 119 233 / 18%);
+  background: rgb(36 84 62 / 18%);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1010,7 +1010,7 @@ body {
 .markdown-preview a {
   color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px solid rgb(57 119 233 / 30%);
+  border-bottom: 1px solid rgb(36 84 62 / 30%);
 }
 
 .markdown-preview a:hover {
@@ -1133,15 +1133,15 @@ body {
 }
 
 .doc-ai:hover {
-  border-color: #bcd4fb;
+  border-color: #bcd4c4;
   background: var(--accentSoft);
-  color: #1f4fa8;
+  color: #1b3d2c;
 }
 
 .doc-ai[aria-expanded='true'] {
   border-color: var(--accent);
   background: var(--accentSoft);
-  color: #1f4fa8;
+  color: #1b3d2c;
 }
 
 .doc-ai:focus-visible {
@@ -1255,7 +1255,7 @@ body {
 .ai-instruction:focus {
   border-color: var(--accent);
   outline: none;
-  box-shadow: 0 0 0 3px rgb(57 119 233 / 10%);
+  box-shadow: 0 0 0 3px rgb(36 84 62 / 10%);
 }
 
 .ai-chips {
@@ -1526,7 +1526,7 @@ body {
 }
 
 .ai-directory__new:focus-visible {
-  outline: 2px solid #1f4fa8;
+  outline: 2px solid #1b3d2c;
   outline-offset: 1px;
 }
 
@@ -1605,7 +1605,7 @@ body {
 }
 
 .ai-directory__item[aria-current='true'] {
-  border-color: #bcd4fb;
+  border-color: #bcd4c4;
   background: var(--accentSoft);
 }
 
@@ -1620,7 +1620,7 @@ body {
 }
 
 .ai-directory__item[aria-current='true'] .ai-directory__doc-title {
-  color: #1f4fa8;
+  color: #1b3d2c;
 }
 
 /*
@@ -1860,5 +1860,168 @@ body {
     transition: none !important;
     animation: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   UI-2 workbench — adopted from the reference prototype (D-088).
+   Visual layer only: the DOM contract, test ids and React state owners are
+   unchanged. Paper background, deep-green accent, three columns.
+   ========================================================================== */
+:root {
+  --app: #f3f4ef;
+  --top: #fcfcfa;
+  --paper: #fcfcfa;
+  --panel: #f3f4ef;
+  --text: #24382f;
+  --muted: #5e6a62;
+  --border: #daddd4;
+  --accent: #24543e;
+  --accentSoft: #e5eee3;
+  --green: #24543e;
+  --greenSoft: #e5eee3;
+  --role: #e9ede4;
+}
+
+body {
+  font-family:
+    'DM Sans', 'Microsoft YaHei UI', 'Microsoft YaHei', -apple-system, 'Segoe UI', sans-serif;
+  background: var(--paper);
+  color: var(--text);
+}
+
+.app-shell {
+  background: var(--paper);
+}
+
+.topbar {
+  background: var(--top);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand__logo {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+/* Three columns: directory | document | AI review. The AI column only exists while open. */
+.workbench {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.workbench--ai {
+  grid-template-columns: 236px minmax(0, 1fr) 340px;
+}
+
+.workspace {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 10px 18px 28px;
+}
+
+.doc-rail {
+  min-width: 0;
+}
+
+.doc-rail .ai-directory {
+  position: sticky;
+  top: 10px;
+  margin: 0;
+  padding: 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--app);
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+}
+
+.doc-stage {
+  min-width: 0;
+}
+
+.doc-stage .canvas:focus-within {
+  border-color: var(--accent);
+}
+
+.doc-stage .canvas {
+  border-radius: 10px;
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgb(36 84 62 / 6%);
+  background: var(--paper);
+}
+
+.doc-stage .canvas:focus-within {
+  box-shadow: 0 16px 40px rgb(36 84 62 / 10%);
+}
+
+.doc-assistant {
+  min-width: 0;
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+.doc-assistant .ai-panel {
+  margin: 0;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: none;
+}
+
+/* The directory left the panel; the review surface is one column now. */
+.ai-panel__body {
+  grid-template-columns: 1fr;
+}
+
+/* Reference typography: headings in a serif face read as a working document, not an app. */
+.doc-head__title {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.primary,
+.ai-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.primary:hover,
+.ai-primary:hover {
+  background: #183e2c;
+}
+
+/* Narrow screens: keep the document first and the rails stacked, never overflow. */
+@media (max-width: 1180px) {
+  .workbench,
+  .workbench--ai {
+    grid-template-columns: 208px minmax(0, 1fr);
+  }
+
+  .doc-assistant {
+    grid-column: 1 / -1;
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .workbench,
+  .workbench--ai {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-rail,
+  .doc-stage,
+  .doc-assistant {
+    grid-column: 1 / -1;
+  }
+
+  .doc-rail .ai-directory {
+    position: static;
+    max-height: 220px;
   }
 }

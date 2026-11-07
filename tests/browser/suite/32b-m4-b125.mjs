@@ -525,6 +525,7 @@ export function register(runner) {
         documentId: originalId,
         state: before.state,
         itemCount: before.itemCount,
+        ids: before.ids,
         currentIds: before.currentIds,
       });
       assert(

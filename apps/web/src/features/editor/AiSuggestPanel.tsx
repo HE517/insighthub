@@ -45,15 +45,13 @@
  *
  * ## The read-only directory (M3 round 2, `docs/DECISIONS.md` D-078 §4 R2-1)
  *
- * `AiDirectory` sits in a right rail beside the review surface and lists the documents the current
- * identity may read. It calls the already-implemented `listDocuments(signal)` on mount (i.e.
- * whenever the panel opens) and on Refresh, and aborts on unmount. Selecting another document
- * calls `onSelectDocument`, which the workspace wires to the **existing** `documentSelected`
- * action:
- * no new route, no new action, and **no cross-document proposal/apply semantics**. The proposal
- * below always belongs to the active document. Because `App.tsx` keys the workspace by
- * `documentId`, the switch remounts the workspace and closes this panel — that is the intended
- * lifecycle, not a bug to route around.
+ * The directory now lives in the workspace's permanent left rail (UI-2), not in this panel. The
+ * panel is review-only: opening it never mounts a second `AiDirectory` and never issues a second
+ * `GET /api/documents`. `onSelectDocument` is kept on the props for existing callers/tests but is
+ * unused here; document switching still goes through the **existing** `documentSelected` action,
+ * so there is no new route, no new action and **no cross-document proposal/apply semantics**.
+ * `App.tsx` keys the workspace by `documentId`, so a switch remounts the workspace and closes this
+ * panel — the intended lifecycle, not a bug to route around.
  *
  * ## Why the panel is mounted only while open
  *
@@ -78,7 +76,6 @@ import { isRemoteAiProvider } from '../ai/remoteProvider.js';
 import { createLocalRevisionTracker, type LocalRevisionTracker } from '../ai/revision.js';
 import { readDocumentText } from '../ai/tools.js';
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
-import { AiDirectory } from './AiDirectory.js';
 import {
   AI_PANEL_PROVIDER_COPY,
   APPLY_FAILURE_COPY,
@@ -152,10 +149,12 @@ export function AiSuggestPanel({
   gate,
   readSelection,
   onClose,
-  onSelectDocument,
+  onSelectDocument: _onSelectDocument,
   provider = defaultProvider,
   providerMode,
 }: AiSuggestPanelProps) {
+  // The directory moved to the workspace's left rail; the prop stays for callers/tests.
+  void _onSelectDocument;
   const [instruction, setInstruction] = useState('');
   const [proposal, setProposal] = useState<AiEditSuggestion | null>(null);
   const [staleReason, setStaleReason] = useState<ValidationFailureReason | null>(null);
@@ -469,22 +468,6 @@ export function AiSuggestPanel({
             </article>
           )}
         </div>
-
-        {/*
-        Read-only directory (D-078 §4 R2-1), in a **right rail** beside the review surface.
-
-        Placement is load-bearing. The permanent browser suite clicks the panel's controls by
-        viewport coordinates; increasing the panel's height pushes the editor below the fold, so
-        typing schedules a page scroll that can race the next click (measured: the Accept click
-        landed on this section at `scrollY: 35`). A rail keeps the panel's outer height governed by
-        the main column — the same geometry the existing scenarios were written against — while the
-        directory still lists, refreshes and aborts independently.
-
-        It fetches on mount (when the panel opens) and aborts on unmount. Selecting a different
-        document goes through the existing switch action, which remounts the workspace — and
-        therefore closes this panel — by design.
-      */}
-        <AiDirectory activeDocumentId={session.documentId} onSelectDocument={onSelectDocument} />
       </div>
     </section>
   );
