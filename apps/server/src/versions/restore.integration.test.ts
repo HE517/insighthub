@@ -24,6 +24,8 @@
  * | T12 | a join's empty update does not advance the content revision (no false 409) |
  * | T13 | an operation id reused on another document does not leak the first result |
  * | T14 | no optimistic apply: the body accepts no client-computed update, and a normal edit is not a restore |
+ * | R-5 | restoring a version whose text already is the current text: 200, unchanged revision, four rows, no broadcast |
+ * | C3 | same operation id retried with an expired `baseRevision`: original result, 0 rows, no second broadcast; a different request is a 409 |
  *
  * T7 lives in `versions/text-diff.test.ts`; T8 (offline merge) belongs to A6 and is **not**
  * implemented here.
@@ -177,6 +179,26 @@ async function rowCounts(server: TestServer, documentId: string): Promise<RowCou
       operations: scalar('SELECT COUNT(*) AS total FROM restore_operation WHERE document_id = ?'),
     };
   });
+}
+
+/**
+ * Byte length of the newest `document_update` row.
+ *
+ * A no-op restore must still write its update row (C1 counts four rows), so the point of this
+ * helper is that the row exists **and** is empty — the body did not change.
+ */
+async function lastUpdateByteLength(server: TestServer, documentId: string): Promise<number> {
+  assert.notEqual(server.dataPath, undefined, 'this suite needs the harness-owned database');
+  return await withRawDb(server.dataPath as string, (db) =>
+    Number(
+      db
+        .prepare(
+          `SELECT length(update_bytes) AS bytes FROM document_update
+           WHERE document_id = ? ORDER BY seq DESC LIMIT 1`,
+        )
+        .get(documentId)?.['bytes'] ?? -1,
+    ),
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -472,11 +494,15 @@ async function expectFailedRestore(input: { trigger: string }): Promise<void> {
     assert.deepEqual(await rowCounts(server, DOC), before);
     assert.equal(await durableText(server.store, DOC), 'base-later', 'the live text is unchanged');
 
-    // Nothing was broadcast; the participant is told the room failed and the socket closes.
+    // Nothing was broadcast; the participant is told the room failed and the socket closes
+    // with WebSocket 1011 ("internal error"), not a policy close (1008) or a transport drop
+    // (1006). The server cannot serve this room any more and says so.
     assert.equal(observer.binaryFrames().length, 0, 'a failed restore must not broadcast');
     const error = await observer.waitForError('INTERNAL_ERROR');
     assert.equal(error.type, 'error');
-    await observer.waitForClose();
+    const closed = await observer.waitForClose();
+    assert.equal(closed.code, 1011, 'a persist failure closes with code 1011');
+    assert.equal(closed.reason, 'INTERNAL_ERROR');
 
     // The room is gone (unhealthy rooms are destroyed), and the next join rehydrates the
     // durable state — the failure did not half-kill the document.
@@ -1160,6 +1186,233 @@ describe('T14 — the server does not trust a client-computed restore', () => {
         client.destroy();
       }
     } finally {
+      await server.close();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * R-5 — restoring a version whose body already is the current body
+ * ------------------------------------------------------------------ */
+
+/**
+ * The **text-level no-op** restore (A7 R-5).
+ *
+ * `computeRestoreUpdate` returns `changed: false` when the selected version's text equals the
+ * current text, and `#runRestore` skips both `applyServerUpdate` and `broadcastUpdate` on that
+ * path. It is still a real restore request: `appendRestore` commits the same four rows as any
+ * successful restore, with a **zero-byte** update, and — because the body did not change — the
+ * content revision does not advance (so the response `sequence` equals the request's
+ * `baseRevision`, and a preview taken before it stays valid).
+ *
+ * This pins the HTTP-observable contract of that branch; only the store half was covered before
+ * (`restore-store.test.ts`, "does not advance the content revision when the selected text is
+ * already current").
+ */
+describe('R-5 — restore whose target text already is the current text', () => {
+  it('returns 200 with an unchanged revision, writes four rows (empty update), and broadcasts nothing', async () => {
+    const server = await bootServer();
+    const clients: TestClient[] = [];
+    try {
+      // The version was captured at `same-body`; the later body is the same text again. The two
+      // Yjs states still differ (the second append deletes and re-inserts the text), so this is
+      // a real text-level no-op rather than two identical states.
+      const seeded = await seedRestorable(server.store, DOC, 'same-body', 'same-body');
+      const cookie = await session(server, 'demo-ada');
+
+      const observer = await TestClient.connect(server.url, { cookie });
+      clients.push(observer);
+      await observer.joinAndWait(DOC);
+      // Let the join handshake's SyncStep1 land, then look only at what the restore sends.
+      await observer.settle(100);
+      observer.clear();
+
+      const before = await rowCounts(server, DOC);
+      const revisionBefore = await fullStore(server.store).documentContentRevision(DOC);
+      assert.equal(seeded.baseRevision, revisionBefore);
+      assert.ok(
+        (await durableText(server.store, DOC)) === 'same-body',
+        'the fixture starts with the target body already current',
+      );
+      assert.ok((await lastUpdateByteLength(server, DOC)) > 0, 'the seeded update is not empty');
+
+      const response = await apiFetch(
+        server,
+        'POST',
+        restorePath(DOC, seeded.versionId),
+        cookie,
+        restoreBody(seeded.baseRevision, 'op-r5-noop-0001'),
+      );
+      assert.equal(response.status, 200, JSON.stringify(response.body));
+      assert.equal(typeof response.body['versionId'], 'string');
+      assert.equal(
+        response.body['sequence'],
+        seeded.baseRevision,
+        'a no-op restore returns the unchanged content revision',
+      );
+
+      // C1's accounting is four rows even when the body did not change ...
+      const after = await rowCounts(server, DOC);
+      assert.deepEqual(after, {
+        versions: before.versions + 2,
+        updates: before.updates + 1,
+        operations: before.operations + 1,
+      });
+      // ... but the new update row is empty and the content revision did not move.
+      assert.equal(await lastUpdateByteLength(server, DOC), 0, 'the restore update is zero bytes');
+      assert.equal(await fullStore(server.store).documentContentRevision(DOC), revisionBefore);
+
+      // A body that did not change has nothing to broadcast.
+      await observer.settle(250);
+      assert.equal(
+        observer.binaryFrames().length,
+        0,
+        'a no-op restore must not broadcast a binary update',
+      );
+      assert.equal(await durableText(server.store, DOC), 'same-body');
+
+      // Both new version rows carry the unchanged revision; the response names the `restored` one.
+      const versions = await fullStore(server.store).listDocumentVersions(DOC);
+      assert.equal(versions.length, 3, 'manual + pre-restore + restored');
+      const restoredRow = versions.find((version) => version.kind === 'restored');
+      const preRestoreRow = versions.find((version) => version.kind === 'pre-restore');
+      assert.equal(restoredRow?.sequence, revisionBefore);
+      assert.equal(preRestoreRow?.sequence, revisionBefore);
+      assert.equal(response.body['versionId'], restoredRow?.id);
+
+      // The room is evicted after the last participant leaves, and a later join hydrates the
+      // same body from the durable log (empty restore update included).
+      observer.destroy();
+      await waitFor(
+        () => server.handle.registry.hasRoom(DOC) === false,
+        'the room is evicted after the last participant leaves',
+      );
+      const recovered = await TestClient.connect(server.url, { cookie });
+      clients.push(recovered);
+      await recovered.joinAndWait(DOC);
+      assert.equal(
+        server.handle.registry.requireRoom(DOC).doc.getText('content').toString(),
+        'same-body',
+        'a later join still hydrates the unchanged body',
+      );
+    } finally {
+      for (const client of clients) client.destroy();
+      await server.close();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * C3 — retrying an operation id, and reusing it for a different request
+ * ------------------------------------------------------------------ */
+
+/**
+ * The retry path end to end, with a real observer socket (A7 R-2's sibling: "no second
+ * broadcast" is a wire fact, not an inference).
+ *
+ * The retry deliberately carries the **preview** `baseRevision`, which the first attempt already
+ * advanced. The operation-id lookup runs before the revision compare (C3, C4 "同一 op id 重试
+ * （含 `baseRevision` 已过期）返回原结果"), so the answer is the original `{versionId, sequence}`
+ * with zero new rows and zero new binary frames. Under the same operation id, a different valid
+ * request body hashes differently and is refused as `409 operation_conflict` — also with no rows
+ * and no broadcast.
+ */
+describe('C3 — the same operation id retried and reused', () => {
+  it('replays the original result for an expired baseRevision, then refuses a different request', async () => {
+    const server = await bootServer();
+    const clients: TestClient[] = [];
+    try {
+      const seeded = await seedRestorable(server.store, DOC, 'target', 'base-later');
+      const cookie = await session(server, 'demo-ada');
+
+      const observer = await TestClient.connect(server.url, { cookie });
+      clients.push(observer);
+      await observer.joinAndWait(DOC);
+      await observer.settle(100);
+      observer.clear();
+
+      const before = await rowCounts(server, DOC);
+      const operationId = 'op-c3-retry-0001';
+      const first = await apiFetch(
+        server,
+        'POST',
+        restorePath(DOC, seeded.versionId),
+        cookie,
+        restoreBody(seeded.baseRevision, operationId),
+      );
+      assert.equal(first.status, 200, JSON.stringify(first.body));
+      const versionId = String(first.body['versionId']);
+      const sequence = Number(first.body['sequence']);
+      assert.equal(sequence, seeded.baseRevision + 1);
+
+      const afterFirst = await rowCounts(server, DOC);
+      assert.deepEqual(afterFirst, {
+        versions: before.versions + 2,
+        updates: before.updates + 1,
+        operations: before.operations + 1,
+      });
+      await waitFor(
+        () => observer.binaryFrames().length === 1,
+        'the first restore broadcasts exactly one update',
+      );
+      observer.clear();
+
+      // Same request, same operation id, expired `baseRevision` (the revision the client
+      // previewed; the first attempt has since advanced it). The op-id lookup wins.
+      const retry = await apiFetch(
+        server,
+        'POST',
+        restorePath(DOC, seeded.versionId),
+        cookie,
+        restoreBody(seeded.baseRevision, operationId),
+      );
+      assert.equal(retry.status, 200, JSON.stringify(retry.body));
+      assert.deepEqual(retry.body, { versionId, sequence }, 'the original result is replayed');
+      assert.deepEqual(await rowCounts(server, DOC), afterFirst, 'a retry writes 0 new rows');
+
+      await observer.settle(250);
+      assert.equal(
+        observer.binaryFrames().length,
+        0,
+        'a replayed retry must not broadcast a second update',
+      );
+      assert.equal(await durableText(server.store, DOC), 'target');
+
+      // Same operation id, different valid request body → different request hash → 409. The
+      // second case changes the selected version (the restored row is a real version id), so
+      // the conflict is not merely "stale revision" under another name.
+      const conflicts = [
+        {
+          label: 'different baseRevision',
+          path: restorePath(DOC, seeded.versionId),
+          body: restoreBody(seeded.baseRevision + 5, operationId),
+        },
+        {
+          label: 'different selected version',
+          path: restorePath(DOC, versionId),
+          body: restoreBody(seeded.baseRevision, operationId),
+        },
+      ];
+      for (const conflict of conflicts) {
+        const response = await apiFetch(server, 'POST', conflict.path, cookie, conflict.body);
+        assert.equal(response.status, 409, `${conflict.label}: ${JSON.stringify(response.body)}`);
+        assert.deepEqual(response.body, { error: 'operation_conflict' });
+        assert.deepEqual(
+          await rowCounts(server, DOC),
+          afterFirst,
+          `${conflict.label}: a conflict writes 0 rows`,
+        );
+      }
+
+      await observer.settle(250);
+      assert.equal(
+        observer.binaryFrames().length,
+        0,
+        'a conflict must not broadcast a binary update',
+      );
+      assert.equal(await durableText(server.store, DOC), 'target');
+    } finally {
+      for (const client of clients) client.destroy();
       await server.close();
     }
   });
