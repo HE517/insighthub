@@ -727,6 +727,8 @@ re-sent.
 | `GET` | `/api/documents/:id` | `200 DocumentMeta` / `401` / `403` / `404` — §17.4 | M2 Phase 2 |
 | `POST` | `/api/documents` | `201 { documentId, title }` / `400 invalid_request` / `401 session_required` / `403` / `500` — §17.4, D-084 | M4 B12.5 |
 | `POST` | `/api/ai/suggest` | `200 AiSuggestionDraft` / `401` / `403` / `404` / `503` / `502` / `504` — §11.2 | M3 Round 2 |
+| `GET` | `/api/documents/:id/versions` | `200 { versions: [{id, sequence, title, authorId, createdAt, kind}], currentRevision }` / `401` / `404` / `403` — §12.1, D-090 | P0-1 |
+| `POST` | `/api/documents/:id/versions/:versionId/restore` | `200 { versionId, sequence }` / `400 invalid_request` / `401 session_required` / `403` / `404` / `409 stale_revision|operation_conflict` / `500 restore_failed` — §12.1, D-090 | P0-1 |
 | `GET` | `/ready` | `200 { "status": "ready" }` / `503 { "status": "starting" }` — readiness, distinct from `/health` liveness | M4 B7 |
 
 Unknown paths return `404 { "error": "not_found" }`. The non-disclosure rule for
@@ -741,6 +743,16 @@ server log only. `internal_error` is the HTTP counterpart of the WebSocket `INTE
 WebSocket endpoint: `ws://<host>:<port>/ws` (configurable via `WS_PATH`).
 An upgrade request on any other path is rejected.
 
+
+### 12.1 Version list and restore (P0-1)
+
+- `GET …/versions` requires `canRead`; returns `versions` (newest first) and `currentRevision`; never `yjs_state`.
+- `POST …/restore` requires **Owner** (`canManageMembers`); body exactly `{ baseRevision: number, operationId: string(8..128) }`.
+  `baseRevision` is the **content revision** from `currentRevision`; a mismatch is `409 {"error":"stale_revision","currentRevision"}` and the client must re-preview.
+- Same `operationId` + same request hash returns the original `{versionId,sequence}` with **0 new rows**; different hash is `409 {"error":"operation_conflict"}`.
+- A successful restore writes **4 rows** in one SQLite transaction: `pre-restore` version, restore update, `restored` version, `restore_operation`. `versionId` in the response is the **restored** version, and `sequence` is its content revision.
+- Restore runs inside the document's FIFO slot and keeps `apply → persist → broadcast`; a persist failure follows the existing unhealthy/1011 path (no broadcast).
+- Undo: restore is a server-authored remote update; clients must not track it in `UNDO_TRACKED_ORIGINS` (D-UD1).
 ## 13. Change process
 
 1. Propose the addition here first (or in the PR description for solo work).
@@ -767,6 +779,8 @@ The server reaches durable state only through `DocumentStore`. Its shape is spec
 | --- | --- | --- |
 | `load(documentId)` | read snapshot + log | `null` means *never stored*, never "empty document" |
 | `append(documentId, update)` | append one already-applied update | resolves **with the committed sequence, only after the bytes are durable**; rejects on failure |
+| `appendRestore(input)` | restore one version: pre-restore/update/restored/operation in one transaction | 4 rows on success, 0 on retry; op-id lookup before revision; rejects/rolls back on failure |
+| `findRestoreOperation(documentId, operationId)` | idempotency lookup | returns the original `{versionId, sequence, requestHash}` or `null` |
 | `compact(documentId, snapshot, throughSequence)` | replace snapshot, drop consumed log | atomic: a crash mid-compaction leaves either the old state or the new one |
 | `delete(documentId)` | durable removal | idempotent; removal, not a flag |
 | `close()` | flush and release | idempotent; safe on a store that failed to open |

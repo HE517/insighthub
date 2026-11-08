@@ -108,6 +108,8 @@ export class SqliteDocumentStore
     listMeta: Stmt;
     touchMeta: Stmt;
     deleteMeta: Stmt;
+    deleteVersions: Stmt;
+    deleteRestoreOperations: Stmt;
     selectHighestSequence: Stmt;
     selectContentRevision: Stmt;
     setContentRevision: Stmt;
@@ -176,6 +178,8 @@ export class SqliteDocumentStore
       ),
       touchMeta: db.prepare('UPDATE document_meta SET updated_at = ? WHERE document_id = ?'),
       deleteMeta: db.prepare('DELETE FROM document_meta WHERE document_id = ?'),
+      deleteVersions: db.prepare('DELETE FROM document_version WHERE document_id = ?'),
+      deleteRestoreOperations: db.prepare('DELETE FROM restore_operation WHERE document_id = ?'),
       selectHighestSequence: db.prepare(
         `SELECT
            COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0) AS log_seq,
@@ -572,6 +576,10 @@ export class SqliteDocumentStore
     await this.#guard('delete', () =>
       this.#transaction(() => {
         this.#statements.deleteUpdates.run(documentId);
+        // P0-1: versions and restore operations belong to the document; leaving them behind would
+        // keep recoverable content (and document ids) after a durable delete.
+        this.#statements.deleteVersions.run(documentId);
+        this.#statements.deleteRestoreOperations.run(documentId);
         this.#statements.deleteDocument.run(documentId);
         // Metadata describes the document that no longer exists; leaving the row behind would
         // make the document API list a document whose content cannot be loaded.

@@ -652,3 +652,33 @@ describe('P0-1 store — operation ids never cross documents (T13 store half)', 
     }
   });
 });
+
+describe('P0-1 store - delete lifecycle', () => {
+  it('removes versions and restore operations together with the document', async () => {
+    const { store, dataPath } = await openStore(join(root, 'delete-lifecycle'));
+    try {
+      const prepared = await prepareRestorable(store, 'doc-del', 'target', 'current');
+      const result = await store.appendRestore(
+        restoreInputFor({
+          documentId: 'doc-del',
+          operationId: 'delete-op-0001',
+          versionId: prepared.versionId,
+          current: prepared.current,
+          targetText: 'target',
+          baseRevision: prepared.baseRevision,
+        }),
+      );
+      assert.equal(result.kind, 'committed');
+      await store.delete('doc-del');
+      assert.equal(await store.load('doc-del'), null);
+      const counts = await withRawDb(dataPath, (db) => ({
+        versions: (db.prepare('SELECT COUNT(*) AS n FROM document_version WHERE document_id = ?').get('doc-del') as Record<string, number>)['n'],
+        operations: (db.prepare('SELECT COUNT(*) AS n FROM restore_operation WHERE document_id = ?').get('doc-del') as Record<string, number>)['n'],
+        updates: (db.prepare('SELECT COUNT(*) AS n FROM document_update WHERE document_id = ?').get('doc-del') as Record<string, number>)['n'],
+      }));
+      assert.deepEqual(counts, { versions: 0, operations: 0, updates: 0 });
+    } finally {
+      await store.close();
+    }
+  });
+});
