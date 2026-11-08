@@ -32,38 +32,34 @@
 - 保留期：手动版本永久（可删）；自动版本 30 天 / 每文档最多 200 个（取一）。
 - 权限：查看 = `canRead`；恢复 = `canEdit`（是否仅 Owner 见 D-V1）；删除版本 = `canManageMembers`。
 
-**恢复如何从历史正文变成新的 Yjs 编辑**（已做最小可重复实验，见下）：
+**恢复如何从历史正文变成新的 Yjs 编辑**（已做实验，见下）：
 1. 读取版本的 `yjs_state`，在**临时 Y.Doc** 上还原出版本正文（用户看到的标题/正文预览也来自这里，不碰线上房间）。
-2. 以当前正文为基准，用公共前后缀裁剪出“删除区间 + 插入文本”，在临时副本上应用，得到一条 **relative update**（`encodeStateAsUpdate(staging, stateVector(current))`）。
-3. **persist-first**：先在一个 SQLite 事务里写入 `pre-restore` 版本（保存恢复前正文与 state），再把这条 update 追加到文档日志；两步都成功后才应用到线上 room 并广播。
+2. 以当前正文为基准，按 **Unicode code point** 求公共前后缀，裁剪出“删除区间 + 插入文本”，在临时副本上应用，得到一条 **relative update**（`encodeStateAsUpdate(staging, stateVector(current))`）。按 code point 而不是 UTF-16 code unit 计算，避免拆开 emoji 代理对（旧实现的失败已在实验中保留）。
+3. 写入顺序有两种设计（`docs/ui/P0-RESTORE-DECISIONS.md`）：
+   - **A（A0 推荐）**：沿用 room FIFO（apply → persist → broadcast），把一个 SQLite 事务用于 `pre-restore` + restore log + operationId；
+   - **B**：单独 persist-first 路径（persist → apply → broadcast），需 Owner 批准并重新证明 FIFO/顺序。
 4. 恢复自身产生一个新版本；**不删除历史**。
 
-**失败边界（必须按这个顺序）**：
-
-| 失败点 | 结果 | 重试 |
-| --- | --- | --- |
-| 写 `pre-restore` 失败 | 中止；线上/日志均未变 | 可重试；不产生半条记录 |
-| 追加 restore update 失败 | 中止；线上未变；`pre-restore` 已存在（无害） | 重试追加同一条 update；幂等 |
-| 追加成功、apply/广播失败 | 已持久化；房间重启/客户端 SyncStep 会重放 | 不需要重新生成；重放一次 |
-| 进程在两步之间崩溃 | 要么只有 `pre-restore`，要么两步都有 | 以日志为准，重试或放弃 |
+**确认时的并发**：预览时记录 `baseRevision`；确认时 revision 已变 ⇒ **409 conflict，拒绝恢复并要求重新预览**（推荐 V1）。实验：拒绝后保留 `alphaX`；重新预览确认后才变为 `beta`。
 
 **并发与离线**：
-- 恢复是“把旧正文作为新编辑合入”，**不是数据库回滚**；确认后若他人已在区间外写入，这些编辑按 CRDT 保留。
-- 确认对话框必须展示“当前版本与目标版本的差异”，并在恢复后提示“已恢复，期间 N 条并发编辑保留”（N 由确认时的 revision 与恢复时 revision 计算）。
-- 离线客户端重连时通过 state-vector 补差拿到 restore update；其离线编辑与 restore 合并；若其编辑落在被替换区间内，由 CRDT 决定位置，并在 UI 标 stale/提示，而不是静默丢字。
-- Undo：restore 是一条 `origin='restore'` 的 transaction，UndoManager 跟踪它；Undo 只撤销 restore 自己的操作，保留期间并发编辑；Redo 可重放。
+- 恢复是“把旧正文作为新编辑合入”，**不是数据库回滚**；确认后他人的编辑按 CRDT 合并。
+- 离线端同区间编辑后重连，实验实测合并为 `betALPHA` 且两端收敛；**不能承诺等于版本原文**，UI 必须提示“含并发/离线编辑”。
+- Undo：**V1 不让客户端 Undo 撤回共享恢复**；找回恢复前内容走 `pre-restore` 版本历史（产品语义见决策单）。
 
-**最小可重复实验（已运行，非 P0 实现）**：`tests/experiments/version-restore.mjs`，15 项断言，覆盖：
-- 目标正文正确（restore 后文本 == 历史版本）；
-- Undo 回到 pre-restore、Redo 再应用；
-- 并发追加在 restore 后仍保留，两端收敛；
-- 离线编辑 + restore 重连后收敛且 restore 只应用一次；
-- persist-first 下追加失败时线上正文不变，重试后只应用一次。
+**实验（已运行，非 P0 实现）**：`tests/experiments/version-restore.mjs`，**33 项断言**，覆盖：
+- 旧实现的 3 个 Unicode 失败（保留为改前证据）；修复后 5 个 emoji/CJK 用例的发起端与编码传输对端逐字等于目标；
+- Undo/Redo（本地 tracked restore）；
+- 预览→他人先写→确认：冲突拒绝，重新预览后应用；
+- 离线同区间编辑 + 恢复：收敛（`betALPHA`）；
+- 独立副本撤销语义：远端副本不能 Undo 恢复；
+- 追加失败不改变线上正文，重试只应用一次。
 
-> 实验只使用 `yjs`，不建表、不改 API、不改 UI；P0 的 SQLite 迁移、版本 API、恢复 UI 均**未开始**（`NOT IMPLEMENTED`）。
+> 实验只使用 `yjs`，不建表、不改 API、不改 UI；P0 的 SQLite 迁移、版本 API、恢复 UI 均**未开始**（`NOT IMPLEMENTED`）。完整决策见 `docs/ui/P0-RESTORE-DECISIONS.md`。
 
 **决策点 D-V1**：谁可恢复——Owner only（更安全）还是 Editor 也可（更顺手）？建议 Owner + Editor，删除版本仅 Owner。
 **决策点 D-V2**：自动版本粒度——按时间（10min）还是按提交数（50）？建议时间，避免高频小编辑产生噪声。
+**决策点 D-RC1 / D-RW1 / D-OP1 / D-UD1**：见 `P0-RESTORE-DECISIONS.md` §5（冲突策略、写入顺序、operationId 存储、恢复是否可 Undo）。
 
 **依赖**：SQLite 迁移（新表）、Yjs state 编码/解码、恢复事务 origin、UI 版本列表/预览/恢复确认。
 **顺序**：先做服务端版本表与恢复 API + 测试，再做 UI。
