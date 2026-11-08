@@ -50,13 +50,24 @@ import {
   type DocumentCreationStore,
 } from './document-creation.js';
 import { defaultDocumentTitle, type DocumentMetaStore } from './document-meta.js';
+import {
+  isDocumentVersionKind,
+  type CaptureDocumentVersionInput,
+  type DocumentVersionStore,
+  type DocumentVersionSummary,
+  type StoredDocumentVersion,
+} from './document-versions.js';
 import { assertDatabaseIntegrity, assertSchemaSupported, ensureSchema } from './schema.js';
 import { isSqliteCapabilityError, toUint8Array, type SqliteModule } from './sqlite-runtime.js';
 import { runInTransaction } from './transaction.js';
 import {
   StoreClosedError,
   StoreOperationError,
+  type AppendOptions,
+  type AppendRestoreInput,
+  type AppendRestoreOutcome,
   type DocumentStore,
+  type RestoreOperationRecord,
   type StoredDocument,
   type StoredUpdate,
 } from './types.js';
@@ -71,7 +82,12 @@ type Db = InstanceType<SqliteModule['DatabaseSync']>;
 type Stmt = ReturnType<Db['prepare']>;
 
 export class SqliteDocumentStore
-  implements DocumentStore, DocumentMetaStore, AppUserStore, DocumentCreationStore
+  implements
+    DocumentStore,
+    DocumentMetaStore,
+    AppUserStore,
+    DocumentCreationStore,
+    DocumentVersionStore
 {
   readonly #db: Db;
   readonly #statements: {
@@ -93,6 +109,14 @@ export class SqliteDocumentStore
     touchMeta: Stmt;
     deleteMeta: Stmt;
     selectHighestSequence: Stmt;
+    selectContentRevision: Stmt;
+    setContentRevision: Stmt;
+    initializeContentRevision: Stmt;
+    insertVersion: Stmt;
+    selectVersion: Stmt;
+    selectVersions: Stmt;
+    insertRestoreOperation: Stmt;
+    selectRestoreOperation: Stmt;
     insertMembership: Stmt;
     selectAppUserByClerkId: Stmt;
     selectAppUserById: Stmt;
@@ -156,6 +180,50 @@ export class SqliteDocumentStore
         `SELECT
            COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0) AS log_seq,
            COALESCE((SELECT snapshot_seq FROM document WHERE document_id = ?), 0) AS snapshot_seq`,
+      ),
+      // ---- P0-1 version history (schema 3, D-090) ----
+      // `content_revision` is the D-RC1 comparison number. It is *not* the log position: a
+      // join's empty update advances the log without changing the body, and counting it would
+      // make every open preview stale (A7 P1-6).
+      selectContentRevision: db.prepare(
+        'SELECT content_revision FROM document_meta WHERE document_id = ?',
+      ),
+      setContentRevision: db.prepare(
+        'UPDATE document_meta SET content_revision = ? WHERE document_id = ?',
+      ),
+      // Mirrors the 2 → 3 migration for a metadata row created *after* content already exists:
+      // the pre-schema-3 notion of "revision" is `MAX(MAX(log seq), snapshot seq)`, so a document
+      // that somehow has log rows before its metadata row does not start at revision 0.
+      initializeContentRevision: db.prepare(
+        `UPDATE document_meta SET content_revision = MAX(
+           COALESCE((SELECT MAX(seq) FROM document_update WHERE document_id = ?), 0),
+           COALESCE((SELECT snapshot_seq FROM document WHERE document_id = ?), 0)
+         ) WHERE document_id = ?`,
+      ),
+      insertVersion: db.prepare(
+        `INSERT INTO document_version
+           (id, document_id, sequence, title, author_id, created_at, yjs_state, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      // Scoped by `document_id`: a version id must never be readable through another document,
+      // or a crafted request could read a document the caller cannot see.
+      selectVersion: db.prepare(
+        `SELECT id, document_id, sequence, title, author_id, created_at, yjs_state, kind
+           FROM document_version WHERE id = ? AND document_id = ?`,
+      ),
+      selectVersions: db.prepare(
+        `SELECT id, document_id, sequence, title, author_id, created_at, kind
+           FROM document_version WHERE document_id = ?
+          ORDER BY sequence DESC, created_at DESC, id ASC`,
+      ),
+      insertRestoreOperation: db.prepare(
+        `INSERT INTO restore_operation
+           (document_id, operation_id, request_hash, version_id, sequence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ),
+      selectRestoreOperation: db.prepare(
+        `SELECT operation_id, request_hash, version_id, sequence
+           FROM restore_operation WHERE document_id = ? AND operation_id = ?`,
       ),
       // ---- document creation (M4 B12.5, D-084 method C) ----
       // The owner row is intentionally a plain INSERT: the primary key is the "one role per
@@ -280,7 +348,7 @@ export class SqliteDocumentStore
     });
   }
 
-  async append(documentId: string, update: Uint8Array): Promise<number> {
+  async append(documentId: string, update: Uint8Array, options?: AppendOptions): Promise<number> {
     return this.#guard('append', () =>
       this.#transaction(() => {
         // A document that has never been written gets its row here, which is what makes
@@ -288,21 +356,16 @@ export class SqliteDocumentStore
         // separate create step (`docs/ARCHITECTURE.md` §7.3).
         this.#statements.insertDocumentIfMissing.run(documentId, EMPTY, Date.now());
 
-        const maxRow = this.#statements.selectMaxSequence.get(documentId);
-        const snapshotRow = this.#statements.selectSnapshotSequence.get(documentId);
-
-        // `MAX(seq) + 1` is not enough after a compaction: compaction *deletes* the log rows
-        // it folded in, so `MAX(seq)` drops back to 0 and the next append would reuse
-        // sequence 1 — below `snapshot_seq`. Two consequences, both defects: the sequence
-        // would stop being strictly increasing (`docs/CONTRACTS.md` §14.7), and `load`
-        // filters `seq > snapshot_seq`, so the new rows would be silently skipped and the
-        // edit lost. Taking the snapshot pointer into account keeps the sequence monotonic
-        // for the life of the document.
-        const highestLogSequence = readInteger(maxRow?.['max_seq']);
-        const snapshotSequence = readInteger(snapshotRow?.['snapshot_seq']);
-        const sequence = Math.max(highestLogSequence, snapshotSequence) + 1;
+        const sequence = this.#nextSequence(documentId);
 
         this.#statements.insertUpdate.run(documentId, sequence, update, Date.now());
+
+        // D-RC1: only a body change advances the number a restore compares against. The
+        // default is "yes" (see `AppendOptions`): a caller that cannot tell is assumed to have
+        // changed content, which can only cause a re-preview, never a silent overwrite.
+        if (options?.contentChanged ?? true) {
+          this.#setContentRevision(documentId, this.#readContentRevision(documentId) + 1);
+        }
         return sequence;
       }),
     );
@@ -318,6 +381,190 @@ export class SqliteDocumentStore
         this.#statements.deleteUpdatesThrough.run(documentId, throughSequence);
       }),
     );
+  }
+
+  /* ---------------------------------------------------------------- *
+   * P0-1 version history + restore (schema 3, D-090; CONTRACTS C1/C2/C3)
+   * ---------------------------------------------------------------- */
+
+  async listDocumentVersions(documentId: string): Promise<readonly DocumentVersionSummary[]> {
+    return await this.#guard('load', () => {
+      const versions: DocumentVersionSummary[] = [];
+      for (const row of this.#statements.selectVersions.all(documentId)) {
+        versions.push(toDocumentVersionSummary(row));
+      }
+      return versions;
+    });
+  }
+
+  async readDocumentVersion(
+    documentId: string,
+    versionId: string,
+  ): Promise<StoredDocumentVersion | null> {
+    return await this.#guard('load', () => {
+      const row = this.#statements.selectVersion.get(versionId, documentId);
+      if (row === undefined) return null;
+      const state = toUint8Array(row['yjs_state']);
+      if (state === null) {
+        // Same rule as a log row: a BLOB that is not bytes means the file is corrupt, and
+        // restoring from it would replace a document with garbage.
+        throw new StoreOperationError('load', new Error('version state is not a BLOB'));
+      }
+      return { ...toDocumentVersionSummary(row), state };
+    });
+  }
+
+  async captureDocumentVersion(input: CaptureDocumentVersionInput): Promise<DocumentVersionSummary> {
+    return this.#guard('restore', () => {
+      const now = input.now ?? Date.now();
+      if (input.documentId.length === 0) throw new Error('document id must not be empty');
+      if (input.authorId.length === 0) throw new Error('author id must not be empty');
+
+      return this.#transaction(() => {
+        this.#statements.insertDocumentIfMissing.run(input.documentId, EMPTY, now);
+        // A version row without a `document_meta` row could not be listed by the API, and a
+        // later restore would not know which content revision it captured.
+        this.#ensureMeta(input.documentId, input.authorId, now);
+        const sequence = this.#readContentRevision(input.documentId);
+        const id = randomUUID();
+        this.#statements.insertVersion.run(
+          id,
+          input.documentId,
+          sequence,
+          input.title,
+          input.authorId,
+          now,
+          input.state,
+          input.kind,
+        );
+        return {
+          id,
+          sequence,
+          title: input.title,
+          authorId: input.authorId,
+          createdAt: new Date(now).toISOString(),
+          kind: input.kind,
+        };
+      });
+    });
+  }
+
+  async documentContentRevision(documentId: string): Promise<number> {
+    return this.#guard('load', () => this.#readContentRevision(documentId));
+  }
+
+  async appendRestore(input: AppendRestoreInput): Promise<AppendRestoreOutcome> {
+    return this.#guard('restore', () =>
+      this.#transaction(() => {
+        const now = input.now;
+        if (input.documentId.length === 0) throw new Error('document id must not be empty');
+        if (input.operationId.length === 0) throw new Error('operation id must not be empty');
+
+        // ---- 1. Operation-id lookup, BEFORE anything else (C3, A7 P1-10) ----
+        // It is a READ, and it runs before the first write so a replay is genuinely "0 rows".
+        // A retry usually arrives with a `baseRevision` the first attempt has already advanced;
+        // checking the revision first would answer `409 stale_revision` to a retry that must be
+        // answered with the original result.
+        const existing = this.#statements.selectRestoreOperation.get(
+          input.documentId,
+          input.operationId,
+        );
+        if (existing !== undefined) {
+          if (String(existing['request_hash']) !== input.requestHash) {
+            // Same idempotency key, different request: refuse rather than replay a result
+            // that belongs to another request. Nothing about the original is disclosed.
+            return { kind: 'operation_conflict' } as const;
+          }
+          return {
+            kind: 'replayed',
+            versionId: String(existing['version_id']),
+            sequence: readInteger(existing['sequence']),
+          } as const;
+        }
+
+        this.#statements.insertDocumentIfMissing.run(input.documentId, EMPTY, now);
+        // The revision column lives on `document_meta`; a document that has content but no
+        // metadata row (a pre-Phase-2 store, or a test that wrote directly through `append`)
+        // gets one here so the restore can record a revision instead of silently skipping it.
+        this.#ensureMeta(input.documentId, input.authorId, now);
+
+        // ---- 2. Content-revision compare (inside the write transaction) ----
+        const currentRevision = this.#readContentRevision(input.documentId);
+        if (currentRevision !== input.expectedRevision) {
+          return { kind: 'stale', currentRevision } as const;
+        }
+
+        // ---- 3. Four rows, one commit ----
+        const contentChanged = input.restoreUpdate.byteLength > 0;
+        const logSequence = this.#nextSequence(input.documentId);
+
+        // The pre-restore state was captured by the caller **before** it applied the update
+        // (A7 P1-3). It is self-contained, so it survives log compaction (T10).
+        this.#statements.insertVersion.run(
+          randomUUID(),
+          input.documentId,
+          currentRevision,
+          input.title,
+          input.authorId,
+          now,
+          input.preRestoreState,
+          'pre-restore',
+        );
+
+        this.#statements.insertUpdate.run(input.documentId, logSequence, input.restoreUpdate, now);
+
+        // An empty update means "the selected version already is the current text": the log
+        // row still exists (the accounting is 4 rows), but the body — and therefore the
+        // revision a preview compares against — did not change.
+        const restoredRevision = contentChanged ? currentRevision + 1 : currentRevision;
+        if (contentChanged) this.#setContentRevision(input.documentId, restoredRevision);
+        this.#statements.touchMeta.run(now, input.documentId);
+
+        const restoredVersionId = randomUUID();
+        this.#statements.insertVersion.run(
+          restoredVersionId,
+          input.documentId,
+          restoredRevision,
+          input.title,
+          input.authorId,
+          now,
+          input.restoredState,
+          'restored',
+        );
+
+        this.#statements.insertRestoreOperation.run(
+          input.documentId,
+          input.operationId,
+          input.requestHash,
+          restoredVersionId,
+          restoredRevision,
+          now,
+        );
+
+        return {
+          kind: 'committed',
+          versionId: restoredVersionId,
+          sequence: restoredRevision,
+          logSequence,
+        } as const;
+      }),
+    );
+  }
+
+  async findRestoreOperation(
+    documentId: string,
+    operationId: string,
+  ): Promise<RestoreOperationRecord | null> {
+    return await this.#guard('load', () => {
+      const row = this.#statements.selectRestoreOperation.get(documentId, operationId);
+      if (row === undefined) return null;
+      return {
+        operationId: String(row['operation_id']),
+        requestHash: String(row['request_hash']),
+        versionId: String(row['version_id']),
+        sequence: readInteger(row['sequence']),
+      };
+    });
   }
 
   async delete(documentId: string): Promise<void> {
@@ -341,14 +588,9 @@ export class SqliteDocumentStore
     await this.#guard('append', () => {
       const now = Date.now();
       // `OR IGNORE`: write-once. The creator recorded first stays the owner, so neither a later
-      // joiner nor a restart re-assigns it.
-      this.#statements.insertMetaIfMissing.run(
-        documentId,
-        defaultDocumentTitle(documentId),
-        ownerId,
-        now,
-        now,
-      );
+      // joiner nor a restart re-assigns it. A newly created row initialises `content_revision`
+      // from the log position (see `#ensureMeta`), so metadata can never mask existing content.
+      this.#ensureMeta(documentId, ownerId, now);
     });
   }
 
@@ -518,6 +760,70 @@ export class SqliteDocumentStore
    * Internals
    * ---------------------------------------------------------------- */
 
+  /**
+   * Allocate the next log sequence for one document.
+   *
+   * `MAX(seq) + 1` is not enough after a compaction: compaction *deletes* the log rows it
+   * folded in, so `MAX(seq)` drops back to 0 and the next append would reuse sequence 1 —
+   * below `snapshot_seq`. Two consequences, both defects: the sequence would stop being
+   * strictly increasing (`docs/CONTRACTS.md` §14.7), and `load` filters `seq > snapshot_seq`,
+   * so the new rows would be silently skipped and the edit lost. Taking the snapshot pointer
+   * into account keeps the sequence monotonic for the life of the document.
+   *
+   * Shared by `append` and `appendRestore`; the caller must already hold a write transaction.
+   */
+  #nextSequence(documentId: string): number {
+    const maxRow = this.#statements.selectMaxSequence.get(documentId);
+    const snapshotRow = this.#statements.selectSnapshotSequence.get(documentId);
+    const highestLogSequence = readInteger(maxRow?.['max_seq']);
+    const snapshotSequence = readInteger(snapshotRow?.['snapshot_seq']);
+    return Math.max(highestLogSequence, snapshotSequence) + 1;
+  }
+
+  /**
+   * The document's content revision, or `0` when the store has never seen it.
+   *
+   * `0` is also what a preview records for an unknown document, so "compare what you saw with
+   * what is stored" is a plain equality test rather than a special case.
+   */
+  #readContentRevision(documentId: string): number {
+    const row = this.#statements.selectContentRevision.get(documentId);
+    if (row === undefined) return 0;
+    return readInteger(row['content_revision']);
+  }
+
+  /** Write the content revision; the row is guaranteed by the caller's transaction. */
+  #setContentRevision(documentId: string, revision: number): void {
+    this.#statements.setContentRevision.run(revision, documentId);
+  }
+
+  /**
+   * Create the document's metadata row if it does not exist, initialising `content_revision`.
+   *
+   * `INSERT OR IGNORE` keeps creation write-once: the first recorded owner stands. When the row
+   * is actually inserted, `content_revision` starts at the document's committed revision
+   * (`MAX(MAX(log seq), snapshot seq)`) rather than 0, because content can exist before metadata
+   * (a test writing through `append`, a store upgraded from before Phase 2). That is the same
+   * number the 2 → 3 migration uses, so an upgrade and a late metadata row agree.
+   *
+   * Called by `ensureDocumentMeta`, `captureDocumentVersion` and `appendRestore`. `append`
+   * deliberately does not create metadata — it has no identity to record as the owner — so the
+   * production order (join records metadata before the first frame; creation writes it) is what
+   * keeps the revision exact for normal documents.
+   */
+  #ensureMeta(documentId: string, ownerId: string, now: number): void {
+    const inserted = this.#statements.insertMetaIfMissing.run(
+      documentId,
+      defaultDocumentTitle(documentId),
+      ownerId,
+      now,
+      now,
+    );
+    if (Number(inserted.changes) > 0) {
+      this.#statements.initializeContentRevision.run(documentId, documentId, documentId);
+    }
+  }
+
   #assertOpen(): void {
     if (this.#closed) throw new StoreClosedError();
   }
@@ -575,6 +881,28 @@ function toAppUser(row: Record<string, unknown>): AppUser {
     displayName: typeof displayName === 'string' ? displayName : null,
     createdAt: readInteger(row['created_at']),
     updatedAt: readInteger(row['updated_at']),
+  };
+}
+
+/**
+ * Map one `document_version` row to its API summary.
+ *
+ * `yjs_state` is never part of this shape: the list endpoint must not ship document content
+ * (C4). A kind outside the frozen vocabulary means the file was written by something else, and
+ * failing loudly is the same rule the membership store applies to an unknown role.
+ */
+function toDocumentVersionSummary(row: Record<string, unknown>): DocumentVersionSummary {
+  const kind = row['kind'];
+  if (!isDocumentVersionKind(kind)) {
+    throw new StoreOperationError('load', new Error('version row has an unknown kind'));
+  }
+  return {
+    id: String(row['id']),
+    sequence: readInteger(row['sequence']),
+    title: String(row['title']),
+    authorId: String(row['author_id']),
+    createdAt: new Date(readInteger(row['created_at'])).toISOString(),
+    kind,
   };
 }
 

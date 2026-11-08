@@ -67,9 +67,22 @@ import {
   COMPACTION_UPDATE_THRESHOLD,
 } from '../persistence/constants.js';
 import { DocumentHydrator } from '../persistence/hydrator.js';
-import { isDocumentMetaStore } from '../persistence/document-meta.js';
+import { defaultDocumentTitle, isDocumentMetaStore } from '../persistence/document-meta.js';
+import {
+  isDocumentVersionStore,
+  type DocumentVersionStore,
+  type DocumentVersionSummary,
+} from '../persistence/document-versions.js';
 import { SerialTaskQueue } from '../persistence/serial-queue.js';
-import type { DocumentStore } from '../persistence/types.js';
+import type { AppendRestoreOutcome, DocumentStore } from '../persistence/types.js';
+import {
+  computeRestoreUpdate,
+  versionText,
+  type DocumentVersionService,
+  type RestoreUpdate,
+  type RestoreVersionRequest,
+  type RestoreVersionResult,
+} from '../versions/restore.js';
 import type { SocketContext } from './context.js';
 import { PeerImpl, type Peer, type SocketLike } from './peer.js';
 import {
@@ -165,6 +178,17 @@ interface RoomRuntime {
   readonly accounting: CompactionAccounting;
   /** Single-flight hydration promise shared by every concurrent joiner (D-043 point 3). */
   readonly barrier: Promise<HydrationOutcome>;
+  /**
+   * Restores currently holding this room (P0-1, A7 P1-4).
+   *
+   * A restore is an HTTP request whose work runs in the room's queue, not a socket, so the
+   * room's normal "last participant left → evict" rule can fire while a restore is still
+   * using the `Y.Doc`. Every restore increments this before enqueueing and decrements in a
+   * `finally`; eviction waits for zero.
+   */
+  leaseCount: number;
+  /** True when an eviction was requested while a restore held the room. */
+  evictPending: boolean;
 }
 
 export interface RoomRegistryOptions {
@@ -210,7 +234,7 @@ export interface RoomRegistryOptions {
   store?: DocumentStore;
 }
 
-export class RoomRegistry {
+export class RoomRegistry implements DocumentVersionService {
   readonly #rooms = new Map<string, DocumentRoom>();
   readonly #runtime = new Map<DocumentRoom, RoomRuntime>();
   readonly #contexts = new Map<Peer, SocketContext>();
@@ -646,8 +670,276 @@ export class RoomRegistry {
   }
 
   /* ---------------------------------------------------------------- *
+   * Version restore (P0-1; D-RW1 = A, D-RC1, D-OP1, D-V1, D-UD1)
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Restore one document version on behalf of an authorised caller.
+   *
+   * ## The order this method exists to guarantee (A7 P1-1)
+   *
+   * Everything happens inside **one** `runtime.queue.enqueue` task for the document:
+   *
+   * ```text
+   * await hydration barrier
+   *   → op-id lookup            (before the revision compare, A7 P1-10)
+   *   → content-revision compare
+   *   → read the selected version
+   *   → capture pre-restore     (BEFORE apply, A7 P1-3)
+   *   → apply (server-authored update)
+   *   → persist (one transaction, four rows)
+   *   → broadcast
+   * ```
+   *
+   * Computing the diff in the HTTP handler and applying it later would let an update that was
+   * already queued land in between, so the restore would be applied to a state it was never
+   * computed against (A7 Q1-1). Serialising it with every other durable mutation removes that
+   * window without changing the frozen `apply → persist → broadcast` order (D-RW1 = A).
+   *
+   * ## Why the room is created on demand
+   *
+   * A restore is an HTTP request; rooms are created on `join-room`. When nobody is online, the
+   * registry hydrates a room for the duration of the restore and then lets normal eviction
+   * run (see {@link RoomRuntime.leaseCount}). Persisting without a room would be option B
+   * (persist-first), which D-RW1 rejects.
+   */
+  async restoreVersion(request: RestoreVersionRequest): Promise<RestoreVersionResult> {
+    const store = this.#store;
+    if (store === undefined || !isDocumentVersionStore(store)) {
+      // Without durable versions there is nothing to restore from. This is a wiring mode, not
+      // a user error: the HTTP route is only mounted when a version service exists.
+      return { ok: false, reason: 'restore_failed' };
+    }
+
+    const room = this.#getOrCreateRoom(request.documentId);
+    const runtime = this.#requireRuntime(room);
+
+    // Take the lease **before** enqueueing: the room may already be empty (a restore after the
+    // last participant left), and the eviction that would have run synchronously must wait
+    // until this task has finished with the `Y.Doc`.
+    runtime.leaseCount += 1;
+
+    try {
+      return await runtime.queue.enqueue(() => this.#runRestore(room, runtime, store, request));
+    } catch (error) {
+      // `QueueStoppedError` (the room already failed) or an unexpected throw. Either way the
+      // caller gets one honest answer and the room is not claimed to have restored anything.
+      // Failing the room is idempotent and is the safe direction for an unexpected throw: a
+      // stopped queue with a `READY` room would accept frames it can never commit.
+      this.#logger.warn('version restore could not run', {
+        documentId: request.documentId,
+        reason: describeStoreFailure(error),
+      });
+      this.#failRoomUnhealthy(room, describeStoreFailure(error));
+      return { ok: false, reason: 'restore_failed' };
+    } finally {
+      this.#releaseRestoreLease(room, runtime);
+    }
+  }
+
+  /** The version list for one document; the HTTP layer has already authorized `canRead`. */
+  async listVersions(documentId: string): Promise<readonly DocumentVersionSummary[]> {
+    const store = this.#store;
+    if (store === undefined || !isDocumentVersionStore(store)) return [];
+    return await store.listDocumentVersions(documentId);
+  }
+
+  /** The content revision a preview must show so the client can send a valid `baseRevision`. */
+  async contentRevision(documentId: string): Promise<number> {
+    const store = this.#store;
+    if (store === undefined || !isDocumentVersionStore(store)) return 0;
+    return await store.documentContentRevision(documentId);
+  }
+
+  /**
+   * The body of one restore, run inside the document's FIFO slot.
+   *
+   * Kept separate from {@link restoreVersion} so the lease/enqueue wrapper stays readable and
+   * the failure mapping has one home.
+   *
+   * ## Failure policy
+   *
+   * - A failure **before** `apply` (an unreadable version, a store read error) writes nothing
+   *   and leaves the room alone: `restore_failed`, clients keep editing.
+   * - A failure **after** `apply` (the persist rejects) leaves the room's memory ahead of the
+   *   durable log. That is the same condition as a failed `append`, so it takes the same
+   *   fail-stop path: mark the room unhealthy, close its participants with `INTERNAL_ERROR`,
+   *   and never broadcast (`docs/DECISIONS.md` D-044). The next join rebuilds from the durable
+   *   state, which does not contain the restore.
+   */
+  async #runRestore(
+    room: DocumentRoom,
+    runtime: RoomRuntime,
+    store: DocumentStore & DocumentVersionStore,
+    request: RestoreVersionRequest,
+  ): Promise<RestoreVersionResult> {
+    // Content readiness inside the slot: a diff computed against a half-hydrated room would
+    // restore to the wrong text. The barrier resolves (never rejects) once hydration settles.
+    const barrier = await runtime.barrier;
+    if (!barrier.ok) return { ok: false, reason: 'restore_failed' };
+    if (room.destroyed || !room.acceptsMutations) {
+      return { ok: false, reason: 'restore_failed' };
+    }
+
+    // ---- 1–3. Read-side work: a failure here writes nothing and leaves the room healthy ----
+    // The reads are wrapped so a store fault answers `restore_failed` instead of escaping the
+    // queue task. An escaped throw would stop the document's FIFO queue permanently while the
+    // room stayed `READY` — a room that accepts frames it can never commit.
+    let targetText: string;
+    let title: string;
+    let currentRevision: number;
+    try {
+      // 1. Operation-id lookup, BEFORE the revision compare (A7 P1-10). A retry normally
+      // carries a `baseRevision` the first attempt already advanced; answering it with
+      // `stale_revision` would break idempotency. Scoped to this document, so reusing the id
+      // elsewhere is an independent operation and never leaks this result.
+      const existing = await store.findRestoreOperation(
+        request.documentId,
+        request.operationId,
+      );
+      if (existing !== null) {
+        if (existing.requestHash !== request.requestHash) {
+          return { ok: false, reason: 'operation_conflict' };
+        }
+        return { ok: true, versionId: existing.versionId, sequence: existing.sequence };
+      }
+
+      // 2. Content revision, compared inside the FIFO slot (D-RC1).
+      currentRevision = await store.documentContentRevision(request.documentId);
+      if (currentRevision !== request.baseRevision) {
+        return { ok: false, reason: 'stale_revision', currentRevision };
+      }
+
+      // 3. The selected version, scoped to this document (non-disclosure).
+      const version = await store.readDocumentVersion(request.documentId, request.versionId);
+      if (version === null) return { ok: false, reason: 'not_found' };
+      targetText = versionText(version);
+
+      // Title for the two version rows: the document's own title, never a client-supplied one.
+      title = isDocumentMetaStore(store)
+        ? ((await store.documentMeta(request.documentId))?.title ??
+          defaultDocumentTitle(request.documentId))
+        : defaultDocumentTitle(request.documentId);
+    } catch (error) {
+      this.#logger.warn('version restore could not read its inputs; no write was attempted', {
+        documentId: request.documentId,
+        versionId: request.versionId,
+        reason: describeStoreFailure(error),
+      });
+      return { ok: false, reason: 'restore_failed' };
+    }
+
+    // ---- 4. Pre-restore capture, BEFORE apply (A7 P1-3) ----
+    // Both version states are full, self-contained encodings: they must survive log compaction
+    // and a restart (T10). `preRestoreState` is what the user "finds back" after a restore.
+    const preRestoreState = Y.encodeStateAsUpdate(room.doc);
+
+    // ---- 5. Apply the server-authored update (phase 1 of apply → persist → broadcast) ----
+    let restore: RestoreUpdate;
+    try {
+      restore = computeRestoreUpdate(room.doc, targetText);
+    } catch (error) {
+      // Computing the update happens on a staging clone, so the room is untouched.
+      this.#logger.warn('version restore could not compute an update; no write was attempted', {
+        documentId: request.documentId,
+        reason: describeStoreFailure(error),
+      });
+      return { ok: false, reason: 'restore_failed' };
+    }
+    if (restore.changed) {
+      try {
+        if (!room.applyServerUpdate(restore.update)) {
+          return { ok: false, reason: 'restore_failed' };
+        }
+      } catch (error) {
+        // A partial apply leaves memory unbacked by the log: fail-stop, as for a persist failure.
+        this.#failRoomUnhealthy(room, describeStoreFailure(error));
+        return { ok: false, reason: 'restore_failed' };
+      }
+    }
+    const restoredState = Y.encodeStateAsUpdate(room.doc);
+
+    // ---- 6. Persist: one transaction, four rows (phase 2) ----
+    let outcome: AppendRestoreOutcome;
+    try {
+      outcome = await store.appendRestore({
+        documentId: request.documentId,
+        operationId: request.operationId,
+        requestHash: request.requestHash,
+        expectedRevision: request.baseRevision,
+        authorId: request.actorId,
+        title,
+        preRestoreState,
+        restoreUpdate: restore.update,
+        restoredState,
+        now: Date.now(),
+      });
+    } catch (error) {
+      // Nothing was written; the room now holds an update the log does not. Fail-stop.
+      this.#failRoomUnhealthy(room, describeStoreFailure(error));
+      return { ok: false, reason: 'restore_failed' };
+    }
+
+    // The transaction can only disagree with the pre-checks if another process wrote to the
+    // same database between them (a single deployment has one writer, and this whole method
+    // runs in its slot). Nothing was committed, so the applied update must not survive:
+    // fail the room so the next join rebuilds memory from the durable log.
+    if (outcome.kind === 'replayed') {
+      this.#discardUnpersistedRestore(room, restore.changed);
+      return { ok: true, versionId: outcome.versionId, sequence: outcome.sequence };
+    }
+    if (outcome.kind === 'stale') {
+      this.#discardUnpersistedRestore(room, restore.changed);
+      return { ok: false, reason: 'stale_revision', currentRevision: outcome.currentRevision };
+    }
+    if (outcome.kind === 'operation_conflict') {
+      this.#discardUnpersistedRestore(room, restore.changed);
+      return { ok: false, reason: 'operation_conflict' };
+    }
+
+    // ---- 7. Broadcast, only after the bytes are durable (phase 3) ----
+    this.#recordCommit(runtime, outcome.logSequence, restore.update.byteLength);
+    if (restore.changed) {
+      // No `except`: the room's own text already holds the change, and every connected
+      // participant must receive the restore as a remote update (so no client Undo tracks it,
+      // D-UD1 / R13). When the text did not change there is nothing to broadcast.
+      room.broadcastUpdate(restore.update, null);
+    }
+
+    return { ok: true, versionId: outcome.versionId, sequence: outcome.sequence };
+  }
+
+  /**
+   * Drop an applied-but-not-committed restore by failing the room.
+   *
+   * Only called when the update was actually applied: an empty restore changed nothing, so the
+   * room is still consistent with the log and there is nothing to discard.
+   */
+  #discardUnpersistedRestore(room: DocumentRoom, applied: boolean): void {
+    if (!applied) return;
+    this.#failRoomUnhealthy(room, 'restore applied but the transaction did not commit');
+  }
+
+  /**
+   * Release one restore lease and let normal eviction policy run again.
+   *
+   * Always calls {@link #destroyRoomIfEmpty} once the last lease is gone: a room created *by* a
+   * restore has no participants, and nothing else would ever ask whether it should be evicted
+   * (T9). With participants the call is a no-op. `destroyed` is checked because the failure path
+   * may already have destroyed the room while this task was unwinding.
+   */
+  #releaseRestoreLease(room: DocumentRoom, runtime: RoomRuntime): void {
+    runtime.leaseCount = Math.max(0, runtime.leaseCount - 1);
+    if (runtime.leaseCount > 0) return;
+    runtime.evictPending = false;
+    if (room.destroyed) return;
+    this.#destroyRoomIfEmpty(room);
+  }
+
+  /* ---------------------------------------------------------------- *
    * Introspection (tests + operational logging)
    * ---------------------------------------------------------------- */
+
   roomCount(): number {
     return this.#rooms.size;
   }
@@ -838,17 +1130,20 @@ export class RoomRegistry {
     return runtime.queue
       .enqueue(async () => {
         // Phase 1 — apply. Inside the queue slot, so no other mutation for this document
-        // can observe or interleave with this step.
-        const update = room.applySyncPayload(frame);
-        if (update === null) return;
+        // can observe or interleave with this step. `contentChanged` is the D-RC1 signal:
+        // a join's empty update advances the log but not the content revision.
+        const applied = room.applySyncPayloadWithEffect(frame);
+        if (applied === null) return;
 
         // Phase 2 — persist, awaited. If this rejects, no peer has been told anything, so
         // the server never claims a state it cannot recover (D-044).
-        const sequence = await store.append(room.documentId, update);
-        this.#recordCommit(runtime, sequence, update.byteLength);
+        const sequence = await store.append(room.documentId, applied.update, {
+          contentChanged: applied.contentChanged,
+        });
+        this.#recordCommit(runtime, sequence, applied.update.byteLength);
 
         // Phase 3 — broadcast, only after the bytes are durable.
-        room.broadcastUpdate(update, participant);
+        room.broadcastUpdate(applied.update, participant);
       })
       .then(
         (): RouteOutcome => ({ ok: true }),
@@ -897,7 +1192,7 @@ export class RoomRegistry {
       barrier = this.#runHydration(room, accounting);
     }
 
-    return { queue, accounting, barrier };
+    return { queue, accounting, barrier, leaseCount: 0, evictPending: false };
   }
 
   /**
@@ -1034,6 +1329,16 @@ export class RoomRegistry {
 
   #destroyRoomIfEmpty(room: DocumentRoom): void {
     if (!room.isEmpty) return;
+
+    // P0-1 (A7 P1-4): a restore is an HTTP request using the room without being a participant,
+    // so "empty" no longer means "unused". Defer the eviction (and therefore the `destroy()` of
+    // the `Y.Doc`) until the last restore lease is released; the room then compacts and goes
+    // away exactly as it would have here.
+    const runtime = this.#runtime.get(room);
+    if (runtime !== undefined && runtime.leaseCount > 0) {
+      runtime.evictPending = true;
+      return;
+    }
 
     // Compaction happens here, at eviction, and never on the update hot path
     // (`docs/DECISIONS.md` D-042). The snapshot is encoded *now*, synchronously, because the

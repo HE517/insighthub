@@ -15,22 +15,43 @@
  *
  * `PRAGMA user_version` is the version marker: it lives in the database header, is written by
  * SQLite itself, needs no extra table, and is read with one statement. The current schema is
- * **2** (M4 B12.5, `docs/DECISIONS.md` D-084 method C).
+ * **3** (P0-1 version restore, `docs/agent-governance/P0-1-CONTRACTS.md` C2; D-090 §7).
  *
  * ## The cases
  *
  * | On-disk `user_version` | Meaning | Action |
  * | --- | --- | --- |
- * | `0`, no known table | a new database | create the objects and record `2`, one transaction |
- * | `0`, known tables | a pre-B6 database | migrate to `2`, one transaction, data untouched |
- * | `1` | B6 schema (no membership table) | migrate to `2`, one transaction |
- * | `2` | current | verify the tables/indexes exist, do nothing |
- * | `> 2` | written by a newer binary | **refuse** with `DATA_SCHEMA_TOO_NEW` |
+ * | `0`, no known table | a new database | create the objects and record `3`, one transaction |
+ * | `0`, known tables | a pre-B6 database | migrate to `3`, one transaction, data untouched |
+ * | `1` | B6 schema (no membership table) | migrate to `3`, one transaction |
+ * | `2` | membership in the document database | migrate to `3`, one transaction |
+ * | `3` | current | verify the tables/indexes/columns exist, do nothing |
+ * | `> 3` | written by a newer binary | **refuse** with `DATA_SCHEMA_TOO_NEW` |
  *
- * There is deliberately no "best effort" branch for `> 2`: opening a newer file read-write is
+ * There is deliberately no "best effort" branch for `> 3`: opening a newer file read-write is
  * how an old binary corrupts data it does not understand, and the alternative — opening it
  * read-only and pretending everything works — would turn a version mismatch into silent write
  * failures later.
+ *
+ * ## Schema 3 — version history and content revision (P0-1, D-090)
+ *
+ * ```text
+ * document_version(document_id, sequence, …, yjs_state, kind)
+ * restore_operation(document_id, operation_id, request_hash, version_id, sequence, created_at)
+ * document_meta.content_revision INTEGER NOT NULL DEFAULT 0
+ * ```
+ *
+ * `sequence` on a version row is the **content revision** at capture time, not a log
+ * position: `baseRevision` compares against the same number, so a join's empty update cannot
+ * invalidate a preview (D-RC1 / A7 P1-6). The v2 → v3 migration initialises
+ * `content_revision` from each document's current revision (`MAX(MAX(seq), snapshot_seq)`) so a
+ * pre-existing document is not reported as "revision 0" with history behind it.
+ *
+ * Migration 2 → 3 is one transaction (the same primitive as v0/v1 → v2): the two tables, the
+ * index, the new column and the `user_version` bump commit or roll back together. A failure
+ * leaves `user_version = 2` with no half-created table, and an older binary that later sees a
+ * version-3 file refuses it with `DATA_SCHEMA_TOO_NEW` instead of writing rows it cannot
+ * represent.
  *
  * ## Schema 2 — membership moves into the document database (D-084 method C)
  *
@@ -73,7 +94,7 @@ import { runInTransaction } from './transaction.js';
 type Db = InstanceType<SqliteModule['DatabaseSync']>;
 
 /** The schema this binary writes and understands. Bump only with a real migration. */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /**
  * The membership table, now in `insighthub.db` (`docs/DECISIONS.md` D-084 method C).
@@ -94,8 +115,20 @@ export const AUTHZ_MEMBERSHIP_USER_INDEX = 'authz_document_membership_user';
  */
 export const LEGACY_AUTHZ_DATABASE_FILE_NAME = 'authz.db';
 
+/** `document_meta` column added by schema 3 (P0-1, D-RC1). */
+export const DOCUMENT_META_CONTENT_REVISION_COLUMN = 'content_revision';
+
+/** Version history table (schema 3). */
+export const DOCUMENT_VERSION_TABLE = 'document_version';
+
+/** Index behind `GET /api/documents/:id/versions` (`sequence DESC` per document). */
+export const DOCUMENT_VERSION_DOC_SEQ_INDEX = 'document_version_doc_seq';
+
+/** Idempotency table for restores (schema 3, D-OP1). */
+export const RESTORE_OPERATION_TABLE = 'restore_operation';
+
 /**
- * Every table schema version 2 is expected to contain.
+ * Every table a schema-3 database is expected to contain.
  *
  * Exported for tests and for the startup check below; the order is the creation order.
  */
@@ -105,10 +138,12 @@ export const SCHEMA_TABLES = [
   'document_meta',
   'app_user',
   AUTHZ_MEMBERSHIP_TABLE,
+  DOCUMENT_VERSION_TABLE,
+  RESTORE_OPERATION_TABLE,
 ] as const;
 
-/** Every index schema version 2 is expected to contain. */
-export const SCHEMA_INDEXES = [AUTHZ_MEMBERSHIP_USER_INDEX] as const;
+/** Every index a schema-3 database is expected to contain. */
+export const SCHEMA_INDEXES = [AUTHZ_MEMBERSHIP_USER_INDEX, DOCUMENT_VERSION_DOC_SEQ_INDEX] as const;
 
 /** What {@link ensureSchema} actually did, for tests and diagnostics. */
 export type SchemaAction = 'created' | 'migrated' | 'unchanged';
@@ -227,28 +262,49 @@ export function ensureSchema(db: Db, dataPath: string, sqlite?: SqliteModule): S
     existing.has(table),
   );
 
+  // Tracks which step of the migration failed so the stable error code names the right one:
+  // a v3 failure must not be reported as a membership-migration failure (which would send an
+  // operator looking at `authz.db` for a version-table problem). A mutable record rather than a
+  // local string: the assignment happens inside the transaction callback, and control-flow
+  // analysis would otherwise freeze the local's type at its initial value.
+  const migrationState: { phase: 'membership' | 'restore' } = { phase: 'membership' };
+
   try {
     runInTransaction(db, () => {
-      // Idempotent by construction: on a new file this creates everything; on a v0/v1 file it
-      // only adds the membership table/index (and a table an older milestone lacked), and never
-      // alters an existing one.
+      // Idempotent by construction: on a new file this creates everything; on a v0/v1/v2 file it
+      // only adds the objects an older milestone lacked, and never alters an existing one.
       createSchemaObjects(db);
 
       // D-084: copy the old `authz.db` rows into the new table, inside this same transaction.
       // The read-only legacy handle is closed by the helper before validation continues.
+      migrationState.phase = 'membership';
       importLegacyMemberships(db, dataPath, sqlite);
 
       // The checks run *inside* the transaction, so a rejected migration rolls back the table,
       // the index, every copied row and the version marker together.
       assertMembershipInvariants(db, dataPath);
 
+      // P0-1 (D-090 §7): schema 3 adds the two version tables and `content_revision`. One
+      // transaction with everything above: a failure rolls back the whole upgrade and leaves
+      // `user_version` at its previous value.
+      migrationState.phase = 'restore';
+      migrateToSchema3(db);
+
       db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
     });
   } catch (error) {
-    // A failure here is the B12.5 membership migration failing, whether it came from DDL, the
+    // A failure here is one of the two migration steps failing, whether it came from DDL, the
     // legacy read or a validation rule. The transaction primitive has already rolled everything
-    // back; report it with a stable code and an operator sentence that names the legacy file.
+    // back; report it with a stable code and an operator sentence that names the step.
     if (isSqliteCapabilityError(error)) throw error;
+    if (migrationState.phase === 'restore') {
+      throw new SqliteCapabilityError(
+        'RESTORE_SCHEMA_MIGRATION_FAILED',
+        `schema migration to version ${CURRENT_SCHEMA_VERSION} failed and was rolled back; the document-version and restore-operation tables were NOT created and the previous schema version is unchanged: ${dataPath}`,
+        'The database is unchanged and usable by the previous release. Fix the reported cause (an unreadable table, a full disk) and restart; do not delete the database.',
+        error,
+      );
+    }
     throw new SqliteCapabilityError(
       'MEMBERSHIP_MIGRATION_FAILED',
       `schema migration to version ${CURRENT_SCHEMA_VERSION} failed and was rolled back; membership was NOT migrated from the legacy ${LEGACY_AUTHZ_DATABASE_FILE_NAME}: ${dataPath}`,
@@ -260,12 +316,18 @@ export function ensureSchema(db: Db, dataPath: string, sqlite?: SqliteModule): S
   return { version: CURRENT_SCHEMA_VERSION, action: isLegacy ? 'migrated' : 'created' };
 }
 
-/** Schema objects that version 2 claims but the file does not actually contain. */
+/** Schema objects that version 3 claims but the file does not actually contain. */
 function missingSchemaObjects(db: Db, existing: Set<string>): string[] {
   const missing: string[] = SCHEMA_TABLES.filter((table) => !existing.has(table));
   const indexes = indexNames(db);
   for (const index of SCHEMA_INDEXES) {
     if (!indexes.has(index)) missing.push(`index ${index}`);
+  }
+  // `CREATE TABLE IF NOT EXISTS` cannot add a column to an existing table, so the column is
+  // validated separately: a file claiming version 3 without it would fail every restore at the
+  // first UPDATE, long after startup.
+  if (existing.has('document_meta') && !columnNames(db, 'document_meta').has(DOCUMENT_META_CONTENT_REVISION_COLUMN)) {
+    missing.push(`column document_meta.${DOCUMENT_META_CONTENT_REVISION_COLUMN}`);
   }
   return missing;
 }
@@ -410,9 +472,75 @@ function assertMembershipInvariants(db: Db, dataPath: string): void {
 }
 
 /**
- * The schema-2 objects. The first four tables are exactly the schema-1 objects with the same
- * columns and constraints; the fifth (`authz_document_membership`) is the D-084 move of
- * membership into this file so document + owner membership can commit in one transaction.
+ * Schema-3 upgrade step, run **inside** the migration transaction.
+ *
+ * `ALTER TABLE … ADD COLUMN` is the only SQLite way to add a column in place, and it cannot be
+ * written as `ADD COLUMN IF NOT EXISTS`. The branch is therefore explicit and idempotent: a
+ * table that already has the column (a fresh database created by {@link createSchemaObjects},
+ * or a re-run after a rollback) is left alone.
+ *
+ * The initialisation is not cosmetic. A v2 document has a real history; leaving
+ * `content_revision = 0` would make its first restore compare `baseRevision = 0` against a
+ * document with edits behind it and either always 409 or, worse, accept a preview taken
+ * against nothing. It is set to the same number `DocumentMeta.revision` reported before this
+ * schema existed — `MAX(MAX(log seq), snapshot_seq)` — so the first restore after an upgrade
+ * behaves like the last one before it.
+ */
+function migrateToSchema3(db: Db): void {
+  if (!columnNames(db, 'document_meta').has(DOCUMENT_META_CONTENT_REVISION_COLUMN)) {
+    db.exec(
+      `ALTER TABLE document_meta ADD COLUMN ${DOCUMENT_META_CONTENT_REVISION_COLUMN} INTEGER NOT NULL DEFAULT 0`,
+    );
+    db.exec(
+      `UPDATE document_meta SET ${DOCUMENT_META_CONTENT_REVISION_COLUMN} = MAX(
+         COALESCE((SELECT MAX(u.seq) FROM document_update u WHERE u.document_id = document_meta.document_id), 0),
+         COALESCE((SELECT d.snapshot_seq FROM document d WHERE d.document_id = document_meta.document_id), 0)
+       )`,
+    );
+  }
+
+  assertVersionInvariants(db);
+}
+
+/**
+ * Validate the schema-3 objects before the transaction is allowed to commit.
+ *
+ * Runs inside the migration transaction, so a failure rolls back the tables, the index, the new
+ * column and the version marker together. The column checks exist because `CREATE TABLE IF NOT
+ * EXISTS` silently accepts a table with the wrong shape — exactly the half-migrated state the
+ * version marker is meant to make impossible.
+ */
+function assertVersionInvariants(db: Db): void {
+  const tables = tableNames(db);
+  for (const table of [DOCUMENT_VERSION_TABLE, RESTORE_OPERATION_TABLE]) {
+    if (!tables.has(table)) {
+      throw new Error(`schema 3 requires table ${table}, which the migration did not create`);
+    }
+  }
+  if (!indexNames(db).has(DOCUMENT_VERSION_DOC_SEQ_INDEX)) {
+    throw new Error(`schema 3 requires index ${DOCUMENT_VERSION_DOC_SEQ_INDEX}`);
+  }
+  if (!columnNames(db, 'document_meta').has(DOCUMENT_META_CONTENT_REVISION_COLUMN)) {
+    throw new Error(`schema 3 requires document_meta.${DOCUMENT_META_CONTENT_REVISION_COLUMN}`);
+  }
+
+  // A version row whose kind is outside the frozen vocabulary could not be listed or restored;
+  // refusing the migration is better than shipping a row no reader can interpret.
+  const invalidKinds = db
+    .prepare(
+      `SELECT COUNT(*) AS total FROM ${DOCUMENT_VERSION_TABLE}
+       WHERE kind NOT IN ('auto', 'manual', 'pre-restore', 'restored')`,
+    )
+    .get();
+  if (readInteger(invalidKinds?.['total']) > 0) {
+    throw new Error(`the migrated ${DOCUMENT_VERSION_TABLE} table contains an unknown kind`);
+  }
+}
+
+/**
+ * The schema-3 objects. The first five tables are exactly the schema-2 objects with the same
+ * columns, except `document_meta`, which gains `content_revision`; the last two are the P0-1
+ * version history and idempotency tables.
  */
 export function createSchemaObjects(db: Db): void {
   db.exec(`
@@ -445,7 +573,8 @@ export function createSchemaObjects(db: Db): void {
       title TEXT NOT NULL,
       owner_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      content_revision INTEGER NOT NULL DEFAULT 0
     )
   `);
   // The internal user mapping (`docs/CONTRACTS.md` §18.1). It lives in the same file as the
@@ -480,6 +609,41 @@ export function createSchemaObjects(db: Db): void {
   db.exec(
     `CREATE INDEX IF NOT EXISTS ${AUTHZ_MEMBERSHIP_USER_INDEX} ON ${AUTHZ_MEMBERSHIP_TABLE}(user_id)`,
   );
+
+  // P0-1 schema 3: the version history. `yjs_state` is a self-contained encoded state (never a
+  // "replay from this sequence" pointer), which is what lets a `pre-restore` row outlive log
+  // compaction. `sequence` is the content revision at capture time (D-RC1).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${DOCUMENT_VERSION_TABLE} (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      yjs_state BLOB NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('auto', 'manual', 'pre-restore', 'restored'))
+    )
+  `);
+  // `GET /api/documents/:id/versions` reads one document newest-first.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS ${DOCUMENT_VERSION_DOC_SEQ_INDEX} ON ${DOCUMENT_VERSION_TABLE}(document_id, sequence DESC)`,
+  );
+  // D-OP1: one row per restore attempt that committed. The primary key is the idempotency
+  // guarantee — `(document_id, operation_id)` is what makes a retry a lookup rather than a
+  // second restore, and scoping it by document keeps one document's operation ids from ever
+  // being answerable through another.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${RESTORE_OPERATION_TABLE} (
+      document_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      version_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (document_id, operation_id)
+    )
+  `);
 }
 
 /** Table names present in the main database, excluding SQLite's own `sqlite_*` tables. */
@@ -488,6 +652,16 @@ function tableNames(db: Db): Set<string> {
   for (const row of db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
     .all()) {
+    const name = row['name'];
+    if (typeof name === 'string') names.add(name);
+  }
+  return names;
+}
+
+/** Column names of one table; empty when the table does not exist. */
+function columnNames(db: Db, table: string): Set<string> {
+  const names = new Set<string>();
+  for (const row of db.prepare(`PRAGMA table_info(${table})`).all()) {
     const name = row['name'];
     if (typeof name === 'string') names.add(name);
   }

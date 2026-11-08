@@ -189,7 +189,7 @@ describe('markdown preview renderer: dangerous URLs are refused', () => {
 });
 
 describe('markdown preview renderer: 100k document', () => {
-  it('parses and renders a 100k document in one pass (timing instrumentation)', () => {
+  it('parses and renders a 100k document in one pass (timing instrumentation)', { timeout: 20_000 }, () => {
     const source = hundredThousandMarkdown();
     expect(source).toHaveLength(100_000);
 

@@ -543,12 +543,15 @@ describe('database schema (M4 B1, membership moved in M4 B12.5)', () => {
             .all() as Array<Record<string, unknown>>
         ).map((row) => String(row['name']));
         // D-084 method C: membership now lives in `insighthub.db` so creation can be atomic.
+        // P0-1 / schema 3 adds the version history and the restore idempotency table.
         assert.deepEqual(tables, [
           'app_user',
           'authz_document_membership',
           'document',
           'document_meta',
           'document_update',
+          'document_version',
+          'restore_operation',
         ]);
 
         const columns = (

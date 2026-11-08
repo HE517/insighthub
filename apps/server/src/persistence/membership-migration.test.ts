@@ -4,8 +4,8 @@
  * Layer: **Node only**, real files in a per-test temporary directory. The claims are about
  * failure behaviour as much as the happy path:
  *
- * - a v1 `insighthub.db` plus a legacy `authz.db` with two memberships migrates to schema 2, and
- *   the runtime seam reads the rows from the new table;
+ * - a v1 `insighthub.db` plus a legacy `authz.db` with two memberships migrates to the current
+ *   schema version (3 since P0-1), and the runtime seam reads the rows from the new table;
  * - the row count / uniqueness / role vocabulary are asserted **inside** the migration
  *   transaction, so a bad legacy row rolls the whole thing back;
  * - `user_version` stays 1 and the new table is absent after a failed migration;
@@ -23,6 +23,7 @@ import { openDocumentStore } from './open-store.js';
 import {
   AUTHZ_MEMBERSHIP_TABLE,
   AUTHZ_MEMBERSHIP_USER_INDEX,
+  CURRENT_SCHEMA_VERSION,
   LEGACY_AUTHZ_DATABASE_FILE_NAME,
   readUserVersion,
 } from './schema.js';
@@ -178,7 +179,11 @@ describe('M4 B12.5 — v1 → v2 membership migration', () => {
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(db), 2, 'the migration must record schema 2');
+      assert.equal(
+        readUserVersion(db),
+        CURRENT_SCHEMA_VERSION,
+        'the migration must record the current schema version (3 since P0-1)',
+      );
       assert.ok(tableNames(db).includes(AUTHZ_MEMBERSHIP_TABLE));
       assert.ok(indexNames(db).includes(AUTHZ_MEMBERSHIP_USER_INDEX), 'user_id index exists');
 
@@ -222,7 +227,7 @@ describe('M4 B12.5 — v1 → v2 membership migration', () => {
     await reopened.store.close();
     const after = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(after), 2);
+      assert.equal(readUserVersion(after), CURRENT_SCHEMA_VERSION);
       const row = after.prepare(`SELECT COUNT(*) AS total FROM ${AUTHZ_MEMBERSHIP_TABLE}`).get();
       assert.equal(Number(row?.['total']), 2, 'reopening must not duplicate rows');
     } finally {
@@ -313,7 +318,7 @@ describe('M4 B12.5 — v1 → v2 membership migration', () => {
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(db), 2);
+      assert.equal(readUserVersion(db), CURRENT_SCHEMA_VERSION);
       assert.ok(tableNames(db).includes(AUTHZ_MEMBERSHIP_TABLE));
       assert.equal(
         Number(
