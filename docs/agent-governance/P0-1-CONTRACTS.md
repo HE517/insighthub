@@ -95,8 +95,14 @@ ALTER TABLE document_meta ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0
 
 ### GET `/api/documents/:id/versions`（本批可只做 store；若做 HTTP）
 
-- 权限 `canRead`；返回 `{versions:[{id, sequence, title, authorId, createdAt, kind}]}`，按 sequence desc；
+- 权限 `canRead`；返回 `{ versions:[{id, sequence, title, authorId, createdAt, kind}], currentRevision }`，按 sequence desc；`currentRevision` 是客户端预览时必须作为 `baseRevision` 发送的正文修订号。
 - 不返回 `yjs_state`；不泄露无权限文档（404）。
+
+### 语义确认（A0）
+
+- `version.summary.sequence` 与响应 `sequence`、`restore_operation.sequence` 都是**版本捕获时的 content revision**，不是 append log 的 log sequence；log sequence 只用于内部 compaction 记账（`AppendRestoreOutcome.logSequence`）。
+- 同 `operationId` 跨文档按 `(document_id, operation_id)` 是**独立操作**，不是拒绝；必须不能读取/恢复另一文档的 versionId（T13）。
+- 401 在本路由固定 `session_required`（C4 字面），即使 demo 模式其它路由用 `unauthenticated`；客户端按路由区分。
 
 ## C5. 顺序约束
 
