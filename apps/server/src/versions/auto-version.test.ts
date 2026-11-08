@@ -496,6 +496,7 @@ describe('D-V2 auto-version capture on the real path', () => {
     const dataPath = mkdtempSync(join(tmpdir(), 'insighthub-auto-fail-'));
     const opened = await openDocumentStore(dataPath);
     const wrapped = new FailingCaptureStore(opened.store);
+    const warnings: { message: string; detail?: Record<string, unknown> }[] = [];
     let server: TestServer | null = null;
     let client: TestClient | null = null;
     try {
@@ -504,6 +505,11 @@ describe('D-V2 auto-version capture on the real path', () => {
         store: wrapped,
         authorization: 'enforced',
         now: () => clock.now,
+        logger: {
+          warn: (message, detail) => {
+            warnings.push(detail === undefined ? { message } : { message, detail });
+          },
+        },
       });
       client = await TestClient.connect(server.url, { cookie: await session(server) });
       await client.joinAndWait(DOC);
@@ -519,6 +525,11 @@ describe('D-V2 auto-version capture on the real path', () => {
         assert.equal(wrapped.captureAttempts, 1, 'the capture was attempted');
         assert.equal((await autoVersions(wrapped, DOC)).length, 0);
         assert.equal(await durableText(wrapped, DOC), 'hello', 'the edit stays committed');
+        const captureWarning = warnings.find((warning) =>
+          warning.message.includes('automatic version capture failed'),
+        );
+        assert.notEqual(captureWarning, undefined, 'the failure is logged');
+        assert.equal(captureWarning?.detail?.['documentId'], DOC);
         assert.equal(server.handle.registry.requireRoom(DOC).state, 'ready');
         assert.equal(
           client.textMessages().filter((message) => message.type === 'error').length,
