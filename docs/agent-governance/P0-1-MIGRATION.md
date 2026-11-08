@@ -28,7 +28,7 @@ BEGIN IMMEDIATE
 COMMIT
 ```
 
-- 失败：整体回滚，`user_version` 保持 2，无半表；错误码 `RESTORE_SCHEMA_MIGRATION_FAILED`（启动拒绝）。
+- 失败：整体回滚，`user_version` 保持 2，无半表；启动拒绝。**已知 R-1**：v3 建表/建索引的 DDL 失败发生在 `phase='restore'` 之前，当前可能报 `MEMBERSHIP_MIGRATION_FAILED` 而不是 `RESTORE_SCHEMA_MIGRATION_FAILED`；数据回滚不受影响，但运维诊断会指向错误的迁移。
 - 幂等：已为 3 → `unchanged`；`> 3` → `DATA_SCHEMA_TOO_NEW`（旧二进制不写新库）。
 - `content_revision` 初值取 `MAX(MAX(seq), snapshot_seq)`，与运行时 `#ensureMeta` 同口径。
 
