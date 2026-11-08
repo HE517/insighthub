@@ -1162,8 +1162,13 @@ describe('T14 — the server does not trust a client-computed restore', () => {
       assert.deepEqual(await rowCounts(server, DOC), before, 'no invalid request wrote a row');
 
       // A normal client update keeps being a normal update: persisted, broadcast, and **not**
-      // a restore (no version row, no operation row). This is the contract's whole point —
-      // there is no path that turns a client's bytes into a restore.
+      // a restore (no operation row, no `pre-restore`/`restored` version row). This is the
+      // contract's whole point — there is no path that turns a client's bytes into a restore.
+      //
+      // D-V2 adds one thing on top: the first body-changing edit of this document also earns one
+      // best-effort `auto` snapshot, taken inside the same FIFO slot after the append. So the
+      // assertion is "exactly one auto row, still no operation row", not "the version count is
+      // unchanged" — and the slot is awaited so the capture has either run or been refused.
       const client = await TestClient.connect(server.url, {
         cookie: await session(server, 'demo-ada'),
       });
@@ -1179,9 +1184,23 @@ describe('T14 — the server does not trust a client-computed restore', () => {
           async () => ((await server.store.load(DOC))?.updates.length ?? 0) > logBefore,
           'the ordinary update is persisted',
         );
+        await waitFor(
+          () => server.handle.registry.mutationQueueDepth(DOC) === 0,
+          'the edit slot is idle',
+        );
         const afterEdit = await rowCounts(server, DOC);
-        assert.equal(afterEdit.versions, before.versions, 'an edit is not a version capture');
+        assert.equal(
+          afterEdit.versions,
+          before.versions + 1,
+          'an edit is not a restore, but D-V2 captures one auto version',
+        );
         assert.equal(afterEdit.operations, before.operations, 'an edit is not a restore operation');
+        const versionsAfterEdit = await fullStore(server.store).listDocumentVersions(DOC);
+        assert.deepEqual(
+          versionsAfterEdit.map((version) => version.kind).sort(),
+          ['auto', 'manual'],
+          'the only version an edit added is the auto one',
+        );
       } finally {
         client.destroy();
       }

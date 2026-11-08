@@ -547,17 +547,23 @@ async function runOfflineMergeScenario(
     // is not part of P0-1's contract. The measured result for this fixture is `betALPHA`.
     t.diagnostic(`T8 mergedText=${JSON.stringify(finalA)} (order=${order})`);
 
-    // B's edit added one update row; neither the restore nor the reconnect duplicated a
-    // version or an operation.
+    // B's edit added one update row. The restore added its two version rows and one operation;
+    // the reconnect itself adds no *second* version/operation row. D-V2 adds one row on top:
+    // B's offline edit is the document's first body-changing client update, so it captures a
+    // single `auto` version inside the same FIFO slot (best-effort, after the append).
+    await waitFor(
+      () => server.handle.registry.mutationQueueDepth(DOC) === 0,
+      "B's reconnect slot is idle",
+    );
     const afterMerge = await rowCounts(server, DOC);
     assert.deepEqual(
       afterMerge,
       {
-        versions: beforeRestore.versions + 2,
+        versions: beforeRestore.versions + 3,
         updates: beforeRestore.updates + 2,
         operations: beforeRestore.operations + 1,
       },
-      "B's reconnect adds exactly one update row and no version/operation rows",
+      "B's reconnect adds one update row and one D-V2 auto version, never a restore row",
     );
 
     // ---- Replaying the same operation id must not apply the restore a second time ----

@@ -254,6 +254,9 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     authz: socketAuthz,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.authorizeJoin === undefined ? {} : { authorizeJoin: options.authorizeJoin }),
+    // D-V2: the auto-version interval. Forwarded so a test advances the clock instead of
+    // sleeping ten minutes; absent in every pre-version suite, where `Date.now` applies.
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
 
   const appOptions = {

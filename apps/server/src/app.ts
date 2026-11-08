@@ -694,7 +694,28 @@ function readPathParameter(params: unknown, name: string): string {
 }
 
 /**
- * Mount the two P0-1 version routes.
+ * Parse the `?baseRevision=` query of the diff preview.
+ *
+ * The value must be a **non-negative safe integer written in base 10** and nothing else. That
+ * rejects `''`, `-1`, `1.5`, `1e3`, ` 1`, `+1` and a repeated `?baseRevision=1&baseRevision=2`
+ * (Express hands that to the handler as an array), all as `400 invalid_request` — a preview of
+ * "whatever the server could coerce" would compare against a revision the client never held.
+ *
+ * This runs **after** authorization, like the restore body, so a caller without membership
+ * cannot use the input validation to learn that the endpoint exists.
+ */
+function parseBaseRevisionQuery(query: unknown): number | null {
+  if (typeof query !== 'object' || query === null) return null;
+  const raw = (query as Record<string, unknown>)['baseRevision'];
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) return null;
+  return value;
+}
+
+/**
+ * Mount the three P0-1 version routes: list, diff preview and restore.
  *
  * ## Order, and why
  *
@@ -704,11 +725,12 @@ function readPathParameter(params: unknown, name: string): string {
  * the server allocate a parse tree, and a caller without membership always leaves through the
  * same `404` (D-V1 non-disclosure) regardless of what it sent. Ownership is asked for with
  * **`canManageMembers`**: V1 restores are Owner-only, and using the frozen capability table
- * rather than an `if (role === 'owner')` keeps the one rule table in charge.
+ * rather than an `if (role === 'owner')` keeps the one rule table in charge. The list and the
+ * diff preview need `canRead` only.
  *
- * That entry check is not the whole decision (G1): the route also hands the version service a
- * `recheckAuthorization` closure, which is awaited inside the document's FIFO slot. A request
- * that waited in the queue therefore cannot commit on the permission it had on arrival.
+ * That entry check is not the whole decision (G1): the restore route also hands the version
+ * service a `recheckAuthorization` closure, which is awaited inside the document's FIFO slot. A
+ * request that waited in the queue therefore cannot commit on the permission it had on arrival.
  *
  * ## Responses
  *
@@ -888,6 +910,107 @@ function mountVersionRoutes(
     const currentRevision = await versions.contentRevision(documentId);
     res.status(200).json({ versions: list, currentRevision });
   });
+
+  /**
+   * `GET /api/documents/:id/versions/:versionId/diff?baseRevision=<n>`
+   *
+   * ## Order, and why
+   *
+   * `identity (401) → authorization (404/403) → query (400) → preview (200/409/404/500)`
+   *
+   * `canRead` — not Owner-only: a viewer can already list versions and must be able to look at
+   * one. The non-disclosure branches are the same `not_found` the list route uses, so no
+   * membership and an unknown document are indistinguishable (§17.4).
+   *
+   * The response carries **text only**: the version's decoded body, the live body, the rendered
+   * segments and their counts. `yjs_state` never leaves the store, and no other user's data is
+   * part of the answer.
+   *
+   * `baseRevision` must be the current **content revision** (D-RC1). A mismatch is
+   * `409 { error: 'stale_revision', currentRevision }`; the body includes no text, so a client
+   * cannot mistake a stale preview for the current document.
+   */
+  app.get(
+    '/api/documents/:id/versions/:versionId/diff',
+    async (req: Request, res: Response) => {
+      const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+      if (user === null) {
+        res.status(401).json(RESPONSE_BODIES.sessionRequired);
+        return;
+      }
+      bindRequestUser(res, user.userId);
+
+      const documentId = readPathParameter(req.params, 'id');
+      const versionId = readPathParameter(req.params, 'versionId');
+      bindRequestDocument(res, documentId);
+
+      const decision = await authz.authorizeDocument(documentId, user.userId, 'canRead');
+      switch (decision.kind) {
+        case 'unauthenticated':
+          res.status(401).json(RESPONSE_BODIES.sessionRequired);
+          return;
+        case 'not_found':
+          res.status(404).json(RESPONSE_BODIES.notFound);
+          return;
+        case 'forbidden':
+          res.status(403).json(RESPONSE_BODIES.forbidden);
+          return;
+        case 'granted':
+          break;
+        default: {
+          const never: never = decision;
+          throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+        }
+      }
+
+      const baseRevision = parseBaseRevisionQuery(req.query);
+      if (baseRevision === null) {
+        res.status(400).json(RESPONSE_BODIES.invalidRequest);
+        return;
+      }
+
+      const result = await versions.previewVersionDiff({
+        documentId,
+        versionId,
+        baseRevision,
+      });
+
+      if (result.ok) {
+        res.status(200).json({
+          versionId: result.versionId,
+          baseRevision: result.baseRevision,
+          currentRevision: result.currentRevision,
+          targetText: result.targetText,
+          currentText: result.currentText,
+          diff: result.diff,
+          stats: result.stats,
+        });
+        return;
+      }
+
+      switch (result.reason) {
+        case 'stale_revision':
+          res
+            .status(409)
+            .json({ error: 'stale_revision', currentRevision: result.currentRevision });
+          return;
+        case 'not_found':
+          // The selected version does not belong to this document (or does not exist). Same body
+          // as "not yours", so a caller cannot probe another document's version ids.
+          res.status(404).json(RESPONSE_BODIES.notFound);
+          return;
+        case 'failed':
+          // Read-only endpoint: the room is still healthy and nothing was rolled back. This is
+          // the generic 500 body, not `restore_failed` (there was no restore to retry).
+          res.status(500).json(RESPONSE_BODIES.internalError);
+          return;
+        default: {
+          const never: never = result;
+          throw new Error(`unhandled version diff result: ${JSON.stringify(never)}`);
+        }
+      }
+    },
+  );
 }
 
 /** The validated creation request. `title` is already trimmed. */

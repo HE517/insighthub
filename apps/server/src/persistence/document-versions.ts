@@ -22,11 +22,11 @@
  * not the log position. This is the number a client compares in `baseRevision` (D-RC1), so a
  * join's empty update — which advances the log but not the body — cannot invalidate a preview.
  *
- * ## Kinds and retention (D-V2, defined here, scheduler not in this batch)
+ * ## Kinds and retention (D-V2)
  *
  * | kind | written by | retention |
  * | --- | --- | --- |
- * | `auto` | the 10-minute scheduler (D-V2, **not implemented in this batch**) | 30 days / 200 rows |
+ * | `auto` | the D-V2 capture in the document's FIFO slot: the first body change, then at most once per 10 minutes (`apps/server/src/versions/auto-version.ts`) | 30 days / 200 rows |
  * | `manual` | an explicit "save version" action (future) | 30 days / 200 rows |
  * | `pre-restore` | a restore, captured **before** it applies | **never auto-pruned** |
  * | `restored` | a restore, the new state after it applies | 30 days / 200 rows |
@@ -35,11 +35,14 @@
  * a `pre-restore` row is the only way back to the content a restore replaced, so pruning it
  * would delete the recovery entry point the product promises (`P0-RESTORE-DECISIONS.md` §1).
  *
- * **D-V2 (auto versions):** V1's rule is "an `auto` version at most every **10 minutes**, and
- * only when the body changed". The `kind = 'auto'` value and the capture seam exist; the
- * scheduler does **not** exist in this batch (P0-1 scope is the restore path + schema). When it
- * is added it must capture through {@link DocumentVersionStore.captureDocumentVersion}, after
- * comparing `content_revision`, so an idle document produces no rows.
+ * **D-V2 (auto versions):** the policy lives in `versions/auto-version.ts` and is called by the
+ * registry after a **committed** content-changing client update: the first change to a document
+ * with no `auto` row is captured immediately, later ones only when the newest `auto` row is at
+ * least 10 minutes old. The capture is best-effort — it runs after the append and after the
+ * broadcast, and a failure is logged rather than allowed to fail the room or roll back the edit.
+ * An idle document, an empty update and a repeated body produce no row because `contentChanged`
+ * is false in each case. `captureDocumentVersion` reads `document_meta.content_revision` inside
+ * its transaction, so the captured `sequence` is the same number `baseRevision` compares.
  */
 
 /** The frozen version-kind vocabulary (C2). */
@@ -93,10 +96,11 @@ export interface DocumentVersionStore {
   /**
    * Capture the current state as a new version row.
    *
-   * This is the seam D-V2's scheduler and a future "save version" action will use. It is
-   * **not** wired to a scheduler in this batch (`docs/DECISIONS.md` D-090 §5); restore is the
-   * only production writer today, and it writes its rows through `appendRestore` instead so
-   * the two versions and the log row commit together.
+   * This is the seam D-V2's auto capture (`rooms/registry.ts`, policy in
+   * `versions/auto-version.ts`) and a future "save version" action use. Restore writes its rows
+   * through `appendRestore` instead, so the two versions and the log row commit together; the
+   * auto capture is deliberately a separate transaction *after* the edit's append has committed,
+   * which is what makes it best-effort rather than part of the edit's durability.
    */
   captureDocumentVersion(input: CaptureDocumentVersionInput): Promise<DocumentVersionSummary>;
 
