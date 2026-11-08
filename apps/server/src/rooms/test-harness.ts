@@ -317,6 +317,8 @@ export class TestClient {
   /** Resolvers waiting for a frame that has not arrived yet. */
   readonly #waiters = new Set<() => void>();
   #closed = false;
+  /** Set by the `close` event; `null` until the socket has closed. */
+  #closeInfo: { readonly code: number; readonly reason: string } | null = null;
 
   private constructor(socket: WebSocket) {
     this.socket = socket;
@@ -335,8 +337,9 @@ export class TestClient {
       for (const waiter of [...this.#waiters]) waiter();
     });
 
-    socket.on('close', () => {
+    socket.on('close', (code: number, reason: Buffer) => {
       this.#closed = true;
+      this.#closeInfo = { code, reason: reason.toString() };
       for (const waiter of [...this.#waiters]) waiter();
     });
   }
@@ -433,6 +436,27 @@ export class TestClient {
     return this.#closed;
   }
 
+  /**
+   * The WebSocket close code, once the socket has closed (`null` before that).
+   *
+   * "It closed" is not an assertion: a policy close (1008), an internal error (1011) and a
+   * transport drop (1006) are all "closed" to a test that only waits for the event. The code
+   * and reason are recorded here so a test can assert **why** the server closed (R-2).
+   */
+  get closeCode(): number | null {
+    return this.#closeInfo?.code ?? null;
+  }
+
+  /** The WebSocket close reason, once the socket has closed (`null` before that). */
+  get closeReason(): string | null {
+    return this.#closeInfo?.reason ?? null;
+  }
+
+  /** The recorded close code/reason pair, or `null` while the socket is still open. */
+  get closeInfo(): { readonly code: number; readonly reason: string } | null {
+    return this.#closeInfo;
+  }
+
   /** Text messages received so far, in order. */
   textMessages(): WsServerMessage[] {
     return this.frames.flatMap((frame) => (frame.kind === 'text' ? [frame.message] : []));
@@ -517,9 +541,17 @@ export class TestClient {
     return frame.message as Extract<WsServerMessage, { type: 'error' }>;
   }
 
-  /** Wait until the socket has closed. */
-  async waitForClose(timeoutMs = 5000): Promise<void> {
-    if (this.#closed) return;
+  /**
+   * Wait until the socket has closed and return the close code/reason.
+   *
+   * The close event is recorded in {@link closeInfo}, so this is safe to await after the close
+   * already landed: a late waiter gets the real code instead of racing the event. A test that
+   * only needs "it closed" can still call it as a barrier and ignore the value.
+   */
+  async waitForClose(
+    timeoutMs = 5000,
+  ): Promise<{ readonly code: number; readonly reason: string }> {
+    if (this.#closeInfo !== null) return this.#closeInfo;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('timed out waiting for close')), timeoutMs);
       this.socket.once('close', () => {
@@ -527,6 +559,9 @@ export class TestClient {
         resolve();
       });
     });
+    const info = this.#closeInfo;
+    if (info === null) throw new Error('the close event did not record a code');
+    return info;
   }
 
   /** Give the server a chance to send anything else, then return what it sent. */
