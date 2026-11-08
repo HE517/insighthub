@@ -3790,3 +3790,6 @@ PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描�
    `document_meta.content_revision`；迁移 2→3 单事务、失败回滚、幂等。
 8. **一次成功写 4 行**（pre-restore 版本、restore update、restored 版本、operation）；重试 0 行。
 9. 命名区分版本恢复（`version restore`）与备份恢复（`backup restore`）。
+10. **G1 执行时复核（本批修订）**：保留 HTTP 入口鉴权，并在文档 FIFO 内、apply 恢复前再次确认当前 Owner
+    （`canManageMembers`）；撤权后返回既有非泄露 404/403，**0 新行、无恢复广播**。排队中的 restore 不得
+    仅凭入队时的权限提交。

@@ -304,11 +304,37 @@ describe('P0-1 schema 3 — a failed migration rolls the whole upgrade back', ()
       db.close();
     }
   });
-});
 
-/* ---------------------------------------------------------------- *
- * Version guard
- * ---------------------------------------------------------------- */
+  it('attributes a v3 DDL failure to RESTORE_SCHEMA_MIGRATION_FAILED (R-1)', async () => {
+    const dataPath = join(root, 'rollback-ddl');
+    const db = await openRaw(dataPath);
+    try {
+      createV2Fixture(db);
+      seedV2Document(db);
+      // A pre-existing object with the target table's name makes CREATE TABLE fail before the
+      // version validation. Before R-1 this failure surfaced as MEMBERSHIP_MIGRATION_FAILED.
+      db.exec('CREATE VIEW document_version AS SELECT document_id AS id FROM document');
+
+      await assert.rejects(
+        openDocumentStore(dataPath),
+        (error: unknown) => {
+          assert.ok(isSqliteCapabilityError(error));
+          if (!isSqliteCapabilityError(error)) return false;
+          assert.equal(error.code, 'RESTORE_SCHEMA_MIGRATION_FAILED');
+          return true;
+        },
+      );
+
+      assert.equal(readUserVersion(db), 2, 'the version marker must not advance');
+      const view = db
+        .prepare("SELECT type FROM sqlite_master WHERE name = 'document_version'")
+        .get();
+      assert.equal(view?.['type'], 'view', 'the pre-existing view must survive the rollback');
+    } finally {
+      db.close();
+    }
+  });
+});
 
 describe('P0-1 schema 3 — DATA_SCHEMA_TOO_NEW semantics are preserved', () => {
   it('accepts 3 as current and refuses 4', async () => {

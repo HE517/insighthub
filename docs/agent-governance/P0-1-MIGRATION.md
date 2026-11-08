@@ -28,7 +28,7 @@ BEGIN IMMEDIATE
 COMMIT
 ```
 
-- 失败：整体回滚，`user_version` 保持 2，无半表；启动拒绝。**已知 R-1**：v3 建表/建索引的 DDL 失败发生在 `phase='restore'` 之前，当前可能报 `MEMBERSHIP_MIGRATION_FAILED` 而不是 `RESTORE_SCHEMA_MIGRATION_FAILED`；数据回滚不受影响，但运维诊断会指向错误的迁移。
+- 失败：整体回滚，`user_version` 保持 2，无半表；启动拒绝。**R-1 已修**：v3 建表/建索引已移入 `migrateToSchema3`（`phase='restore'`），DDL 失败报 `RESTORE_SCHEMA_MIGRATION_FAILED`，并有“同名 view 注入”测试覆盖。
 - 幂等：已为 3 → `unchanged`；`> 3` → `DATA_SCHEMA_TOO_NEW`（旧二进制不写新库）。
 - `content_revision` 初值取 `MAX(MAX(seq), snapshot_seq)`，与运行时 `#ensureMeta` 同口径。
 
@@ -55,7 +55,7 @@ COMMIT
 
 | ID | 口径 |
 | --- | --- |
-| G1 在途撤权 | request-time authz；已入队 restore 在撤权后仍可能提交。V1 接受，记入限制；若要求 FIFO 内复核需改契约。 |
+| G1 在途撤权 | **已改为执行时复核**：HTTP 入口鉴权后，在文档 FIFO 内、apply 前再次确认当前 Owner；撤销后返回 404/403，0 新行、无广播（D-090 修订）。 |
 | G2 401 body | P0-1 路由固定 `session_required`（C4）；客户端按路由映射，不统一改。 |
 | G3 服务层信任 | HTTP 是授权边界；`RoomRegistry` 不重复鉴权。保持，写入架构说明。 |
 | G4 viewer 见 authorId | C4 冻结字段；接受。 |
