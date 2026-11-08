@@ -756,6 +756,17 @@ An upgrade request on any other path is rejected.
 - No-op restore (target text already current): `200`, the same four rows (the update row is 0 bytes), `sequence` does not advance, and nothing is broadcast.
 - G1: authorization is re-checked **inside the document FIFO slot, before apply**. A revoked Owner gets the existing non-disclosure 403/404, writes 0 rows and causes no restore broadcast; a queued restore never commits on entry-time permission alone.
 
+### 12.2 Version diff preview (P0-1)
+
+`GET /api/documents/:id/versions/:versionId/diff?baseRevision=<integer>`
+
+- `canRead`; unknown document / no membership / version from another document / unknown version → `404 not_found`; missing/invalid/duplicated query → `400 invalid_request` (after authz).
+- `baseRevision` must equal the current content revision; otherwise `409 {"error":"stale_revision","currentRevision"}` and **no text** is returned. The client re-fetches and previews again.
+- 200: `{ versionId, baseRevision, currentRevision, targetText, currentText, diff, stats }`, where `diff` segments are `{type:'equal'|'delete'|'insert', text}` and the direction is **current → target** (delete = restore would remove; insert = restore would add). `stats` counts code points. Never returns `yjs_state`.
+- Shared Zod/type: `packages/shared/src/version-diff.ts` (`VersionDiff`, `versionDiffSchema`); the wire shape is additive and `SHARED_CONTRACT_VERSION` stays 8.
+
+**Automatic versions (D-V2).** A content-changing committed edit creates `kind='auto'` when the document has no auto version yet or the latest auto version is at least 10 minutes old. Empty/duplicate updates do not capture. Capture is best-effort after the update commits: a failure logs and never rolls back the edit. The list may lag one FIFO task after an edit; opening the history panel must re-fetch.
+
 ## 13. Change process
 
 1. Propose the addition here first (or in the PR description for solo work).

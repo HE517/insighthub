@@ -3793,3 +3793,8 @@ PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描�
 10. **G1 执行时复核（本批修订）**：保留 HTTP 入口鉴权，并在文档 FIFO 内、apply 恢复前再次确认当前 Owner
     （`canManageMembers`）；撤权后返回既有非泄露 404/403，**0 新行、无恢复广播**。排队中的 restore 不得
     仅凭入队时的权限提交。
+11. **版本差异预览（P0-1 前置）**：`GET /api/documents/:id/versions/:versionId/diff?baseRevision=`，`canRead`；
+    revision 不一致 409，200 只返回文本/段/统计（无 `yjs_state`）。共享类型
+    `packages/shared/src/version-diff.ts` 为**加法**，`SHARED_CONTRACT_VERSION` 保持 8。
+    D-V2：正文变化的首个提交立即生成 `auto` 版本，之后距最近 auto ≥10 分钟才生成；空/重复更新不生成；
+    捕获失败只记日志、不回滚正文。
