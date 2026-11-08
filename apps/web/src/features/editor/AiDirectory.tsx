@@ -176,20 +176,26 @@ export function AiDirectory({ activeDocumentId, onSelectDocument, refreshKey = '
     void flowRef.current?.run();
   }, []);
 
-  // Fetch on open (this component is mounted only while the panel is open), and abort on close /
-  // document switch / workspace remount. The request id is bumped here too, so a resolution after
-  // unmount is ignored even if the signal has already fired (R9).
+  // Fetch on open and whenever the session becomes ready (`refreshKey`). This effect owns the
+  // **list** request only: a refresh must abort the previous list request, never a creation.
   useEffect(() => {
     load();
     return () => {
       requestRef.current += 1;
       abortRef.current?.abort();
       abortRef.current = null;
-      // A creation in flight belongs to this mount: cancel it rather than let it switch a
-      // workspace the user has already left. The flow reports an aborted run as `ignored`.
-      flowRef.current?.abort();
     };
   }, [load, refreshKey]);
+
+  // A creation belongs to the mounted directory, not to one refresh: it is cancelled only when the
+  // component really goes away (document switch / workspace remount), so a same-document reconnect
+  // cannot abort a POST that is already in flight. A late answer after unmount stays `ignored`.
+  useEffect(
+    () => () => {
+      flowRef.current?.abort();
+    },
+    [],
+  );
 
   const select = useCallback(
     (documentId: string): void => {

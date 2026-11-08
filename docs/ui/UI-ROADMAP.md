@@ -31,9 +31,36 @@
 - 内容：`document_version(id, document_id, sequence, title, author_id, created_at, yjs_state BLOB, kind)`；`kind = auto | manual | pre-restore`。
 - 保留期：手动版本永久（可删）；自动版本 30 天 / 每文档最多 200 个（取一）。
 - 权限：查看 = `canRead`；恢复 = `canEdit`（是否仅 Owner 见 D-V1）；删除版本 = `canManageMembers`。
-- 恢复语义：**先写一个 `pre-restore` 版本保存当前内容**，再用一条带 `origin='restore'` 的 Yjs transaction 把目标状态合入当前文档；恢复本身产生一个新版本。并发/离线客户端通过正常 CRDT 收敛，不强制踢线；恢复 action 不删除历史。
-- 与并发：恢复是“把旧状态作为新编辑合入”，不是回滚数据库；因此不会吞掉恢复期间其他人的编辑（需要冲突提示：恢复后 UI 显示“已从版本 X 恢复，当前含他人编辑”）。
-- 验收：版本列表分页；恢复前快照存在；恢复后 A/B/服务端收敛；离线客户端重连收敛；Undo 可撤销恢复；权限拒绝 404/403 一致。
+
+**恢复如何从历史正文变成新的 Yjs 编辑**（已做最小可重复实验，见下）：
+1. 读取版本的 `yjs_state`，在**临时 Y.Doc** 上还原出版本正文（用户看到的标题/正文预览也来自这里，不碰线上房间）。
+2. 以当前正文为基准，用公共前后缀裁剪出“删除区间 + 插入文本”，在临时副本上应用，得到一条 **relative update**（`encodeStateAsUpdate(staging, stateVector(current))`）。
+3. **persist-first**：先在一个 SQLite 事务里写入 `pre-restore` 版本（保存恢复前正文与 state），再把这条 update 追加到文档日志；两步都成功后才应用到线上 room 并广播。
+4. 恢复自身产生一个新版本；**不删除历史**。
+
+**失败边界（必须按这个顺序）**：
+
+| 失败点 | 结果 | 重试 |
+| --- | --- | --- |
+| 写 `pre-restore` 失败 | 中止；线上/日志均未变 | 可重试；不产生半条记录 |
+| 追加 restore update 失败 | 中止；线上未变；`pre-restore` 已存在（无害） | 重试追加同一条 update；幂等 |
+| 追加成功、apply/广播失败 | 已持久化；房间重启/客户端 SyncStep 会重放 | 不需要重新生成；重放一次 |
+| 进程在两步之间崩溃 | 要么只有 `pre-restore`，要么两步都有 | 以日志为准，重试或放弃 |
+
+**并发与离线**：
+- 恢复是“把旧正文作为新编辑合入”，**不是数据库回滚**；确认后若他人已在区间外写入，这些编辑按 CRDT 保留。
+- 确认对话框必须展示“当前版本与目标版本的差异”，并在恢复后提示“已恢复，期间 N 条并发编辑保留”（N 由确认时的 revision 与恢复时 revision 计算）。
+- 离线客户端重连时通过 state-vector 补差拿到 restore update；其离线编辑与 restore 合并；若其编辑落在被替换区间内，由 CRDT 决定位置，并在 UI 标 stale/提示，而不是静默丢字。
+- Undo：restore 是一条 `origin='restore'` 的 transaction，UndoManager 跟踪它；Undo 只撤销 restore 自己的操作，保留期间并发编辑；Redo 可重放。
+
+**最小可重复实验（已运行，非 P0 实现）**：`tests/experiments/version-restore.mjs`，15 项断言，覆盖：
+- 目标正文正确（restore 后文本 == 历史版本）；
+- Undo 回到 pre-restore、Redo 再应用；
+- 并发追加在 restore 后仍保留，两端收敛；
+- 离线编辑 + restore 重连后收敛且 restore 只应用一次；
+- persist-first 下追加失败时线上正文不变，重试后只应用一次。
+
+> 实验只使用 `yjs`，不建表、不改 API、不改 UI；P0 的 SQLite 迁移、版本 API、恢复 UI 均**未开始**（`NOT IMPLEMENTED`）。
 
 **决策点 D-V1**：谁可恢复——Owner only（更安全）还是 Editor 也可（更顺手）？建议 Owner + Editor，删除版本仅 Owner。
 **决策点 D-V2**：自动版本粒度——按时间（10min）还是按提交数（50）？建议时间，避免高频小编辑产生噪声。
@@ -129,7 +156,7 @@
 
 ### 5.1 评论
 - 锚定：`RelativePosition`（与 AI 锚定同源），区间 + 原文校验；文档变化后 comment 标 stale 而不是错位；
-- 权限：`canComment`（Viewer 可评论）；删除评论=作者或 Owner；
+- 权限：以冻结矩阵为准——`canComment` 要求 **commenter 及以上**；`viewer` **不能评论**（`packages/shared/src/permission.ts:36-44`）。删除评论 = 作者或 Owner；
 - 展示：右栏/行内气泡；不改正文、不进 Y.Text。
 - 验收：并发编辑后锚点不漂移；越权 404；删除后 UI 更新。
 
