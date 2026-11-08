@@ -487,6 +487,35 @@ function assertMembershipInvariants(db: Db, dataPath: string): void {
  * behaves like the last one before it.
  */
 function migrateToSchema3(db: Db): void {
+  // The v3 DDL lives here, in the `restore` phase: a failure of these CREATE statements must be
+  // reported as RESTORE_SCHEMA_MIGRATION_FAILED, not as a membership-migration failure (A7 R-1).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${DOCUMENT_VERSION_TABLE} (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      yjs_state BLOB NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('auto', 'manual', 'pre-restore', 'restored'))
+    )
+  `);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS ${DOCUMENT_VERSION_DOC_SEQ_INDEX} ON ${DOCUMENT_VERSION_TABLE}(document_id, sequence DESC)`,
+  );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${RESTORE_OPERATION_TABLE} (
+      document_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      version_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (document_id, operation_id)
+    )
+  `);
+
   if (!columnNames(db, 'document_meta').has(DOCUMENT_META_CONTENT_REVISION_COLUMN)) {
     db.exec(
       `ALTER TABLE document_meta ADD COLUMN ${DOCUMENT_META_CONTENT_REVISION_COLUMN} INTEGER NOT NULL DEFAULT 0`,
@@ -609,41 +638,6 @@ export function createSchemaObjects(db: Db): void {
   db.exec(
     `CREATE INDEX IF NOT EXISTS ${AUTHZ_MEMBERSHIP_USER_INDEX} ON ${AUTHZ_MEMBERSHIP_TABLE}(user_id)`,
   );
-
-  // P0-1 schema 3: the version history. `yjs_state` is a self-contained encoded state (never a
-  // "replay from this sequence" pointer), which is what lets a `pre-restore` row outlive log
-  // compaction. `sequence` is the content revision at capture time (D-RC1).
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ${DOCUMENT_VERSION_TABLE} (
-      id TEXT PRIMARY KEY,
-      document_id TEXT NOT NULL,
-      sequence INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      author_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      yjs_state BLOB NOT NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('auto', 'manual', 'pre-restore', 'restored'))
-    )
-  `);
-  // `GET /api/documents/:id/versions` reads one document newest-first.
-  db.exec(
-    `CREATE INDEX IF NOT EXISTS ${DOCUMENT_VERSION_DOC_SEQ_INDEX} ON ${DOCUMENT_VERSION_TABLE}(document_id, sequence DESC)`,
-  );
-  // D-OP1: one row per restore attempt that committed. The primary key is the idempotency
-  // guarantee — `(document_id, operation_id)` is what makes a retry a lookup rather than a
-  // second restore, and scoping it by document keeps one document's operation ids from ever
-  // being answerable through another.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ${RESTORE_OPERATION_TABLE} (
-      document_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      request_hash TEXT NOT NULL,
-      version_id TEXT NOT NULL,
-      sequence INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (document_id, operation_id)
-    )
-  `);
 }
 
 /** Table names present in the main database, excluding SQLite's own `sqlite_*` tables. */
