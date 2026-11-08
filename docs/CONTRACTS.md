@@ -753,6 +753,7 @@ An upgrade request on any other path is rejected.
 - A successful restore writes **4 rows** in one SQLite transaction: `pre-restore` version, restore update, `restored` version, `restore_operation`. `versionId` in the response is the **restored** version, and `sequence` is its content revision.
 - Restore runs inside the document's FIFO slot and keeps `apply → persist → broadcast`; a persist failure follows the existing unhealthy/1011 path (no broadcast).
 - Undo: restore is a server-authored remote update; clients must not track it in `UNDO_TRACKED_ORIGINS` (D-UD1).
+- No-op restore (target text already current): `200`, the same four rows (the update row is 0 bytes), `sequence` does not advance, and nothing is broadcast.
 - G1: authorization is re-checked **inside the document FIFO slot, before apply**. A revoked Owner gets the existing non-disclosure 403/404, writes 0 rows and causes no restore broadcast; a queued restore never commits on entry-time permission alone.
 
 ## 13. Change process
