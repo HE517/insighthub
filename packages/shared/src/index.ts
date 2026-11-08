@@ -17,6 +17,7 @@ export * from './awareness-state.js';
 export * from './binary-frame.js';
 export * from './protocol.js';
 export * from './collab-session.js';
+export * from './version-diff.js';
 
 /**
  * Version of the shared contract surface as a whole.
