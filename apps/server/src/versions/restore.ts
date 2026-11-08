@@ -77,6 +77,9 @@ export interface DocumentVersionService {
 
   /** Versions of one document, newest first. `[]` for an unknown/never-versioned document. */
   listVersions(documentId: string): Promise<readonly DocumentVersionSummary[]>;
+
+  /** The document's current **content revision** (the value `baseRevision` must match). */
+  contentRevision(documentId: string): Promise<number>;
 }
 
 /**

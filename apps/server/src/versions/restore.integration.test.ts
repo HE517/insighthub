@@ -612,10 +612,16 @@ describe('T3/T4 — operation id idempotency and the four-row accounting', () =>
         reopenedCookie,
       );
       assert.equal(versionsResponse.status, 200);
-      const versions = versionsResponse.body['versions'] as { kind: string }[];
+      const versions = versionsResponse.body['versions'] as { kind: string; sequence: number }[];
       assert.deepEqual(
         versions.map((version) => version.kind),
         ['restored', 'pre-restore', 'manual'],
+      );
+      // The list carries the content revision the next preview must use as `baseRevision`.
+      assert.equal(
+        versionsResponse.body['currentRevision'],
+        versions[0]?.sequence,
+        'currentRevision must equal the newest version content revision',
       );
     } finally {
       await first.close();

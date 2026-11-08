@@ -841,7 +841,10 @@ function mountVersionRoutes(
     }
 
     const list = await versions.listVersions(documentId);
-    res.status(200).json({ versions: list });
+    // `currentRevision` is the same content revision a restore body must send as `baseRevision`;
+    // without it the UI cannot build a request that passes the 409 check (C4, D-RC1).
+    const currentRevision = await versions.contentRevision(documentId);
+    res.status(200).json({ versions: list, currentRevision });
   });
 }
 

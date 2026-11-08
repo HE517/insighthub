@@ -744,6 +744,13 @@ export class RoomRegistry implements DocumentVersionService {
     return await store.listDocumentVersions(documentId);
   }
 
+  /** The content revision a preview must show so the client can send a valid `baseRevision`. */
+  async contentRevision(documentId: string): Promise<number> {
+    const store = this.#store;
+    if (store === undefined || !isDocumentVersionStore(store)) return 0;
+    return await store.documentContentRevision(documentId);
+  }
+
   /**
    * The body of one restore, run inside the document's FIFO slot.
    *
