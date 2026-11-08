@@ -407,7 +407,19 @@ export interface DocumentStore {
   append(documentId: string, update: Uint8Array): Promise<number>;
   /** Replace snapshot + truncate the consumed log, atomically. */
   compact(documentId: string, snapshot: Uint8Array, throughSequence: number): Promise<void>;
-  /** Durably remove a document. Semantics frozen even though M2 exposes no UI for it. */
+  /**
+   * P0-1: restore one version. One transaction writes the pre-restore version, the restore
+   * update, the restored version and the `restore_operation` row (4 rows); an op-id replay
+   * writes 0 and returns the original result. The caller applies the update to the room before
+   * calling this (`apply → persist → broadcast`, D-090/D-RW1=A).
+   */
+  appendRestore(input: AppendRestoreInput): Promise<AppendRestoreOutcome>;
+  /** P0-1 idempotency lookup; returns the original `{versionId, sequence, requestHash}`. */
+  findRestoreOperation(
+    documentId: string,
+    operationId: string,
+  ): Promise<RestoreOperationRecord | null>;
+  /** Durably remove a document (and its versions/operations). Semantics frozen even though M2 exposes no UI for it. */
   delete(documentId: string): Promise<void>;
   /** Flush and release the backend. Idempotent; called on graceful shutdown. */
   close(): Promise<void>;
@@ -426,7 +438,7 @@ append a 2-byte empty update, because a client's `SyncStep2` goes through the sa
 `apply → persist → broadcast` path; recorded as an accepted deviation in D-055 §3 rather than
 special-cased on the persist hot path.) `delete` is frozen now so
 no caller has to guess later whether it is a soft flag or a real removal — it is a real
-removal, and callers must treat the document as gone.
+removal, and callers must treat the document as gone. Since P0-1 it also removes the document's `document_version` and `restore_operation` rows, so a re-created document id cannot expose old versions or replay an old operation.
 
 ### 7.4 Durable representation
 
@@ -577,7 +589,7 @@ the store semantics are frozen so eviction can never be mistaken for deletion.
 | `INSIGHTHUB_DATA_PATH` | `./.insighthub-data` (dev) | directory holding the durable store; **absolute path required in production** (D-082) |
 | `DATA_MIN_FREE_BYTES` | `104857600` (100 MiB) | free-space floor checked at startup; below it the server refuses to start (`DATA_DISK_LOW`); `0` disables the check |
 
-The store is **schema-versioned** (`PRAGMA user_version`, currently **1**): a new directory is
+The store is **schema-versioned** (`PRAGMA user_version`, currently **3**): a new directory is
 created at version 1, a version-0 directory is migrated in one transaction (its data is preserved,
 and missing tables are created with `IF NOT EXISTS`), and a *newer* version is refused
 (`DATA_SCHEMA_TOO_NEW`) rather than opened on a best-effort basis. On open the store runs
