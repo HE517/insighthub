@@ -388,6 +388,77 @@ describe('D-V2 auto-version capture on the real path', () => {
     }
   });
 
+  it('keeps the interval across room eviction by reading the durable auto rows again', async () => {
+    let harness: Harness | null = null;
+    let first: TestClient | null = null;
+    let second: TestClient | null = null;
+    try {
+      harness = await boot();
+      const { server, store, clock } = harness;
+
+      first = await TestClient.connect(server.url, { cookie: await session(server) });
+      await first.joinAndWait(DOC);
+      const doc = new Y.Doc();
+      try {
+        doc.getText('content').insert(0, 'v1');
+        first.sendBinary(syncUpdateFrame(doc));
+        await waitFor(async () => (await updateCount(store, DOC)) === 1, 'the first edit persists');
+        await waitForSlotIdle(server, DOC);
+        assert.equal((await autoVersions(store, DOC)).length, 1);
+      } finally {
+        doc.destroy();
+      }
+
+      // Last participant leaves → the room (and its interval cache) is evicted.
+      first.socket.close();
+      first = null;
+      await waitFor(() => !server.handle.registry.hasRoom(DOC), 'the room is evicted');
+
+      // Rejoin inside the interval: the first edit of the new room must not duplicate the auto
+      // version whose timestamp it re-reads from SQLite.
+      second = await TestClient.connect(server.url, { cookie: await session(server) });
+      await second.joinAndWait(DOC);
+      clock.now = T0 + 8 * 60_000;
+      const reconnected = new Y.Doc();
+      try {
+        const stored = await store.load(DOC);
+        assert.notEqual(stored, null);
+        if (stored === null) return;
+        applyStoredDocument(stored, reconnected);
+        const before = Y.encodeStateVector(reconnected);
+        reconnected.getText('content').insert(reconnected.getText('content').length, ' v2');
+        second.sendBinary(syncUpdateFrameFromBytes(Y.encodeStateAsUpdate(reconnected, before)));
+        await waitFor(
+          async () => (await updateCount(store, DOC)) === 2,
+          'the post-rejoin edit persists',
+        );
+        await waitForSlotIdle(server, DOC);
+        assert.equal(
+          (await autoVersions(store, DOC)).length,
+          1,
+          'the durable timestamp survives eviction: still inside the interval',
+        );
+
+        // Once the interval has elapsed, the next edit captures again.
+        clock.now = T0 + AUTO_VERSION_MIN_INTERVAL_MS;
+        const beforeThird = Y.encodeStateVector(reconnected);
+        reconnected.getText('content').insert(reconnected.getText('content').length, '!');
+        second.sendBinary(
+          syncUpdateFrameFromBytes(Y.encodeStateAsUpdate(reconnected, beforeThird)),
+        );
+        await waitFor(async () => (await updateCount(store, DOC)) === 3, 'the third edit persists');
+        await waitForSlotIdle(server, DOC);
+        assert.equal((await autoVersions(store, DOC)).length, 2);
+      } finally {
+        reconnected.destroy();
+      }
+    } finally {
+      first?.socket.close();
+      second?.socket.close();
+      await harness?.close();
+    }
+  });
+
   it('keeps the edit and retries on the next edit when the capture fails', async () => {
     // A wrapper that fails the first `captureDocumentVersion` and otherwise delegates.
     class FailingCaptureStore extends WrappedStore {
