@@ -3770,3 +3770,23 @@ PerformanceObserver、sendBeacon telemetry、search；这些 claim 从项目描�
 - 不提供 preview 内的编辑、评论、搜索或导出。
 
 **后果。** Preview 作为**新功能**进入 V1；D-086 §3 的“不含 preview”表述由本条取代，历史记录保留。
+---
+
+## D-090 · 2026-11-08 · accepted · P0-1 服务端版本恢复（Owner 裁决）
+
+**范围。** 服务端版本历史 + 恢复路径；不含 UI、B12、生产 Gate。契约见
+`docs/agent-governance/P0-1-CONTRACTS.md`。
+
+1. **D-RC1**：`baseRevision` 是**正文修订号**（`document_meta.content_revision`，join 的 empty update
+   不递增）；确认时在 per-document FIFO slot 内比较，不等返回 `409 stale_revision`，客户端重新预览。
+2. **D-RW1 = A**：restore 整体进入同一 FIFO slot，保持 `apply → persist → broadcast`；
+   不新增 persist-first 路径。
+3. **D-OP1**：独立 `restore_operation` 表，唯一键 `(document_id, operation_id)`；op-id lookup
+   **先于** revision 校验；同 op id + 同 request hash 返回原结果且 0 新行；不同 hash 返回 409。
+4. **D-V1**：首版**仅 Owner** 可恢复；Editor 403，无 membership 404 非泄露。
+5. **D-V2**：自动版本 10 分钟且正文有变化才产生；`pre-restore` 不受自动版本清理影响。
+6. **D-UD1**：恢复不进入客户端 Undo；通过 `pre-restore` 版本历史找回。
+7. **schema v3**：`document_version`（kind auto/manual/pre-restore/restored）、`restore_operation`、
+   `document_meta.content_revision`；迁移 2→3 单事务、失败回滚、幂等。
+8. **一次成功写 4 行**（pre-restore 版本、restore update、restored 版本、operation）；重试 0 行。
+9. 命名区分版本恢复（`version restore`）与备份恢复（`backup restore`）。

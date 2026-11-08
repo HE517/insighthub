@@ -196,10 +196,12 @@ const author = new Y.Doc();
 author.getText(KEY).insert(0, 'base');
 const authorUndo = new Y.UndoManager(author.getText(KEY), { trackedOrigins: new Set([ORIGIN]) });
 const other = cloneOf(author);
+// Installed BEFORE the restore arrives, so this proves the replica had a live UndoManager at
+// the moment it received a remote restore (A7 P3-4).
+const otherUndo = new Y.UndoManager(other.getText(KEY), { trackedOrigins: new Set([ORIGIN]) });
 restoreTo(author, 'restored');
 Y.applyUpdate(other, Y.encodeStateAsUpdate(author, Y.encodeStateVector(other)));
 check('other replica sees the restored text', textOf(other), 'restored');
-const otherUndo = new Y.UndoManager(other.getText(KEY), { trackedOrigins: new Set([ORIGIN]) });
 otherUndo.undo();
 check('a remote replica cannot undo the restore', textOf(other), 'restored');
 authorUndo.undo();
