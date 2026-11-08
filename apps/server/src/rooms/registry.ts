@@ -76,6 +76,16 @@ import {
 import { SerialTaskQueue } from '../persistence/serial-queue.js';
 import type { AppendRestoreOutcome, DocumentStore } from '../persistence/types.js';
 import {
+  AUTO_VERSION_SYSTEM_AUTHOR,
+  decideAutoVersionCapture,
+  latestAutoVersionCapturedAt,
+} from '../versions/auto-version.js';
+import {
+  buildVersionDiff,
+  type VersionDiffRequest,
+  type VersionDiffResult,
+} from '../versions/diff.js';
+import {
   computeRestoreUpdate,
   versionText,
   type DocumentVersionService,
@@ -180,16 +190,27 @@ interface RoomRuntime {
   /** Single-flight hydration promise shared by every concurrent joiner (D-043 point 3). */
   readonly barrier: Promise<HydrationOutcome>;
   /**
-   * Restores currently holding this room (P0-1, A7 P1-4).
+   * HTTP operations currently holding this room (P0-1, A7 P1-4): restore **and** diff preview.
    *
-   * A restore is an HTTP request whose work runs in the room's queue, not a socket, so the
-   * room's normal "last participant left → evict" rule can fire while a restore is still
-   * using the `Y.Doc`. Every restore increments this before enqueueing and decrements in a
-   * `finally`; eviction waits for zero.
+   * Both are HTTP requests whose work runs in the room's queue, not sockets, so the room's
+   * normal "last participant left → evict" rule can fire while the request is still using the
+   * `Y.Doc`. Every operation increments this before enqueueing and decrements in a `finally`;
+   * eviction waits for zero.
    */
   leaseCount: number;
-  /** True when an eviction was requested while a restore held the room. */
+  /** True when an eviction was requested while an HTTP operation held the room. */
   evictPending: boolean;
+  /**
+   * D-V2 capture cache: when the newest `auto` version was captured (`null` = none), or
+   * `undefined` while it has not been read from the store yet.
+   *
+   * The rule is a durable fact, so the first content change in a room reads the version list
+   * once; after that the interval is decided from memory. Without this, every keystroke's update
+   * task would query the version table on the editing hot path. The cache is room-scoped on
+   * purpose: eviction/rejoin re-reads the durable list, and a capture failure leaves the value
+   * `undefined` so the next edit retries the lookup instead of assuming "no auto version".
+   */
+  lastAutoCapturedAt: number | null | undefined;
 }
 
 export interface RoomRegistryOptions {
@@ -233,6 +254,15 @@ export interface RoomRegistryOptions {
    * wiring a transport without durable storage, and it says so in the log.
    */
   store?: DocumentStore;
+  /**
+   * The clock used by the **D-V2 auto-version** policy, in epoch milliseconds.
+   *
+   * Defaults to `Date.now`. Injected so a test can advance ten minutes instead of sleeping, and
+   * so the captured `createdAt` and the interval comparison read the same instant. It is *only*
+   * the auto-version clock: the log's own timestamps are the store's business, and restore never
+   * consults it.
+   */
+  now?: () => number;
 }
 
 export class RoomRegistry implements DocumentVersionService {
@@ -244,6 +274,8 @@ export class RoomRegistry implements DocumentVersionService {
   readonly #authz: AuthzService | undefined;
   readonly #store: DocumentStore | undefined;
   readonly #hydrator: DocumentHydrator | undefined;
+  /** D-V2: the injected clock for the auto-version interval (defaults to `Date.now`). */
+  readonly #now: () => number;
 
   constructor(options: RoomRegistryOptions = {}) {
     this.#logger = options.logger ?? defaultLogger;
@@ -251,6 +283,7 @@ export class RoomRegistry implements DocumentVersionService {
     this.#authz = options.authz;
     this.#store = options.store;
     this.#hydrator = options.store === undefined ? undefined : new DocumentHydrator(options.store);
+    this.#now = options.now ?? Date.now;
 
     if (this.#authz === undefined) {
       // Loud on purpose: a transport with no authorization turns every role into an editor.
@@ -734,7 +767,7 @@ export class RoomRegistry implements DocumentVersionService {
       this.#failRoomUnhealthy(room, describeStoreFailure(error));
       return { ok: false, reason: 'restore_failed' };
     } finally {
-      this.#releaseRestoreLease(room, runtime);
+      this.#releaseLease(room, runtime);
     }
   }
 
@@ -750,6 +783,113 @@ export class RoomRegistry implements DocumentVersionService {
     const store = this.#store;
     if (store === undefined || !isDocumentVersionStore(store)) return 0;
     return await store.documentContentRevision(documentId);
+  }
+
+  /**
+   * Preview one version against the live body (P0-1 pre-requisite 2).
+   *
+   * ## Why this takes a lease and enqueues, although it only reads
+   *
+   * The endpoint promises that `currentRevision` and `currentText` describe **one** state. A read
+   * straight from the store would let a concurrent `append` land between the revision query and
+   * the text load; a read straight from the room would observe an apply whose persist has not
+   * committed. Both windows are closed by doing the read in the document's FIFO slot, exactly as
+   * `restoreVersion` does:
+   *
+   * ```text
+   * await hydration barrier
+   *   → content revision (same store call restore compares against)
+   *   → compare with baseRevision          (mismatch → 409 stale_revision)
+   *   → read the version, scoped to this document (missing → 404 not_found)
+   *   → decode its body (code points) → diff against the live room text
+   * ```
+   *
+   * The lease keeps an empty room alive across the `await` (a preview is an HTTP request, not a
+   * participant), and release re-runs normal eviction, so an offline document's room is still
+   * disposable after the preview (T9's policy, not a second one).
+   *
+   * Nothing is written, applied or broadcast. A failure before the compare leaves the room as it
+   * was; a failure after it is just a read error, answered `internal_error`, and the room stays
+   * healthy because there is no memory/durable divergence to fail-stop for.
+   */
+  async previewVersionDiff(request: VersionDiffRequest): Promise<VersionDiffResult> {
+    const store = this.#store;
+    if (store === undefined || !isDocumentVersionStore(store)) {
+      // Same degradation `listVersions` already documents: a registry wired without durable
+      // versions can only answer "there is no such version". This is a library wiring mode; the
+      // HTTP route is only mounted when a version service exists.
+      return { ok: false, reason: 'not_found' };
+    }
+
+    const room = this.#getOrCreateRoom(request.documentId);
+    const runtime = this.#requireRuntime(room);
+    runtime.leaseCount += 1;
+    try {
+      return await runtime.queue.enqueue(() => this.#runPreviewDiff(room, runtime, store, request));
+    } catch (error) {
+      // A stopped queue/Unexpected throw. Read-only, so unlike restore there is nothing to
+      // discard and no reason to fail the room: report the failure and let clients keep editing.
+      this.#logger.warn('version diff could not run', {
+        documentId: request.documentId,
+        versionId: request.versionId,
+        reason: describeStoreFailure(error),
+      });
+      return { ok: false, reason: 'failed' };
+    } finally {
+      this.#releaseLease(room, runtime);
+    }
+  }
+
+  /** The read-only body of {@link previewVersionDiff}, run inside the document's FIFO slot. */
+  async #runPreviewDiff(
+    room: DocumentRoom,
+    runtime: RoomRuntime,
+    store: DocumentStore & DocumentVersionStore,
+    request: VersionDiffRequest,
+  ): Promise<VersionDiffResult> {
+    const barrier = await runtime.barrier;
+    if (!barrier.ok) return { ok: false, reason: 'failed' };
+    if (room.destroyed || !room.acceptsMutations) return { ok: false, reason: 'failed' };
+
+    let currentRevision: number;
+    let targetText: string;
+    try {
+      // Same source and same order as the restore path: the content revision is the number the
+      // client sent as `baseRevision`, and it is compared before any version id is resolved.
+      currentRevision = await store.documentContentRevision(request.documentId);
+      if (currentRevision !== request.baseRevision) {
+        return { ok: false, reason: 'stale_revision', currentRevision };
+      }
+
+      // Scoped to this document, so a version id that belongs elsewhere is indistinguishable
+      // from an id that does not exist.
+      const version = await store.readDocumentVersion(request.documentId, request.versionId);
+      if (version === null) return { ok: false, reason: 'not_found' };
+      targetText = versionText(version);
+    } catch (error) {
+      this.#logger.warn('version diff could not read its inputs', {
+        documentId: request.documentId,
+        versionId: request.versionId,
+        reason: describeStoreFailure(error),
+      });
+      return { ok: false, reason: 'failed' };
+    }
+
+    // Inside the slot and after the barrier the room's body is the committed, hydrated body, so
+    // it is the same state whose revision was just compared.
+    const currentText = room.doc.getText('content').toString();
+    const { diff, stats } = buildVersionDiff(currentText, targetText);
+
+    return {
+      ok: true,
+      versionId: request.versionId,
+      baseRevision: request.baseRevision,
+      currentRevision,
+      targetText,
+      currentText,
+      diff,
+      stats,
+    };
   }
 
   /**
@@ -952,14 +1092,14 @@ export class RoomRegistry implements DocumentVersionService {
   }
 
   /**
-   * Release one restore lease and let normal eviction policy run again.
+   * Release one non-participant lease (restore or diff preview) and let normal eviction run again.
    *
-   * Always calls {@link #destroyRoomIfEmpty} once the last lease is gone: a room created *by* a
-   * restore has no participants, and nothing else would ever ask whether it should be evicted
-   * (T9). With participants the call is a no-op. `destroyed` is checked because the failure path
-   * may already have destroyed the room while this task was unwinding.
+   * Always calls {@link #destroyRoomIfEmpty} once the last lease is gone: a room created *by* an
+   * HTTP request has no participants, and nothing else would ever ask whether it should be
+   * evicted (T9). With participants the call is a no-op. `destroyed` is checked because the
+   * failure path may already have destroyed the room while this task was unwinding.
    */
-  #releaseRestoreLease(room: DocumentRoom, runtime: RoomRuntime): void {
+  #releaseLease(room: DocumentRoom, runtime: RoomRuntime): void {
     runtime.leaseCount = Math.max(0, runtime.leaseCount - 1);
     if (runtime.leaseCount > 0) return;
     runtime.evictPending = false;
@@ -1139,7 +1279,7 @@ export class RoomRegistry implements DocumentVersionService {
 
   /**
    * Phase-ordered durable mutation: `apply → persist → broadcast` (D-044), serialized per
-   * document (D-048).
+   * document (D-048), plus the best-effort D-V2 auto-version capture afterwards.
    *
    * ## Why the task's rejection is not returned to the caller as an error
    *
@@ -1188,6 +1328,14 @@ export class RoomRegistry implements DocumentVersionService {
 
         // Phase 3 — broadcast, only after the bytes are durable.
         room.broadcastUpdate(applied.update, participant);
+
+        // Phase 4 — D-V2 auto version, still inside this slot. It runs **after** the append so
+        // the snapshot and the `content_revision` it records are the committed state, and inside
+        // the slot so a queued restore cannot interleave with the version write. Best-effort by
+        // design: the edit is already durable and broadcast, so a capture failure must never
+        // roll it back, fail the room, or reach the author as an error — it is logged and the
+        // next real edit tries again.
+        await this.#captureAutoVersion(room, runtime, store, participant, applied.contentChanged);
       })
       .then(
         (): RouteOutcome => ({ ok: true }),
@@ -1202,6 +1350,103 @@ export class RoomRegistry implements DocumentVersionService {
     runtime.accounting.lastSequence = Math.max(runtime.accounting.lastSequence, sequence);
     runtime.accounting.appendedSinceSnapshot += 1;
     runtime.accounting.bytesSinceSnapshot += bytes;
+  }
+
+  /**
+   * D-V2: capture an `auto` version after a committed client update, when the policy says so.
+   *
+   * ## Why it lives here, and not in a scheduler
+   *
+   * The capture must observe two facts at once: "the body changed" (the `Y.Text` delta of this
+   * apply) and "this state is the committed one" (the append resolved). Only the FIFO task knows
+   * both. A timer-driven scheduler would have to re-derive them from the store and could race a
+   * restore or another edit; a persist-first capture would be the second write path D-RW1
+   * rejects.
+   *
+   * ## Best-effort, deliberately
+   *
+   * The caller has already appended and broadcast this edit. A version capture is a convenience
+   * snapshot, not the source of truth for the body, so a failure here — a locked database, a
+   * corrupt row, a fault-injecting store — is logged and swallowed:
+   *
+   * - the edit stays committed and the room stays healthy (no fail-stop, D-044 does not apply);
+   * - nothing is written about the failure on the wire;
+   * - the next real edit tries again: the cached newest-auto value is kept (or re-read when even
+   *   the lookup failed), so a failed capture cannot make the policy believe a snapshot exists.
+   *
+   * The alternative — fail the room to keep the version log exact — would turn a missing history
+   * row into data loss for a document that is otherwise correct. That trade is refused here.
+   *
+   * ## The state that is captured
+   *
+   * `Y.encodeStateAsUpdate(room.doc)` inside the slot, after the append: it is the same body the
+   * committed log replays to. The store records `document_meta.content_revision` as the row's
+   * `sequence`, so the snapshot lines up with the `baseRevision` a client sees.
+   *
+   * ## The room-scoped interval cache
+   *
+   * The policy needs the newest `auto` timestamp, which is durable and therefore must be read
+   * from the store on the room's first content change (a restart must not reset the interval).
+   * Reading it on **every** update would put a version-table query on the editing hot path, so
+   * {@link RoomRuntime.lastAutoCapturedAt} caches it for the room's lifetime: a successful
+   * capture updates the cache in place, eviction/rejoin re-reads the store, and a failure leaves
+   * the cache untouched (so the next edit retries rather than pretending the document is due or
+   * deliberately skipping it).
+   */
+  async #captureAutoVersion(
+    room: DocumentRoom,
+    runtime: RoomRuntime,
+    store: DocumentStore,
+    participant: RoomParticipant,
+    contentChanged: boolean,
+  ): Promise<void> {
+    if (!contentChanged) return;
+    if (!isDocumentVersionStore(store)) return;
+
+    try {
+      const now = this.#now();
+      if (runtime.lastAutoCapturedAt === undefined) {
+        const versions = await store.listDocumentVersions(room.documentId);
+        runtime.lastAutoCapturedAt = latestAutoVersionCapturedAt(versions);
+      }
+      const decision = decideAutoVersionCapture({
+        contentChanged,
+        lastAutoCapturedAt: runtime.lastAutoCapturedAt,
+        now,
+      });
+      if (!decision.capture) return;
+
+      // The identity the frame was authorized under, resolved at the upgrade and never sent in a
+      // frame. `system` is only reachable when the transport was wired without authz (the
+      // M1-compatible library mode); a production update always has a user id.
+      const context = this.#contexts.get(participant.peer);
+      const authorId = context?.userId ?? AUTO_VERSION_SYSTEM_AUTHOR;
+
+      // The document's own title, never a client-supplied one (same rule as restore).
+      const title = isDocumentMetaStore(store)
+        ? ((await store.documentMeta(room.documentId))?.title ??
+          defaultDocumentTitle(room.documentId))
+        : defaultDocumentTitle(room.documentId);
+
+      await store.captureDocumentVersion({
+        documentId: room.documentId,
+        title,
+        authorId,
+        state: Y.encodeStateAsUpdate(room.doc),
+        kind: 'auto',
+        now,
+      });
+      // Only a committed capture advances the interval; a throw above leaves the cache as it was.
+      runtime.lastAutoCapturedAt = now;
+    } catch (error) {
+      this.#logger.warn(
+        'automatic version capture failed; the edit is committed and the next edit retries',
+        {
+          documentId: room.documentId,
+          reason: describeStoreFailure(error),
+        },
+      );
+    }
   }
 
   /* ---------------------------------------------------------------- *
@@ -1236,7 +1481,14 @@ export class RoomRegistry implements DocumentVersionService {
       barrier = this.#runHydration(room, accounting);
     }
 
-    return { queue, accounting, barrier, leaseCount: 0, evictPending: false };
+    return {
+      queue,
+      accounting,
+      barrier,
+      leaseCount: 0,
+      evictPending: false,
+      lastAutoCapturedAt: undefined,
+    };
   }
 
   /**

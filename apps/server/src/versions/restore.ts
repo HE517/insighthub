@@ -36,6 +36,7 @@ import type {
   DocumentVersionSummary,
   StoredDocumentVersion,
 } from '../persistence/document-versions.js';
+import type { VersionDiffRequest, VersionDiffResult } from './diff.js';
 import { applyTextEdits, restoreTextDiff } from './text-diff.js';
 
 /** C4: `operationId` is 8..128 characters. */
@@ -118,6 +119,17 @@ export interface DocumentVersionService {
 
   /** The document's current **content revision** (the value `baseRevision` must match). */
   contentRevision(documentId: string): Promise<number>;
+
+  /**
+   * Preview one version against the live body, inside the document's FIFO slot.
+   *
+   * Read-only: it never applies an update, appends a row or broadcasts. Running it in the slot is
+   * what makes `currentRevision` and `currentText` describe the **same** state — the revision
+   * check and the text are read from the same serialized task that every mutation goes through,
+   * mirroring `restoreVersion`. A mutation that wins the race is caught by the same
+   * `baseRevision` compare and answered `409 stale_revision`.
+   */
+  previewVersionDiff(request: VersionDiffRequest): Promise<VersionDiffResult>;
 }
 
 /**
