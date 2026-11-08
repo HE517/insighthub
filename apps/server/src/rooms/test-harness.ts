@@ -127,10 +127,23 @@ export interface TestServer {
  *   state within one process while keeping the cleanup explicit);
  * - **`store` only**: use the caller's store, typically a wrapper that injects failures
  *   (scenarios F and I) or blocks hydration (scenario K). The caller then owns its lifetime.
+ *
+ * `wrapStore` is the bridge between the last two: the harness still opens (and owns, and cleans)
+ * the store in its own `dataPath`, so `server.dataPath` names the real database file — and then
+ * wraps what it opened. A test that must hold a store call open **and** change a membership in
+ * the same SQLite file (the G1 queued-restore cases) needs both properties at once.
  */
 export interface TestServerOptions extends WebSocketServerOptions {
   /** Directory for a harness-created store. Ignored when `store` is supplied. */
   dataPath?: string;
+  /**
+   * Wrap the store the harness opened, before the server is wired against it.
+   *
+   * Applied only when the harness opens the store itself; a caller-supplied `store` is used
+   * as-is. The wrapper must delegate the capabilities it does not deliberately interfere with —
+   * the registry probes the wrapped object for the version/meta capabilities.
+   */
+  wrapStore?: (store: DocumentStore) => DocumentStore;
   /**
    * Which authorization service the **WebSocket** layer receives.
    *
@@ -171,6 +184,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   const {
     dataPath: requestedDataPath,
     store: injectedStore,
+    wrapStore,
     authorization = 'permissive',
     authMode = 'demo',
     verifier = null,
@@ -186,7 +200,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   } else {
     const directory = requestedDataPath ?? mkdtempSync(join(tmpdir(), 'insighthub-a3-test-'));
     const opened = await openDocumentStore(directory);
-    store = opened.store;
+    store = wrapStore === undefined ? opened.store : wrapStore(opened.store);
     dataPath = opened.dataPath;
     // `requestedDataPath` belongs to the caller (it is being reopened deliberately); a
     // freshly created temp directory belongs to this server and is removed on close.

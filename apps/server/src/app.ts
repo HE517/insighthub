@@ -113,6 +113,7 @@ import {
   RESTORE_OPERATION_ID_MIN_LENGTH,
   restoreRequestHash,
   type DocumentVersionService,
+  type RestoreRecheckDecision,
 } from './versions/restore.js';
 
 /**
@@ -705,6 +706,10 @@ function readPathParameter(params: unknown, name: string): string {
  * **`canManageMembers`**: V1 restores are Owner-only, and using the frozen capability table
  * rather than an `if (role === 'owner')` keeps the one rule table in charge.
  *
+ * That entry check is not the whole decision (G1): the route also hands the version service a
+ * `recheckAuthorization` closure, which is awaited inside the document's FIFO slot. A request
+ * that waited in the queue therefore cannot commit on the permission it had on arrival.
+ *
  * ## Responses
  *
  * The mapping is C4's table literally, including the two distinct 409s: `stale_revision`
@@ -766,6 +771,37 @@ function mountVersionRoutes(
       return;
     }
 
+    // G1 (`docs/CONTRACTS.md` §12.1; `docs/DECISIONS.md` D-090 §10): the same question, asked
+    // again where the answer matters. The entry check above runs before body parsing and is what
+    // a caller sees while nothing is queued; this closure is handed to the version service and is
+    // awaited **inside** the document's FIFO slot, so a restore that waited behind another task
+    // is decided on the membership as it is now, not as it was when it arrived.
+    //
+    // The mapping is the frozen non-disclosure vocabulary, the same one the entry check produces:
+    // no membership is `not_found` (404), a membership without `canManageMembers` is `forbidden`
+    // (403). Reusing `authorizeDocument` rather than reading a role here keeps the one rule table
+    // (`packages/shared/src/permission.ts`) in charge of both answers.
+    const recheckAuthorization = async (): Promise<RestoreRecheckDecision> => {
+      const recheck = await authz.authorizeDocument(documentId, user.userId, 'canManageMembers');
+      switch (recheck.kind) {
+        case 'granted':
+          return { ok: true };
+        case 'not_found':
+          return { ok: false, reason: 'not_found' };
+        case 'forbidden':
+          return { ok: false, reason: 'forbidden' };
+        case 'unauthenticated':
+          // The entry check resolved a user id, so this branch is unreachable. If a future
+          // identity change makes it reachable, the non-disclosure 404 is the safe in-slot
+          // answer: a 401 mid-restore would neither revoke anything nor disclose less.
+          return { ok: false, reason: 'not_found' };
+        default: {
+          const never: never = recheck;
+          throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+        }
+      }
+    };
+
     const result = await versions.restoreVersion({
       documentId,
       versionId,
@@ -781,6 +817,7 @@ function mountVersionRoutes(
         actorId: user.userId,
       }),
       actorId: user.userId,
+      recheckAuthorization,
     });
 
     if (result.ok) {
@@ -797,6 +834,11 @@ function mountVersionRoutes(
         return;
       case 'not_found':
         res.status(404).json(RESPONSE_BODIES.notFound);
+        return;
+      case 'forbidden':
+        // G1: the queued restore was re-checked after the caller's role changed. Same body as
+        // the entry-time refusal, so the two moments are indistinguishable to the caller.
+        res.status(403).json(RESPONSE_BODIES.forbidden);
         return;
       case 'restore_failed':
         res.status(500).json(RESPONSE_BODIES.restoreFailed);
