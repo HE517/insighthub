@@ -42,6 +42,32 @@ import { applyTextEdits, restoreTextDiff } from './text-diff.js';
 export const RESTORE_OPERATION_ID_MIN_LENGTH = 8;
 export const RESTORE_OPERATION_ID_MAX_LENGTH = 128;
 
+/**
+ * The answer to the in-slot authorization re-check (`docs/CONTRACTS.md` §12.1 G1,
+ * `docs/DECISIONS.md` D-090 §10).
+ *
+ * Deliberately the same non-disclosure vocabulary the entry check produces, and only its two
+ * refusal states: `not_found` is one value for "no membership" and "unknown document" alike, so a
+ * queued answer cannot differ in status or body from an entry-time answer for the same caller
+ * state (§17.4).
+ */
+export type RestoreRecheckDecision =
+  { readonly ok: true } | { readonly ok: false; readonly reason: 'not_found' | 'forbidden' };
+
+/**
+ * The authorization re-check **injected by the HTTP layer** into {@link RestoreVersionRequest}.
+ *
+ * The registry must not know where permissions come from. `app.ts` owns the `AuthzService`
+ * decision — it holds the session's user id and the document id — and closes over them, while the
+ * registry only sees "ask again". Importing `authz/**` from here would give the durable
+ * version/room seam a reverse dependency on the HTTP authorization stack and a second rule table.
+ *
+ * The registry awaits this **inside the document's FIFO slot**, before the operation-id lookup and
+ * before any read of the version: a membership can be revoked while a restore waits in the queue,
+ * and the entry-time permission is not evidence of the permission at commit time (G1).
+ */
+export type RestoreRecheck = () => Promise<RestoreRecheckDecision>;
+
 /** One restore request, after every HTTP-level check has passed. */
 export interface RestoreVersionRequest {
   readonly documentId: string;
@@ -54,6 +80,12 @@ export interface RestoreVersionRequest {
   readonly requestHash: string;
   /** The restore initiator — an Owner (`canManageMembers`, D-V1). */
   readonly actorId: string;
+  /**
+   * G1: ask the caller's permission again inside the queue slot. Required — a restore request has
+   * no way to say "the entry-time answer is enough", because that is exactly the claim G1
+   * rejects.
+   */
+  readonly recheckAuthorization: RestoreRecheck;
 }
 
 /**
@@ -68,6 +100,12 @@ export type RestoreVersionResult =
   | { readonly ok: false; readonly reason: 'stale_revision'; readonly currentRevision: number }
   | { readonly ok: false; readonly reason: 'operation_conflict' }
   | { readonly ok: false; readonly reason: 'not_found' }
+  /**
+   * G1: the caller may still read the document but may no longer manage it (usually a downgrade
+   * to `viewer`/`editor`). The HTTP layer maps it to the frozen `403 forbidden`, never to a body
+   * that names the role or the membership.
+   */
+  | { readonly ok: false; readonly reason: 'forbidden' }
   | { readonly ok: false; readonly reason: 'restore_failed' };
 
 /** The version surface `app.ts` mounts (C4). Implemented by `RoomRegistry`. */

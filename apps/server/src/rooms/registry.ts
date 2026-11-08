@@ -79,6 +79,7 @@ import {
   computeRestoreUpdate,
   versionText,
   type DocumentVersionService,
+  type RestoreRecheckDecision,
   type RestoreUpdate,
   type RestoreVersionRequest,
   type RestoreVersionResult,
@@ -781,6 +782,36 @@ export class RoomRegistry implements DocumentVersionService {
       return { ok: false, reason: 'restore_failed' };
     }
 
+    // ---- 0. G1: permission is decided again inside the slot, before any read ----
+    //
+    // The HTTP route already authorized the request, but that answer is as old as the queue wait:
+    // an Owner can lose the membership while this restore sits behind another task. Asking again
+    // here — inside the document's slot and **before** the operation-id lookup — is what makes the
+    // answer current, and what stops a revoked retry from replaying a committed result
+    // (`docs/CONTRACTS.md` §12.1 G1; `docs/DECISIONS.md` D-090 §10).
+    //
+    // The check is injected (`request.recheckAuthorization`), so this layer keeps depending on a
+    // capability rather than on `authz/**`. A denial reuses the frozen non-disclosure vocabulary
+    // and happens before the pre-restore capture, the apply, the transaction and the broadcast:
+    // a revoked restore writes 0 rows, changes no text and tells no peer anything.
+    let recheck: RestoreRecheckDecision;
+    try {
+      recheck = await request.recheckAuthorization();
+    } catch (error) {
+      // No decision means no permission. Fail closed on the endpoint's existing "could not
+      // restore" answer rather than commit on the strength of the stale entry-time check.
+      this.#logger.warn(
+        'version restore could not re-check authorization; no write was attempted',
+        {
+          documentId: request.documentId,
+          actorId: request.actorId,
+          reason: describeStoreFailure(error),
+        },
+      );
+      return { ok: false, reason: 'restore_failed' };
+    }
+    if (!recheck.ok) return { ok: false, reason: recheck.reason };
+
     // ---- 1–3. Read-side work: a failure here writes nothing and leaves the room healthy ----
     // The reads are wrapped so a store fault answers `restore_failed` instead of escaping the
     // queue task. An escaped throw would stop the document's FIFO queue permanently while the
@@ -946,6 +977,19 @@ export class RoomRegistry implements DocumentVersionService {
 
   hasRoom(documentId: string): boolean {
     return this.#rooms.has(documentId);
+  }
+
+  /**
+   * How many mutation tasks (running plus waiting) are enqueued for one document.
+   *
+   * Introspection, like {@link hasRoom}: the per-document FIFO is deliberately invisible to
+   * callers, but a test that claims "the restore waited in the queue" has to observe the wait
+   * rather than infer it from a sleep. `null` means no room exists for the document.
+   */
+  mutationQueueDepth(documentId: string): number | null {
+    const room = this.#rooms.get(documentId);
+    if (room === undefined) return null;
+    return this.#runtime.get(room)?.queue.pending ?? null;
   }
 
   /** Throws if the id is unknown; used by tests that just asserted otherwise. */
