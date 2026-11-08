@@ -141,6 +141,17 @@ export interface WebSocketServerOptions extends RoomRegistryOptions {
    * A capturing sink can be injected here, exactly as with `createApp`'s `AppOptions.logger`.
    */
   log?: Logger;
+  /**
+   * The room registry, when the composition root had to create it **before** this call.
+   *
+   * P0-1 needs one instance in two places: `createApp` mounts the version endpoints on it, and
+   * this function owns the socket transport for it. Constructing a second registry would mean
+   * two `Y.Doc` replicas per document and two FIFO queues — a restore could then persist
+   * against a room the sockets are not in. `index.ts` and the test harness therefore build the
+   * registry once and pass it to both. When absent (every pre-P0-1 caller, and the transport's
+   * own unit tests) the registry is created here exactly as before.
+   */
+  registry?: RoomRegistry;
 }
 
 /** What the upgrade resolved, carried to the `connection` handler without touching the wire. */
@@ -206,7 +217,7 @@ export function attachWebSocketServer(
   }
 
   const wss = new WebSocketServer({ noServer: true });
-  const registry = new RoomRegistry(options);
+  const registry = options.registry ?? new RoomRegistry(options);
   const authz: AuthzService | undefined = options.authz;
   const log = options.log ?? createLogger();
   const heartbeat = new Heartbeat({

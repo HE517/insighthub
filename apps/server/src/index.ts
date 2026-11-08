@@ -62,6 +62,7 @@ import { startBackupScheduler } from './persistence/backup-scheduler.js';
 import { openDocumentStore } from './persistence/open-store.js';
 import { isSqliteCapabilityError } from './persistence/sqlite-runtime.js';
 import type { DocumentStore } from './persistence/types.js';
+import { RoomRegistry } from './rooms/registry.js';
 import { resolveStaticAssets, type StaticAssets } from './static-hosting.js';
 import { findStartupRefusal } from './startup.js';
 import { attachWebSocketServer } from './ws.js';
@@ -264,6 +265,11 @@ async function main(): Promise<void> {
     log.info('server.ai_ready', { aiProvider: aiKind });
   }
 
+  // P0-1: the registry is created **before** the HTTP app because the version endpoints need it
+  // and the restore path must share the room the sockets will join. `attachWebSocketServer`
+  // receives this instance instead of building a second one (see `WebSocketServerOptions.registry`).
+  const registry = new RoomRegistry({ store, authz, logger: log });
+
   const app = createApp(config, authz, aiProvider, identityOptions, undefined, {
     staticAssets,
     logger: log,
@@ -275,6 +281,10 @@ async function main(): Promise<void> {
     // the one atomic creation path. Passing it here keeps `app.ts` free of persistence imports
     // and makes the capability explicit at the composition root.
     documentCreation: isDocumentCreationStore(store) ? store : null,
+    // P0-1: the version endpoints are mounted on the **same** registry the socket transport
+    // uses. A restore must run in the document's FIFO slot and against the room the sockets
+    // are in, so two registries are not an option.
+    versions: registry,
   });
   const server = createServer(app);
 
@@ -315,7 +325,7 @@ async function main(): Promise<void> {
   // All three seams are supplied, so none of `attachWebSocketServer`'s fail-closed checks can
   // fire: a data directory without a store, without authz, or a clerk-mode socket without an
   // identity resolver is a wiring mistake, not a mode.
-  const socket = attachWebSocketServer(server, config, { store, authz, identity, log });
+  const socket = attachWebSocketServer(server, config, { store, authz, identity, log, registry });
 
   await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
 

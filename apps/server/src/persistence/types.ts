@@ -46,6 +46,94 @@ export interface StoredDocument {
   readonly updates: readonly StoredUpdate[];
 }
 
+/** Extra facts about one append that the frozen two-argument form cannot express. */
+export interface AppendOptions {
+  /**
+   * Whether this update changes the document **body text**.
+   *
+   * `document_meta.content_revision` is the D-RC1 comparison number and must advance only
+   * when the text changes: a join's `SyncStep2` append is a 2-byte empty update that advances
+   * the log but not the body, and counting it would make every preview stale the moment a
+   * collaborator joins (A7 P1-6). The room layer computes this from the `Y.Text` delta of the
+   * apply, because that is the only layer that has a document.
+   *
+   * Omitted means "assume the update changes the body": a caller that does not know is
+   * assumed to be appending content, which is the safe direction for a revision *guard* (it
+   * can only cause a re-preview, never a silent overwrite).
+   */
+  readonly contentChanged?: boolean;
+}
+
+/**
+ * One row of `restore_operation` (`docs/agent-governance/P0-1-CONTRACTS.md` C3).
+ *
+ * Exists so a retried restore is answered from the original result instead of applying twice.
+ *
+ * **Retention (C3):** rows are kept for **30 days**, which is longer than any retry window the
+ * client is allowed to use. A future cleanup job must not delete a row earlier than that; no
+ * cleanup job exists in this batch.
+ */
+export interface RestoreOperationRecord {
+  readonly operationId: string;
+  /** Hash of the request the operation first executed; a mismatch is `operation_conflict`. */
+  readonly requestHash: string;
+  /** The `restored` version row the first attempt created (the response's `versionId`). */
+  readonly versionId: string;
+  /** That version row's `sequence` (the content revision after the restore). */
+  readonly sequence: number;
+}
+
+/**
+ * Everything one restore must commit atomically (C1).
+ *
+ * The two version states are encoded `Y.Doc` states, not deltas: `preRestoreState` is captured
+ * **before** the update is applied, `restoredState` after. Both must be self-contained so they
+ * survive log compaction (T10).
+ */
+export interface AppendRestoreInput {
+  readonly documentId: string;
+  /** Client-supplied idempotency key, unique per document. */
+  readonly operationId: string;
+  /** Hash of `(documentId, versionId, baseRevision, actorId)`; see `versions/restore.ts`. */
+  readonly requestHash: string;
+  /** The content revision the client previewed. Compared **inside** the transaction. */
+  readonly expectedRevision: number;
+  /** Restore initiator (the Owner); recorded on both version rows. */
+  readonly authorId: string;
+  /** Title to record on the version rows (today: the document's metadata title). */
+  readonly title: string;
+  /** Full encoded state captured before `restoreUpdate` is applied. */
+  readonly preRestoreState: Uint8Array;
+  /** The forward update computed from the current text and the selected version. */
+  readonly restoreUpdate: Uint8Array;
+  /** Full encoded state after `restoreUpdate` is applied. */
+  readonly restoredState: Uint8Array;
+  readonly now: number;
+}
+
+/**
+ * Outcome of {@link DocumentStore.appendRestore}.
+ *
+ * `sequence` is the **version** sequence (the content revision after the restore), i.e. the
+ * number `GET /versions` reports and the client uses to mark the new version; `logSequence`
+ * is the append-log position the restore update was written at, which only the room's
+ * compaction accounting needs. They are different counters and conflating them would make
+ * compaction fold the log through the wrong position.
+ *
+ * `stale` / `operation_conflict` / `replayed` are **not errors**: they are the transaction
+ * declining to write and telling the caller why, having written nothing.
+ */
+export type AppendRestoreOutcome =
+  | {
+      readonly kind: 'committed';
+      readonly versionId: string;
+      readonly sequence: number;
+      readonly logSequence: number;
+    }
+  | { readonly kind: 'replayed'; readonly versionId: string; readonly sequence: number }
+  | { readonly kind: 'stale'; readonly currentRevision: number }
+  | { readonly kind: 'operation_conflict' };
+
 /**
  * The durable store.
  *
@@ -70,7 +158,43 @@ export interface DocumentStore {
    * this is what is implemented. Recorded in the M2-P0-1 report as a documentation
    * inconsistency rather than silently picking one.
    */
-  append(documentId: string, update: Uint8Array): Promise<number>;
+  append(documentId: string, update: Uint8Array, options?: AppendOptions): Promise<number>;
+
+  /**
+   * Commit one version restore in **one** `BEGIN IMMEDIATE … COMMIT` (P0-1 C1).
+   *
+   * The sequence inside the transaction is the contract:
+   *
+   * ```text
+   * ensure document/meta → op-id lookup (returns replayed/conflict, 0 rows)
+   *   → content-revision compare (returns stale, 0 rows)
+   *   → insert pre-restore version
+   *   → append restore update (sequence = max(MAX(seq), snapshot_seq) + 1)
+   *   → content_revision += 1
+   *   → insert restored version (sequence = new content_revision)
+   *   → insert restore_operation
+   * ```
+   *
+   * A four-row success is the accounting T4 asserts. It cannot be composed from `append`:
+   * that method opens its own transaction, and SQLite has no nested `BEGIN IMMEDIATE`
+   * (A7 Q1-2). A throw rolls all four back; the caller then treats the room as unhealthy.
+   *
+   * `content_revision` is **not** incremented when `restoreUpdate` is empty (restoring the
+   * current text): the body did not change, so a preview must not become stale.
+   */
+  appendRestore(input: AppendRestoreInput): Promise<AppendRestoreOutcome>;
+
+  /**
+   * Look up a previously committed restore operation, **scoped to its document**.
+   *
+   * The unique key is `(document_id, operation_id)` (C3): reusing an operation id on a
+   * different document is an independent operation and must never expose the other
+   * document's result.
+   */
+  findRestoreOperation(
+    documentId: string,
+    operationId: string,
+  ): Promise<RestoreOperationRecord | null>;
 
   /**
    * Replace the snapshot, advance `snapshot_seq` and delete the consumed log rows.
@@ -114,7 +238,14 @@ export class StoreClosedError extends Error {
  * an error message.
  */
 export class StoreOperationError extends Error {
-  readonly operation: 'open' | 'load' | 'append' | 'compact' | 'delete' | 'close';
+  readonly operation:
+    | 'open'
+    | 'load'
+    | 'append'
+    | 'restore'
+    | 'compact'
+    | 'delete'
+    | 'close';
 
   constructor(operation: StoreOperationError['operation'], cause: unknown) {
     super(`document store ${operation} failed`);

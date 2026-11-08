@@ -50,6 +50,7 @@ import { isDocumentMetaStore, StoreDocumentCatalog } from '../persistence/docume
 import { openDocumentStore } from '../persistence/open-store.js';
 import type { DocumentStore } from '../persistence/types.js';
 import { attachWebSocketServer, type WebSocketHandle, type WebSocketServerOptions } from '../ws.js';
+import { RoomRegistry } from './registry.js';
 import { PermissiveTestAuthz } from './test-authz.js';
 
 /** One recorded inbound frame. Binary frames keep their raw bytes. */
@@ -230,9 +231,21 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   // M4 B9: when a test supplies a structured logger, both transports use it — the same wiring
   // `index.ts` has — so an accepted upgrade can be traced back to the HTTP bootstrap request.
   // B12.5: the store is also the atomic creation path, exactly as `index.ts` wires it.
+  // P0-1: the registry is created here, not inside `attachWebSocketServer`, because the HTTP
+  // app needs the same instance for the version endpoints (a restore must run in the document's
+  // FIFO slot and against the room the sockets join). Two registries would mean two `Y.Doc`
+  // replicas per document.
+  const registry = new RoomRegistry({
+    store,
+    authz: socketAuthz,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.authorizeJoin === undefined ? {} : { authorizeJoin: options.authorizeJoin }),
+  });
+
   const appOptions = {
     ...(options.log === undefined ? {} : { logger: options.log }),
     ...(isDocumentCreationStore(store) ? { documentCreation: store } : {}),
+    versions: registry,
   };
   const server: Server = createServer(
     createApp(config, authz, undefined, identityOptions, undefined, appOptions),
@@ -242,6 +255,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     store,
     authz: socketAuthz,
     identity,
+    registry,
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 

@@ -438,13 +438,27 @@ export class DocumentRoom {
    * throws `Unexpected end of array` (found by the M1-A0.2 cross-agent test).
    */
   applySyncPayload(decoded: DecodedSyncFrame): Uint8Array | null {
+    return this.applySyncPayloadWithEffect(decoded)?.update ?? null;
+  }
+
+  /**
+   * Phase 1 plus the D-RC1 signal: the update, and whether it changed the body text.
+   *
+   * `contentChanged` is computed from the `Y.Text` delta of the apply — not from the payload
+   * size. A join's `SyncStep2` is a 2-byte empty update that advances the log but not the body,
+   * and counting it as content would make every open preview stale the moment a collaborator
+   * joins (A7 P1-6). Attribute-only edits (`retain` + marks) do not change the body either, so
+   * they do not advance `content_revision`.
+   */
+  applySyncPayloadWithEffect(
+    decoded: DecodedSyncFrame,
+  ): { update: Uint8Array; contentChanged: boolean } | null {
     if (!this.acceptsMutations) return null;
 
     const update = readSyncStep2Payload(decoded) ?? readSyncUpdatePayload(decoded);
     if (update === null || update.byteLength === 0) return null;
 
-    Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
-    return update;
+    return { update, contentChanged: this.#applyUpdate(update) };
   }
 
   /**
@@ -459,19 +473,50 @@ export class DocumentRoom {
   }
 
   /**
-   * Apply an update the server produced itself (not received from a peer).
+   * Phase 1 for an update the **server authored** — the version-restore path (P0-1).
    *
-   * **Not durable.** Tests use this to model causally-ordered updates arriving out of order
-   * without paying for a socket round trip; it exists so a test can drive the room's CRDT
-   * directly. Production writes go through the registry's pipeline so they are persisted
-   * before they are broadcast — this method would bypass that, which is why nothing in
-   * production calls it.
+   * This is a production entry point since P0-1: `RoomRegistry.restoreVersion` calls it inside
+   * the document's FIFO slot, between the pre-restore capture and the single-transaction
+   * persist, and broadcasts the same bytes afterwards. The durability rule is the caller's,
+   * which is why nothing else may call it: a caller that applied without persisting would put
+   * memory ahead of the log (`docs/DECISIONS.md` D-044).
    *
-   * Stamped with the remote origin so a client's local undo tracking is never confused by
-   * server-authored content.
+   * Returns `false` when the room is not accepting mutations, in which case nothing was
+   * applied. The update is stamped with the remote origin, so no client's `UndoManager`
+   * tracks it — restore is a shared forward edit, not a local undo (D-UD1 / R13).
    */
-  applyServerUpdate(update: Uint8Array): void {
-    Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
+  applyServerUpdate(update: Uint8Array): boolean {
+    if (!this.acceptsMutations) return false;
+    if (update.byteLength === 0) return true;
+    this.#applyUpdate(update);
+    return true;
+  }
+
+  /**
+   * Apply one update and report whether it changed the `content` text.
+   *
+   * The observer is attached for exactly the duration of the apply: it is how "did the body
+   * change" is answered without comparing the whole document before and after (which would be
+   * O(document) on every keystroke).
+   */
+  #applyUpdate(update: Uint8Array): boolean {
+    const text = this.doc.getText('content');
+    let contentChanged = false;
+    const observer = (event: Y.YTextEvent): void => {
+      for (const op of event.delta) {
+        if ('delete' in op || 'insert' in op) {
+          contentChanged = true;
+          return;
+        }
+      }
+    };
+    text.observe(observer);
+    try {
+      Y.applyUpdate(this.doc, update, TRANSACTION_ORIGINS.remote);
+    } finally {
+      text.unobserve(observer);
+    }
+    return contentChanged;
   }
 
   /* ---------------------------------------------------------------- *

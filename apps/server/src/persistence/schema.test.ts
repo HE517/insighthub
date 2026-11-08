@@ -192,8 +192,8 @@ async function assertStartupRefusal(
  * Creating and re-opening
  * ---------------------------------------------------------------- */
 
-describe('M4 B6/B12.5 — a new database is created at schema version 2', () => {
-  it('records user_version = 2 and creates every schema table', async () => {
+describe('M4 B6/B12.5/P0-1 — a new database is created at the current schema version', () => {
+  it('records user_version = 3 and creates every schema table', async () => {
     const dataPath = join(root, 'new');
     const doc = new Y.Doc();
     const update = updateAppending(doc, 'first content');
@@ -209,12 +209,12 @@ describe('M4 B6/B12.5 — a new database is created at schema version 2', () => 
     const db = await openRaw(databaseFile(dataPath));
     try {
       assert.equal(readUserVersion(db), CURRENT_SCHEMA_VERSION);
-      assert.equal(readUserVersion(db), 2, 'B12.5 freezes the current schema at 2');
+      assert.equal(readUserVersion(db), 3, 'P0-1 freezes the current schema at 3');
       const names = tableNames(db);
       for (const table of SCHEMA_TABLES) {
         assert.ok(
           names.includes(table),
-          `schema 2 must contain ${table}, found ${names.join(', ')}`,
+          `schema 3 must contain ${table}, found ${names.join(', ')}`,
         );
       }
     } finally {
@@ -237,7 +237,7 @@ describe('M4 B6/B12.5 — a new database is created at schema version 2', () => 
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      assert.deepEqual(ensureSchema(db, dataPath), { version: 2, action: 'unchanged' });
+      assert.deepEqual(ensureSchema(db, dataPath), { version: CURRENT_SCHEMA_VERSION, action: 'unchanged' });
     } finally {
       db.close();
     }
@@ -252,7 +252,7 @@ describe('M4 B6/B12.5 — a new database is created at schema version 2', () => 
 
     const after = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(after), 2);
+      assert.equal(readUserVersion(after), CURRENT_SCHEMA_VERSION);
       assert.equal(rowCount(after, 'document_update'), 1, 'reopening must not duplicate rows');
     } finally {
       after.close();
@@ -264,7 +264,7 @@ describe('M4 B6/B12.5 — a new database is created at schema version 2', () => 
  * Pre-B6 migration
  * ---------------------------------------------------------------- */
 
-describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing data', () => {
+describe('M4 B6/B12.5/P0-1 — a pre-B6 database migrates to the current version without losing data', () => {
   it('preserves document content, metadata and the app_user mapping', async () => {
     const dataPath = join(root, 'legacy');
     const doc = new Y.Doc();
@@ -302,14 +302,18 @@ describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing
 
     const after = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(after), 2, 'the migration must record the version');
+      assert.equal(
+        readUserVersion(after),
+        CURRENT_SCHEMA_VERSION,
+        'the migration must record the version',
+      );
       assert.equal(rowCount(after, 'document'), 1);
       assert.equal(rowCount(after, 'document_update'), 1);
       assert.equal(rowCount(after, 'document_meta'), 1);
       assert.equal(rowCount(after, 'app_user'), 1);
       assert.equal(rowCount(after, 'authz_document_membership'), 0);
       // Re-running the migration on the migrated file must be a no-op, not a second pass.
-      assert.deepEqual(ensureSchema(after, dataPath), { version: 2, action: 'unchanged' });
+      assert.deepEqual(ensureSchema(after, dataPath), { version: CURRENT_SCHEMA_VERSION, action: 'unchanged' });
     } finally {
       after.close();
     }
@@ -325,8 +329,8 @@ describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing
     const db = await openRaw(databaseFile(dataPath));
     try {
       assert.equal(readUserVersion(db), 0);
-      assert.deepEqual(ensureSchema(db, dataPath), { version: 2, action: 'migrated' });
-      assert.deepEqual(ensureSchema(db, dataPath), { version: 2, action: 'unchanged' });
+      assert.deepEqual(ensureSchema(db, dataPath), { version: CURRENT_SCHEMA_VERSION, action: 'migrated' });
+      assert.deepEqual(ensureSchema(db, dataPath), { version: CURRENT_SCHEMA_VERSION, action: 'unchanged' });
       assert.equal(rowCount(db, 'document_update'), 1, 'no row may be rewritten or duplicated');
     } finally {
       db.close();
@@ -361,8 +365,8 @@ describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing
 
     const after = await openRaw(databaseFile(dataPath));
     try {
-      assert.equal(readUserVersion(after), 2);
-      assert.ok(tableNames(after).includes('app_user'), 'schema 2 requires the app_user table');
+      assert.equal(readUserVersion(after), CURRENT_SCHEMA_VERSION);
+      assert.ok(tableNames(after).includes('app_user'), 'schema 3 requires the app_user table');
       assert.equal(rowCount(after, 'app_user'), 0);
       assert.equal(rowCount(after, 'document_update'), 1, 'the old rows must be untouched');
     } finally {
@@ -389,7 +393,7 @@ describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      assert.deepEqual(ensureSchema(db, dataPath), { version: 2, action: 'unchanged' });
+      assert.deepEqual(ensureSchema(db, dataPath), { version: CURRENT_SCHEMA_VERSION, action: 'unchanged' });
       assert.equal(rowCount(db, 'app_user'), 1);
     } finally {
       db.close();
@@ -402,7 +406,7 @@ describe('M4 B6/B12.5 — a pre-B6 database migrates to version 2 without losing
  * ---------------------------------------------------------------- */
 
 describe('M4 B6 — a newer schema is refused, never opened best-effort', () => {
-  it('rejects user_version = 3 with DATA_SCHEMA_TOO_NEW and leaves the file untouched', async () => {
+  it('rejects a newer user_version with DATA_SCHEMA_TOO_NEW and leaves the file untouched', async () => {
     const dataPath = join(root, 'too-new');
     const opened = await openDocumentStore(dataPath);
     try {
@@ -413,7 +417,9 @@ describe('M4 B6 — a newer schema is refused, never opened best-effort', () => 
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      db.exec('PRAGMA user_version = 3');
+      // Relative, not a literal: the point is "one version ahead", and a literal 3 stopped
+      // being ahead the moment P0-1 made schema 3 current.
+      db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION + 1}`);
     } finally {
       db.close();
     }
@@ -431,7 +437,7 @@ describe('M4 B6 — a newer schema is refused, never opened best-effort', () => 
 
     const after = await openRaw(file);
     try {
-      assert.equal(readUserVersion(after), 3);
+      assert.equal(readUserVersion(after), CURRENT_SCHEMA_VERSION + 1);
       assert.equal(rowCount(after, 'document_update'), 1, 'the existing row must still be there');
     } finally {
       after.close();
@@ -443,9 +449,9 @@ describe('M4 B6 — a newer schema is refused, never opened best-effort', () => 
     mkdirSync(dataPath, { recursive: true });
     const db = await openRaw(databaseFile(dataPath));
     try {
-      // Claims schema 2 while the database has no tables at all: the marker and the file
-      // disagree, so neither "make it up" nor "start empty" is acceptable.
-      db.exec('PRAGMA user_version = 2');
+      // Claims the current schema while the database has no tables at all: the marker and the
+      // file disagree, so neither "make it up" nor "start empty" is acceptable.
+      db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
     } finally {
       db.close();
     }
@@ -546,7 +552,7 @@ describe('M4 B6 — the real entrypoint exits 1 with the stable code', () => {
 
     const db = await openRaw(databaseFile(dataPath));
     try {
-      db.exec('PRAGMA user_version = 3');
+      db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION + 1}`);
     } finally {
       db.close();
     }

@@ -53,7 +53,13 @@ export type SqliteCapabilityFailure =
    * The database still reports schema 1 and the new table was never left behind; the legacy
    * `authz.db` is untouched and remains the recoverable copy.
    */
-  | 'MEMBERSHIP_MIGRATION_FAILED';
+  | 'MEMBERSHIP_MIGRATION_FAILED'
+  /**
+   * P0-1 (D-090 §7): the 2 → 3 version-history migration failed and was rolled back. The
+   * database still reports its previous schema version, with no `document_version` /
+   * `restore_operation` table and no `content_revision` column left behind.
+   */
+  | 'RESTORE_SCHEMA_MIGRATION_FAILED';
 
 /**
  * A startup-blocking capability failure.

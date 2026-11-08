@@ -11,7 +11,14 @@
  * imports `node:sqlite`, `ws` or a room, which is also a standing check that the seam is
  * genuinely replaceable.
  */
-import type { DocumentStore, StoredDocument } from './types.js';
+import type {
+  AppendOptions,
+  AppendRestoreInput,
+  AppendRestoreOutcome,
+  DocumentStore,
+  RestoreOperationRecord,
+  StoredDocument,
+} from './types.js';
 
 /** Delegating base: records nothing, changes nothing. */
 export class WrappedStore implements DocumentStore {
@@ -25,8 +32,19 @@ export class WrappedStore implements DocumentStore {
     return this.inner.load(documentId);
   }
 
-  append(documentId: string, update: Uint8Array): Promise<number> {
-    return this.inner.append(documentId, update);
+  append(documentId: string, update: Uint8Array, options?: AppendOptions): Promise<number> {
+    return this.inner.append(documentId, update, options);
+  }
+
+  appendRestore(input: AppendRestoreInput): Promise<AppendRestoreOutcome> {
+    return this.inner.appendRestore(input);
+  }
+
+  findRestoreOperation(
+    documentId: string,
+    operationId: string,
+  ): Promise<RestoreOperationRecord | null> {
+    return this.inner.findRestoreOperation(documentId, operationId);
   }
 
   compact(documentId: string, snapshot: Uint8Array, throughSequence: number): Promise<void> {
@@ -63,12 +81,16 @@ export class FaultInjectingStore extends WrappedStore {
     return this.attempts.length;
   }
 
-  override async append(documentId: string, update: Uint8Array): Promise<number> {
+  override async append(
+    documentId: string,
+    update: Uint8Array,
+    options?: AppendOptions,
+  ): Promise<number> {
     this.attempts.push(update);
     if (this.#failAt !== null && this.attempts.length === this.#failAt) {
       throw new Error(`injected persist failure on attempt ${this.attempts.length}`);
     }
-    return this.inner.append(documentId, update);
+    return this.inner.append(documentId, update, options);
   }
 }
 
@@ -130,9 +152,13 @@ export class ControllableStore extends WrappedStore {
     return this.inner.load(documentId);
   }
 
-  override async append(documentId: string, update: Uint8Array): Promise<number> {
+  override async append(
+    documentId: string,
+    update: Uint8Array,
+    options?: AppendOptions,
+  ): Promise<number> {
     this.appendCalls += 1;
     if (this.#appendGate !== null) await this.#appendGate;
-    return this.inner.append(documentId, update);
+    return this.inner.append(documentId, update, options);
   }
 }

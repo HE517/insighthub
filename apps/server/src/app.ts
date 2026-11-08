@@ -108,6 +108,12 @@ import {
 import { createOriginGuard } from './security/origin.js';
 import { FixedWindowRateLimiter } from './security/rate-limit.js';
 import { mountStaticHosting, type StaticAssets } from './static-hosting.js';
+import {
+  RESTORE_OPERATION_ID_MAX_LENGTH,
+  RESTORE_OPERATION_ID_MIN_LENGTH,
+  restoreRequestHash,
+  type DocumentVersionService,
+} from './versions/restore.js';
 
 /**
  * Bootstrap limit: requests per client address per window (M4 B4). Fixed-window, in process —
@@ -172,6 +178,14 @@ const RESPONSE_BODIES = {
   ready: { status: 'ready' },
   /** `GET /ready` before the process is ready: the standard 503 "try again" answer. */
   starting: { status: 'starting' },
+  /**
+   * P0-1 C4's 500 for a version restore that could not commit. Its own body rather than the
+   * generic `internal_error` because the client's recovery action differs: re-fetch versions
+   * and retry, rather than treat the whole API as broken.
+   */
+  restoreFailed: { error: 'restore_failed' },
+  /** P0-1 C4: the same operation id was reused with a different request. */
+  operationConflict: { error: 'operation_conflict' },
 } as const;
 
 /**
@@ -211,6 +225,15 @@ export interface AppOptions {
    * — a route that could only answer 500 is worse than an honest 404 for an unknown path.
    */
   readonly documentCreation?: DocumentCreationStore | null;
+  /**
+   * P0-1: the version service the restore/list routes are mounted against.
+   *
+   * The implementation is `RoomRegistry` (a restore must run in the document's FIFO slot), but
+   * `app.ts` only sees the {@link DocumentVersionService} interface so the HTTP layer cannot
+   * reach into a room, a queue or a `Y.Doc`. Absent means the two routes are **not mounted**:
+   * an endpoint that could only answer 500 is worse than the honest 404 for an unknown path.
+   */
+  readonly versions?: DocumentVersionService | null;
 }
 
 /** The only body a bootstrap request may carry (§17.3/§17.4). */
@@ -387,6 +410,11 @@ export function createApp(
     bootstrapLimiter,
     options.documentCreation ?? null,
   );
+  // P0-1: `POST …/versions/:versionId/restore` + `GET …/versions` (C4). Mounted only when the
+  // composition root supplied a version service — a route with no service could only 500.
+  if (options.versions !== undefined && options.versions !== null) {
+    mountVersionRoutes(app, authz, identityDeps, options.versions);
+  }
   mountAiRoutes(app, authz, aiProvider, identityDeps, aiLimits);
 
   // Same-origin hosting of the built web client (M4 B7, D-082 D2). Mounted after every API
@@ -592,6 +620,229 @@ function mountAuthorizationRoutes(
    * through production code rather than through a mock.
    */
   app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead', identityDeps));
+}
+
+/* ------------------------------------------------------------------ *
+ * P0-1 — version history and version restore (CONTRACTS C4)
+ * ------------------------------------------------------------------ */
+
+/** The strictly validated restore body. */
+interface RestoreBody {
+  readonly baseRevision: number;
+  readonly operationId: string;
+}
+
+/**
+ * Validate the **entire** restore body.
+ *
+ * Exactly `{ baseRevision: integer >= 0, operationId: 8..128 chars }`; any other key is refused
+ * rather than ignored. That is what makes "the client cannot send a computed update, a target
+ * text or an actor" observable (A7 P1-11 / T14): there is no field the server would accept and
+ * apply, so there is no optimistic-apply path to secure.
+ */
+function parseRestoreBody(body: unknown): RestoreBody | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+
+  const record = body as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2) return null;
+  if (!keys.includes('baseRevision') || !keys.includes('operationId')) return null;
+
+  const baseRevision = record['baseRevision'];
+  if (
+    typeof baseRevision !== 'number' ||
+    !Number.isSafeInteger(baseRevision) ||
+    baseRevision < 0
+  ) {
+    return null;
+  }
+
+  const operationId = record['operationId'];
+  if (typeof operationId !== 'string') return null;
+  if (
+    operationId.length < RESTORE_OPERATION_ID_MIN_LENGTH ||
+    operationId.length > RESTORE_OPERATION_ID_MAX_LENGTH ||
+    operationId.trim().length === 0
+  ) {
+    return null;
+  }
+
+  return { baseRevision, operationId };
+}
+
+/** Scoped JSON parser for the restore route: 8 KB is far more than the two-field body needs. */
+const versionJsonParser = express.json({ limit: '8kb' });
+
+function readVersionBody(req: Request, res: Response): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    versionJsonParser(req, res, (error?: unknown) => {
+      if (error !== undefined && error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(req.body);
+    });
+  });
+}
+
+/** `req.params[name]`, without trusting that Express gave us a string. */
+function readPathParameter(params: unknown, name: string): string {
+  if (typeof params !== 'object' || params === null) return '';
+  const value = (params as Record<string, unknown>)[name];
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Mount the two P0-1 version routes.
+ *
+ * ## Order, and why
+ *
+ * `identity (401) → authorization (404/403) → body (400) → restore (200/409/500)`
+ *
+ * Authorization precedes body parsing so an unauthenticated or non-member caller cannot make
+ * the server allocate a parse tree, and a caller without membership always leaves through the
+ * same `404` (D-V1 non-disclosure) regardless of what it sent. Ownership is asked for with
+ * **`canManageMembers`**: V1 restores are Owner-only, and using the frozen capability table
+ * rather than an `if (role === 'owner')` keeps the one rule table in charge.
+ *
+ * ## Responses
+ *
+ * The mapping is C4's table literally, including the two distinct 409s: `stale_revision`
+ * carries the `currentRevision` the client needs to re-preview, while `operation_conflict`
+ * discloses nothing about the original request.
+ */
+function mountVersionRoutes(
+  app: Express,
+  authz: AuthzService,
+  identityDeps: IdentityDeps,
+  versions: DocumentVersionService,
+): void {
+  app.post('/api/documents/:id/versions/:versionId/restore', async (req: Request, res: Response) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      // C4 names `session_required` for this endpoint; the route is part of the P0-1 surface,
+      // whose contract was frozen with that body.
+      res.status(401).json(RESPONSE_BODIES.sessionRequired);
+      return;
+    }
+    bindRequestUser(res, user.userId);
+
+    const documentId = readPathParameter(req.params, 'id');
+    const versionId = readPathParameter(req.params, 'versionId');
+    bindRequestDocument(res, documentId);
+
+    // D-V1: only the Owner may restore. `canManageMembers` is owner-only in the frozen
+    // capability table (`packages/shared/src/permission.ts`), and `authorizeDocument` keeps
+    // the non-disclosure rule: no membership and an unknown document are both `not_found`.
+    const decision = await authz.authorizeDocument(documentId, user.userId, 'canManageMembers');
+    switch (decision.kind) {
+      case 'unauthenticated':
+        res.status(401).json(RESPONSE_BODIES.sessionRequired);
+        return;
+      case 'not_found':
+        res.status(404).json(RESPONSE_BODIES.notFound);
+        return;
+      case 'forbidden':
+        res.status(403).json(RESPONSE_BODIES.forbidden);
+        return;
+      case 'granted':
+        break;
+      default: {
+        const never: never = decision;
+        throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+      }
+    }
+
+    let rawBody: unknown;
+    try {
+      rawBody = await readVersionBody(req, res);
+    } catch {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+    const input = parseRestoreBody(rawBody);
+    if (input === null) {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+
+    const result = await versions.restoreVersion({
+      documentId,
+      versionId,
+      baseRevision: input.baseRevision,
+      operationId: input.operationId,
+      // Computed from the validated request only. A retry of the same request therefore hashes
+      // identically; a different body under the same operation id hashes differently and is
+      // refused as `operation_conflict` instead of replaying the first result.
+      requestHash: restoreRequestHash({
+        documentId,
+        versionId,
+        baseRevision: input.baseRevision,
+        actorId: user.userId,
+      }),
+      actorId: user.userId,
+    });
+
+    if (result.ok) {
+      res.status(200).json({ versionId: result.versionId, sequence: result.sequence });
+      return;
+    }
+
+    switch (result.reason) {
+      case 'stale_revision':
+        res.status(409).json({ error: 'stale_revision', currentRevision: result.currentRevision });
+        return;
+      case 'operation_conflict':
+        res.status(409).json(RESPONSE_BODIES.operationConflict);
+        return;
+      case 'not_found':
+        res.status(404).json(RESPONSE_BODIES.notFound);
+        return;
+      case 'restore_failed':
+        res.status(500).json(RESPONSE_BODIES.restoreFailed);
+        return;
+      default: {
+        const never: never = result;
+        throw new Error(`unhandled restore result: ${JSON.stringify(never)}`);
+      }
+    }
+  });
+
+  app.get('/api/documents/:id/versions', async (req: Request, res: Response) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      res.status(401).json(RESPONSE_BODIES.sessionRequired);
+      return;
+    }
+    bindRequestUser(res, user.userId);
+
+    const documentId = readPathParameter(req.params, 'id');
+    bindRequestDocument(res, documentId);
+
+    // `canRead` for the list (C4): a viewer may see what versions exist, and the same
+    // non-disclosure branches apply. `yjs_state` is never part of the response.
+    const decision = await authz.authorizeDocument(documentId, user.userId, 'canRead');
+    switch (decision.kind) {
+      case 'unauthenticated':
+        res.status(401).json(RESPONSE_BODIES.sessionRequired);
+        return;
+      case 'not_found':
+        res.status(404).json(RESPONSE_BODIES.notFound);
+        return;
+      case 'forbidden':
+        res.status(403).json(RESPONSE_BODIES.forbidden);
+        return;
+      case 'granted':
+        break;
+      default: {
+        const never: never = decision;
+        throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+      }
+    }
+
+    const list = await versions.listVersions(documentId);
+    res.status(200).json({ versions: list });
+  });
 }
 
 /** The validated creation request. `title` is already trimmed. */
