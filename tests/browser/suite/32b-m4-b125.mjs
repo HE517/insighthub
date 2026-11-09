@@ -96,7 +96,7 @@ const AI = {
 const NEW_DOCUMENT_LABEL = '新建文档';
 
 /** The server's default title (`apps/server/src/persistence/document-creation.ts`). */
-const UNTITLED_DOCUMENT = 'Untitled document';
+const UNTITLED_DOCUMENT = '无标题文档';
 
 /** The server generates the id (`D-084 #2`): a UUID, never the document the page opened on. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -510,7 +510,7 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'b125/1-create-document-switches',
-    'clicking 新建文档 in a real browser POSTs /api/documents (201), switches active-document to the server-generated UUID, closes the panel, joins the new room as owner with an editable editor, and the reopened directory marks that one row current as Untitled document',
+    'clicking 新建文档 in a real browser POSTs /api/documents (201), switches active-document to the server-generated UUID, closes the panel, joins the new room as owner with an editable editor, and the reopened directory marks that one row current as 无标题文档',
     async (ctx) => {
       const originalId = `a6-b125-create-${marker('doc')}`;
       const page = await ctx.newAppPage({ documentId: originalId });
@@ -662,7 +662,7 @@ export function register(runner) {
       assertIncludes(
         row.title,
         UNTITLED_DOCUMENT,
-        'the created row must render the server title "Untitled document"',
+        'the created row must render the server title "无标题文档"',
       );
       assertEqual(
         after.items.filter((item) => item.id === created.documentId).length,
