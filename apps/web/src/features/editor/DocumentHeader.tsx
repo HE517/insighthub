@@ -45,6 +45,14 @@
  * is disabled for a viewer: preview is read-only by nature and editing is already gated by the
  * read-only compartment. Test ids `mode-editor` / `mode-preview` are the UI contract for the
  * browser suite.
+ *
+ * ## The "共享" trigger (P0-2)
+ *
+ * Rendered only when `gate.capabilities.canManageMembers` is true — that is `owner` and nothing
+ * else, including the unknown role. It is a pure UI affordance: it toggles the dialog owned by
+ * `DocumentWorkspace` and reads no membership itself. `aria-expanded`/`aria-controls` describe
+ * that dialog (`id="members-panel"`). A non-owner therefore has no entry point, while the server
+ * would still refuse the API (`403 forbidden`) if one were called directly.
  */
 import type { ConnectionStatus, CollaboratorInfo, UndoState } from '@insighthub/shared';
 
@@ -70,6 +78,15 @@ export interface DocumentHeaderProps {
   aiOpen: boolean;
   /** Toggle the AI proposal panel — supplied by the workspace, which owns the panel's state. */
   onToggleAi: () => void;
+  /** Whether the member-management dialog is open (drives `aria-expanded`). */
+  membersOpen: boolean;
+  /**
+   * Toggle the member-management dialog — supplied by the workspace.
+   *
+   * Only reachable from the owner-only "共享" entry below; the callback itself makes no permission
+   * decision.
+   */
+  onToggleMembers: () => void;
   /** The current surface mode. Owned by `DocumentWorkspace`, echoed here for `aria-pressed`. */
   mode: EditorMode;
   /** Switch between edit and preview. The workspace owns the mode state. */
@@ -87,6 +104,8 @@ export function DocumentHeader({
   onRedo,
   aiOpen,
   onToggleAi,
+  membersOpen,
+  onToggleMembers,
   mode,
   onModeChange,
 }: DocumentHeaderProps) {
@@ -139,6 +158,42 @@ export function DocumentHeader({
       )}
 
       <div className="doc-head__right">
+        {/*
+          Member management is an **owner-only** affordance (P0-2-MEMBERS.md §UI): the capability
+          comes from `documentCapabilities.canManageMembers`, so editor/commenter/viewer and the
+          unknown role render nothing at all. The server still refuses a non-owner call (§17.5);
+          hiding the entry is a UI decision, not the enforcement.
+        */}
+        {gate.capabilities.canManageMembers ? (
+          <button
+            type="button"
+            className="doc-share"
+            data-testid="members-open"
+            aria-label="共享"
+            aria-expanded={membersOpen}
+            aria-controls="members-panel"
+            title="管理本文档的成员与权限"
+            onClick={onToggleMembers}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19" />
+              <circle cx="10" cy="8" r="3.2" />
+              <path d="M20 19v-1.4a3.4 3.4 0 0 0-2.6-3.3" />
+              <path d="M15.3 5.2a3.2 3.2 0 0 1 0 5.9" />
+            </svg>
+            <span className="doc-share__label">共享</span>
+          </button>
+        ) : null}
+
         {/*
           Open/close the AI proposal panel. Labelled "Ask AI" for the human and for the browser
           contract; enabled for every reader because generating needs only `canRead` (D-075 §3.7).
