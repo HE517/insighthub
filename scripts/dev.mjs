@@ -28,6 +28,14 @@ const env = {
   PORT: String(serverPort),
   INSIGHTHUB_WEB_ORIGIN: origin,
   CORS_ORIGIN: origin,
+  // `apps/web/.env.local` may hold a real Clerk publishable key. The development server runs
+  // `AUTH_MODE=demo` (no Clerk secret), so loading Clerk in the browser would show a sign-in
+  // gate or a Clerk session the server cannot map, while every API call gets 401. Process env
+  // wins over Vite's `.env` files; an explicit empty value keeps normal dev on the demo path.
+  // Set INSIGHTHUB_DEV_CLERK=1 to restore the owner's Clerk key when the server is configured
+  // for Clerk as well.
+  VITE_CLERK_PUBLISHABLE_KEY:
+    process.env.INSIGHTHUB_DEV_CLERK === '1' ? process.env.VITE_CLERK_PUBLISHABLE_KEY ?? '' : '',
 };
 
 console.log('');
