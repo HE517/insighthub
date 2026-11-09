@@ -2031,3 +2031,83 @@ body {
     max-height: 220px;
   }
 }
+
+/* Demo identity menu (development only) + signed-out gate. */
+.identity__menu {
+  position: relative;
+  margin-top: 2px;
+}
+.identity__menu-trigger {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 9.5px;
+  list-style: none;
+}
+.identity__menu-trigger::-webkit-details-marker { display: none; }
+.identity__menu-trigger::after { content: " ▾"; }
+.identity__menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--top);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
+}
+.identity__menu-item {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.identity__menu-item:hover { background: var(--accentSoft); }
+.identity__menu-item:disabled { opacity: .55; cursor: default; }
+.identity__menu-item--danger { margin-top: 4px; color: var(--danger, #b42318); }
+.identity__menu-error { padding: 6px 10px; color: var(--danger, #b42318); font-size: 11px; }
+
+.demo-signin {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--paper);
+}
+.demo-signin__card {
+  width: min(460px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--top);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 8%);
+}
+.demo-signin__title { margin: 0 0 8px; font-family: Georgia, 'Songti SC', serif; font-size: 24px; }
+.demo-signin__lead { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+.demo-signin__choices { display: flex; flex-direction: column; gap: 10px; }
+.demo-signin__choice {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.demo-signin__choice:hover { border-color: var(--accent); }
+.demo-signin__choice span { color: var(--muted); font-size: 12px; }
+.demo-signin__choice:disabled { opacity: .6; cursor: default; }
+.demo-signin__error { margin: 16px 0 0; color: var(--danger, #b42318); font-size: 12px; }
