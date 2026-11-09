@@ -67,6 +67,7 @@ import { currentAppMode } from './session/clerkMode.js';
 import {
   DEMO_IDENTITY_CHOICES,
   isDemoSignedOut,
+  selectedDemoIdentity,
   signInDemo,
   signOutDemo,
 } from './session/demoAuth.js';
@@ -115,7 +116,7 @@ function DemoApp() {
 }
 
 function DemoWorkspace() {
-  const serverSession = useServerSession();
+  const serverSession = useServerSession(selectedDemoIdentity());
   const identity = serverSession.status === 'ready' ? serverSession.identity : null;
 
   return (

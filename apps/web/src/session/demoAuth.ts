@@ -13,6 +13,7 @@
 import { apiUrl } from '../api.js';
 
 const SIGNED_OUT_KEY = 'insighthub.demo.signedOut';
+const USER_ID_KEY = 'insighthub.demo.userId';
 
 export interface DemoIdentityChoice {
   readonly id: string;
@@ -44,6 +45,29 @@ export function setDemoSignedOut(value: boolean): void {
   }
 }
 
+/**
+ * The roster identity the user picked. The page bootstrap must use this; otherwise every reload
+ * claims the default `demo-ada` again and silently undoes a switch to Grace/Linus.
+ */
+export function selectedDemoIdentity(): string {
+  try {
+    const stored = window.localStorage.getItem(USER_ID_KEY);
+    return DEMO_IDENTITY_CHOICES.some((choice) => choice.id === stored)
+      ? (stored as string)
+      : 'demo-ada';
+  } catch {
+    return 'demo-ada';
+  }
+}
+
+export function setSelectedDemoIdentity(demoUserId: string): void {
+  try {
+    window.localStorage.setItem(USER_ID_KEY, demoUserId);
+  } catch {
+    /* the explicit id is still used for this request */
+  }
+}
+
 /** Claim one roster identity and reload; returns false when the server refused. */
 export async function signInDemo(demoUserId: string): Promise<boolean> {
   try {
@@ -54,6 +78,7 @@ export async function signInDemo(demoUserId: string): Promise<boolean> {
       body: JSON.stringify({ demoUserId }),
     });
     if (!response.ok) return false;
+    setSelectedDemoIdentity(demoUserId);
     setDemoSignedOut(false);
     window.location.reload();
     return true;
