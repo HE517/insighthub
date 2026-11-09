@@ -155,10 +155,10 @@ export function register(runner) {
       assertEqual(buttonsAtStart.redo.present, true, 'the Redo button must be rendered');
       assertEqual(
         buttonsAtStart.undo.ariaLabel,
-        'Undo',
-        'the accessible name is the contract (no data-testid was added)',
+        '撤销',
+        'the accessible name is the contract (no data-testid was added) and it is Chinese',
       );
-      assertEqual(buttonsAtStart.redo.ariaLabel, 'Redo', 'the accessible name is the contract');
+      assertEqual(buttonsAtStart.redo.ariaLabel, '重做', 'the accessible name is the contract');
       assertEqual(
         buttonsAtStart.undo.disabled,
         true,
@@ -183,7 +183,7 @@ export function register(runner) {
       );
       const undoStateAfterTyping = await waitForUndoState(
         page,
-        (state) => state.includes('undo: available'),
+        (state) => state.includes('撤销：可用'),
         { label: 'canUndo to become true' },
       );
       const buttonsAfterTyping = await readHistoryButtons(page);
@@ -194,7 +194,7 @@ export function register(runner) {
         undoState: undoStateAfterTyping,
         buttons: buttonsAfterTyping,
       });
-      assertIncludes(undoStateAfterTyping, 'undo: available', 'a local edit must be undoable');
+      assertIncludes(undoStateAfterTyping, '撤销：可用', 'a local edit must be undoable');
       assertEqual(buttonsAfterTyping.undo.disabled, false, 'Undo must be enabled after a local edit');
 
       /* ---------- Undo: a real click, then the durable truth ---------- */
@@ -210,7 +210,7 @@ export function register(runner) {
       );
       const undoStateAfterUndo = await waitForUndoState(
         page,
-        (state) => state.includes('redo: available'),
+        (state) => state.includes('重做：可用'),
         { label: 'canRedo to become true' },
       );
       const buttonsAfterUndo = await readHistoryButtons(page);
@@ -317,7 +317,7 @@ export function register(runner) {
           durableHasSeed: durableBefore?.includes(seed) ?? null,
         });
         assertEqual(gateBefore.viewReadOnly, true, 'a viewer’s live EditorState must be read-only');
-        assertIncludes(undoStateBefore ?? '', 'undo: none', 'a viewer has no local undo history');
+        assertIncludes(undoStateBefore ?? '', '撤销：无', 'a viewer has no local undo history');
 
         /* ---------- a hostile/incorrect caller clicks anyway ---------- */
         const undoClick = await clickHistoryButtonProgrammatically(page, 'undo');
@@ -401,7 +401,11 @@ export function register(runner) {
       const emptyState = await readUndoState(page);
       const emptyButtons = await readHistoryButtons(page);
       ctx.note('empty document, role unknown', { undoState: emptyState, buttons: emptyButtons });
-      assertEqual(emptyState, 'undo: none · redo: none', 'an empty document has no local history');
+      assertEqual(
+        emptyState,
+        '撤销：无 · 重做：无',
+        'an empty document has no local history (Chinese `撤销/重做` vocabulary)',
+      );
       assertEqual(
         emptyButtons.undo.disabled,
         true,
@@ -413,7 +417,7 @@ export function register(runner) {
       await waitForEditorText(page, (text) => text.includes(typed), {
         label: 'typing to be accepted while the role is unknown',
       });
-      const typedState = await waitForUndoState(page, (state) => state.includes('undo: available'), {
+      const typedState = await waitForUndoState(page, (state) => state.includes('撤销：可用'), {
         label: 'canUndo to become true after typing',
       });
       const typedButtons = await readHistoryButtons(page);
@@ -422,7 +426,7 @@ export function register(runner) {
         buttons: typedButtons,
         roleTag: (await readEditorGate(page)).roleTag,
       });
-      assertIncludes(typedState, 'undo: available', 'the local edit must be undoable');
+      assertIncludes(typedState, '撤销：可用', 'the local edit must be undoable');
       assertEqual(
         typedButtons.undo.disabled,
         false,
@@ -441,7 +445,7 @@ export function register(runner) {
       });
       const afterUndoState = await waitForUndoState(
         page,
-        (state) => state.includes('redo: available'),
+        (state) => state.includes('重做：可用'),
         { label: 'canRedo after the undo' },
       );
       const undoClickButtons = await readHistoryButtons(page);
@@ -451,7 +455,7 @@ export function register(runner) {
         buttons: undoClickButtons,
       });
       assert(!afterUndo.text.includes(typed), 'the Undo click must revert the local insert');
-      assertIncludes(afterUndoState, 'redo: available', 'the undo must be redoable');
+      assertIncludes(afterUndoState, '重做：可用', 'the undo must be redoable');
 
       await page.click(SELECTORS.redoButton);
       const afterRedo = await waitForEditorText(page, (text) => text.includes(typed), {
@@ -509,7 +513,7 @@ export function register(runner) {
         );
 
         const ownerDom = await page.evaluate(() => {
-          const input = document.querySelector('input[aria-label="Document id"]');
+          const input = document.querySelector('input[aria-label="文档 ID"]');
           const active = document.querySelector('[data-testid="active-document"]');
           const statuses = [...document.querySelectorAll('[data-testid="connection-status"]')];
           const list = document.querySelector('[data-testid="collaborator-list"]');
@@ -535,7 +539,7 @@ export function register(runner) {
         assertEqual(
           ownerDom.documentInput?.value,
           documentId,
-          'input[aria-label="Document id"] must hold the active document id',
+          'input[aria-label="文档 ID"] must hold the active document id',
         );
         assertEqual(
           ownerDom.activeDocumentText,
@@ -562,8 +566,9 @@ export function register(runner) {
           'a collaborator name must be real DOM text (innerText), not a title attribute or CSS content',
         );
         assert(
-          /^undo: (available|none) · redo: (available|none)$/.test(ownerDom.undoStateText ?? ''),
-          `[data-testid="undo-state"] must keep its "undo: … · redo: …" vocabulary, got ${JSON.stringify(ownerDom.undoStateText)}`,
+          /^撤销：(可用|无) · 重做：(可用|无)$/.test(ownerDom.undoStateText ?? ''),
+          `[data-testid="undo-state"] must keep its Chinese "撤销：… · 重做：…" vocabulary, ` +
+            `got ${JSON.stringify(ownerDom.undoStateText)}`,
         );
         assertEqual(ownerDom.editorHostPresent, true, '[data-testid="markdown-editor"] must exist');
         assertEqual(ownerDom.cmEditorCount, 1, 'exactly one .cm-editor may be mounted');

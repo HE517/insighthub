@@ -73,6 +73,7 @@ import {
   activeDocumentId,
   readApiCalls,
   readEditorGate,
+  roleChipText,
   sleep,
   waitForConnectionStatus,
 } from '../lib/app.mjs';
@@ -91,8 +92,8 @@ const AI = {
   newDocumentError: '[data-testid="new-document-error"]',
 };
 
-/** The control's idle label (`newDocumentCopy.ts#NEW_DOCUMENT_LABEL`). */
-const NEW_DOCUMENT_LABEL = 'New document';
+/** The control's idle label (`newDocumentCopy.ts#NEW_DOCUMENT_LABEL`, Chinese). */
+const NEW_DOCUMENT_LABEL = '新建文档';
 
 /** The server's default title (`apps/server/src/persistence/document-creation.ts`). */
 const UNTITLED_DOCUMENT = 'Untitled document';
@@ -326,7 +327,7 @@ async function waitForRoleAndEditable(page, expectedRole, { timeoutMs = 30_000 }
     last = await readEditorGate(page);
     if (
       last.editorPresent &&
-      last.roleTag === `role: ${expectedRole}` &&
+      last.roleTag === roleChipText(expectedRole) &&
       last.viewReadOnly === false &&
       last.contentEditable === 'true'
     ) {
@@ -334,7 +335,7 @@ async function waitForRoleAndEditable(page, expectedRole, { timeoutMs = 30_000 }
     }
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out after ${timeoutMs}ms waiting for role: ${expectedRole} and an editable ` +
+        `timed out after ${timeoutMs}ms waiting for 角色：${expectedRole} and an editable ` +
           `editor; last gate: ${JSON.stringify(last)}`,
       );
     }
@@ -509,7 +510,7 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'b125/1-create-document-switches',
-    'clicking New document in a real browser POSTs /api/documents (201), switches active-document to the server-generated UUID, closes the panel, joins the new room as owner with an editable editor, and the reopened directory marks that one row current as Untitled document',
+    'clicking 新建文档 in a real browser POSTs /api/documents (201), switches active-document to the server-generated UUID, closes the panel, joins the new room as owner with an editable editor, and the reopened directory marks that one row current as Untitled document',
     async (ctx) => {
       const originalId = `a6-b125-create-${marker('doc')}`;
       const page = await ctx.newAppPage({ documentId: originalId });
@@ -521,16 +522,23 @@ export function register(runner) {
       const before = await waitForDirectory(page, (state) => state.state === 'ready', {
         label: 'the directory to reach data-state=ready',
       });
+      const beforePanel = await readPanel(page);
       ctx.note('directory before creating', {
         documentId: originalId,
         state: before.state,
         itemCount: before.itemCount,
         ids: before.ids,
         currentIds: before.currentIds,
+        newDocument: beforePanel.newDocument,
       });
       assert(
         before.itemCount >= 1,
         `the directory must list at least the active document (got ${before.itemCount}: ${JSON.stringify(before.ids)})`,
+      );
+      assertEqual(
+        beforePanel.newDocument.label,
+        NEW_DOCUMENT_LABEL,
+        'the creation control must render its Chinese idle label before the click',
       );
       assertEqual(
         before.currentIds.length,
@@ -724,8 +732,8 @@ export function register(runner) {
         );
         assertIncludes(
           failed.createError.text,
-          'The request did not complete.',
-          'the visible copy must say the request did not complete',
+          '网络已断开，请求未完成。',
+          'the visible copy must say the request did not complete (Chinese network failure)',
         );
 
         offlineCalls = (await postDocumentCalls(page)).slice(callsBefore);

@@ -52,6 +52,7 @@ import {
   readEditorGate,
   readIndexedDb,
   readUndoState,
+  roleChipText,
   screenshot,
   setDocumentId,
   setOffline,
@@ -201,7 +202,7 @@ export function register(runner) {
         });
         assertEqual(
           lag.roleTag,
-          'role: editor',
+          roleChipText('editor'),
           'the UI must still show the previous role until the next successful join (D-066 §5)',
         );
         assertEqual(
@@ -390,7 +391,7 @@ export function register(runner) {
         // had to cover for a viewer. For an editor it must still work (R13).
         const undoBefore = await readUndoState(page);
         ctx.note('undo state after typing', undoBefore);
-        assertIncludes(undoBefore ?? '', 'available', 'a local edit must be undoable');
+        assertIncludes(undoBefore ?? '', '撤销：可用', 'a local edit must be undoable');
         await pressInEditor(page, 'z', { modifiers: 2 });
         await waitForDurableText(ctx, documentId, (text) => !text.includes(typed), {
           label: 'the local undo to revert the insert',

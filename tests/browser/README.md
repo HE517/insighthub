@@ -17,7 +17,7 @@ It covers two milestones:
 | M2 Phase 2 **UI gate (F1)** | `suite/21-m2-f1-role-ui.mjs` | `room-joined.role → session.getRole() → capabilityGate → editor` in a real browser: read-only viewer + visible notice, no remount on a role change, `null` never locks the editor, and **the UI is not the security boundary** |
 | M3 redesign (UI evidence) | `suite/30-m3-ui-evidence.mjs` | the new Undo/Redo buttons (owner/editor reversible through the **durable** store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity-remount wait |
 | M3 AI proposal loop | `suite/31-m3-ai.mjs` | proposal → Diff Preview → Accept/Reject in the real panel: nothing changes before Accept, Accept is one Yjs transaction a peer sees, Undo reverts only the AI edit, Reject writes nothing, `revision` vs `text-mismatch` staleness, a viewer can review but not accept, an owner’s offline Accept reconnects **once**, and a viewer’s offline Accept stays a local-only divergence |
-| M4 B12.5 document creation | `suite/32b-m4-b125.mjs` | the shipped `New document` entry in a real browser: one click POSTs `/api/documents` (201), switches to the server-generated UUID, closes the panel, joins the new room as `owner` with an editable editor and marks exactly that row `aria-current`; an offline click shows the typed failure and changes nothing, and the same button succeeds after recovery; two clicks in one task still create **one** document |
+| M4 B12.5 document creation | `suite/32b-m4-b125.mjs` | the shipped `新建文档` entry in a real browser: one click POSTs `/api/documents` (201), switches to the server-generated UUID, closes the panel, joins the new room as `owner` with an editable editor and marks exactly that row `aria-current`; an offline click shows the typed failure and changes nothing, and the same button succeeds after recovery; two clicks in one task still create **one** document |
 
 ## Why this suite does not use Playwright
 
@@ -70,17 +70,41 @@ and is never skipped. Results land in `artifacts/results.md` and
 The suite runs **serially** and owns ports `5173`/`3101`: it refuses to start when
 either is occupied, and its postflight prints whether both were released again.
 
+### Unified-launcher / Origin / Chinese copy evidence
+
+`ui-cn-evidence.mjs` is a separate, single-run evidence script (not a `run.mjs` scenario): it
+starts the **shipped launcher** (`node scripts/dev.mjs`, i.e. `pnpm dev`) on web `5190` /
+backend `3012`, opens the URL it prints in a real Chromium, and records:
+
+- the normal path on that URL (demo session, directory, `新建文档` 201, WS `connected`, AI
+  proposal/apply/stale, a real reconnect and a post-reconnect durable write);
+- a foreign Origin (`http://evil.example`) refused with `403 { error: "origin_not_allowed" }` for
+  HTTP **and** the WebSocket upgrade, while the launcher's own Origin is accepted;
+- a second Vite origin (`5191`) whose browser write renders the typed 403 UI copy;
+- a revoked session (`401`), permission non-disclosure (`404` body identical to an unknown id),
+  HTTP offline (CDP), WS offline (the suite's real socket-refusal control), `zzz` → the Chinese
+  `unknown-instruction` state, and the viewer read-only notice.
+
+All output (screenshots, `evidence.json`, `EVIDENCE.md`, child logs) goes to
+`tests/browser/artifacts/ui-cn/` — the task that added it forbids editing `docs/`.
+
+```bash
+node tests/browser/ui-cn-evidence.mjs
+```
+
+It refuses to start when `5190`/`3012`/`5191` are occupied, kills the launcher process tree, and
+reports whether every port was released.
+
 ### Remote AI mode (M3 Round 2)
 
 The default run measures the **frozen default configuration**: `AI_PROVIDER` is not set, so
 `POST /api/ai/suggest` answers `503`, and `VITE_AI_PROVIDER` is not set, so the client uses the
-deterministic local provider. That is what the 81 default scenarios assert, so a globally remote
-Vite would invalidate them.
+deterministic local provider. That is what the 82 default scenarios assert, so a globally remote Vite would invalidate them.
 
 The remote evidence is a separate group that exists only when asked for:
 
 ```bash
-INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 86 = 81 + 5
+INSIGHTHUB_E2E_AI_MODE=remote node tests/browser/run.mjs    # 87 = 82 + 5
 ```
 
 The suite always runs the **demo** web path: DevStack sets VITE_CLERK_PUBLISHABLE_KEY='' (process env wins over .env.local in Vite), so a real Clerk key in pps/web/.env.local cannot put the browser into the sign-in gate and break every scenario. Clerk-mode browser evidence belongs to the staging smoke.
@@ -179,7 +203,7 @@ The isolation is **observed**, not just constructed — a scenario that merely c
 | two cookie jars | `Network.getCookies` per page: one `insighthub_session` each, `HttpOnly`, **different token values** (only the comparison is recorded, never a token) |
 | two storage partitions | a `localStorage` key written in A is `null` in B |
 | per-context replica | `readIndexedDb` per page lists the replica that page itself opened. The **name** is the same in both contexts, so it proves nothing on its own — the partition itself is what the `localStorage` row above measures |
-| two identities | `__qa.demoIdentity` + `[data-testid="session-identity"]` + the `role: …` chip (`editor` for A, `owner` for B, both from fixture membership rows) |
+| two identities | `__qa.demoIdentity` + `[data-testid="session-identity"]` + the `角色：…` chip (`角色：编辑者` for A, `角色：所有者` for B, both from fixture membership rows; the wire value stays `editor`/`owner`) |
 
 ### State-vector digests
 
@@ -326,8 +350,9 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `30-m3-ui-evidence.mjs` | M3: the new Undo/Redo buttons (owner/editor reversible through the durable store, viewer inert, unknown role follows `canUndo`/`canRedo` only), the DOM contract the suite depends on, and the regression test for the one-time identity remount wait |
 | `31-m3-ai.mjs` | M3: the AI proposal loop end to end — Diff Preview without a write, `ai`-origin Accept (editor + durable + a peer), Undo/Redo isolation, Reject, both stale reasons, the viewer read-only gate, and both offline-Accept branches (owner convergence, viewer local-only divergence) |
 | `32-design-fidelity.mjs` | M4 UI fidelity (`ui/1..8`): logo hover transform, switcher focus ring, avatar hover/tooltip/Tab focus, undo button states (including the disabled viewer state), connection pill pulse, editor focus-within, reduced-motion (0 s transitions, pulse off), and notice copy that never claims a false "saved" |
-| `32b-m4-b125.mjs` | M4 B12.5 `New document` (D-084 #2/#6/#7) in the **default** configuration: one click → real `POST /api/documents` (201) → switch to the server UUID → panel closed → `owner` room + editable editor → exactly one `aria-current` row; an offline click shows `new-document-error[data-create-error="network"]` with nothing changed and succeeds after recovery; two clicks in one task create one document. It sorts before `33` because that group changes the stack's configuration and must stay last |
+| `32b-m4-b125.mjs` | M4 B12.5 `新建文档` (D-084 #2/#6/#7) in the **default** configuration: one click → real `POST /api/documents` (201) → switch to the server UUID → panel closed → `owner` room + editable editor → exactly one `aria-current` row; an offline click shows `new-document-error[data-create-error="network"]` with nothing changed and succeeds after recovery; two clicks in one task create one document. It sorts before `33` because that group changes the stack's configuration and must stay last |
 | `35-ui2-directory-race.mjs` | UI-2 closeout: `POST /api/documents` held at CDP while the same document reconnects still creates exactly one document and switches (the directory refresh must not abort the creation); a late creation answer after the user switches away cannot navigate back; opening/closing the AI rail and resizing 1024→1440 keep one `EditorView`, the same selection and undo availability, and close returns focus to `ai-open`. |
+| `36-ui-cn-copy.mjs` | Simplified-Chinese copy contract: connection/offline labels, collaborator empty state, `角色：…` chip, `撤销/重做` accessible names and `撤销：… · 重做：…` state, `文档 ID`, directory labels and `新建文档`, the AI panel's instruction/preset/generate/accept/reject/stale/empty copy, and the viewer `你的角色为只读` notice — while `data-testid`, `data-intent`, `data-phase`, `data-status` and the wire role stay unchanged. |
 | 34-markdown-preview.mjs | Markdown Preview V1 (D-087): switching `编辑`/`预览` keeps exactly one live `EditorView` (same DOM node, mount counters, text and keyboard selection); a rich document renders semantic DOM; a remote edit made **while preview is visible** appears only after the 400 ms debounce; `<script>`/`<img onerror>`/`<iframe>`/`javascript:` never become nodes/attributes and safe links keep `rel="noopener noreferrer"`; a 20k-line document seeded through the production store shows identical `Y.Text`/state-vector/durable digests after previewing, and preview adds no Redux slice or body mirror. The 100k-line browser attempt is **not** claimed: it did not reach `data-state="ready"` within the 420 s scenario budget (2026-10-26). |
 | 33-m3-remote.mjs | M3 Round 2, only with `INSIGHTHUB_E2E_AI_MODE=remote`: the **remote** chain in a real browser — no local chips, a real `POST /api/ai/suggest` (200 with the stub, 503 without a provider), client-minted anchors, a preview that writes nothing, the uppercase Accept through Yjs with Undo/Redo — plus the read-only AI directory online, offline (CDP network) and back |
 
@@ -343,7 +368,7 @@ requires against the unmodified path, tag it `knownDefect: 'P0-n'`, and delete t
 | `p2/5-session-revocation-is-everywhere` | P2-5 | `DELETE /api/session` → `401` on HTTP and on the WS upgrade, through the proxy and directly; the page's own revocation; the already-open socket measured |
 | `p2/9-token-not-exposed-to-js` | P2-9 | `Network.getCookies` (what the browser holds, `HttpOnly`) against `document.cookie`, `localStorage`, `sessionStorage`, `/api/session`, the bootstrap body and the server log |
 | `p2/S-session-scope-after-restart` | limitation | records that a restarted server invalidates the session **and** that the page does not re-bootstrap; then proves a renewed session restores writing |
-| `f1/1-viewer-is-read-only-and-not-remounted` | F1 (1) | a viewer page: `contenteditable="false"`, `EditorState.readOnly`, a visible `read-only-notice` whose copy says "read-only for your role" and contains none of `saved` / `saving` / `immediately` / `instant`, a real keystroke that changes nothing and emits no SYNC frame — and the same `.cm-editor` element (marker + `EditorView` identity + mount counters) before and after the demotion, through the reconnect |
+| `f1/1-viewer-is-read-only-and-not-remounted` | F1 (1) | a viewer page: `contenteditable="false"`, `EditorState.readOnly`, a visible `read-only-notice` whose headline is `你的角色为只读` and detail names the Chinese role label, and which contains none of `saved` / `saving` / `immediately` / `instant` / `已保存` / `已同步` / `立即`, a real keystroke that changes nothing and emits no SYNC frame — and the same `.cm-editor` element (marker + `EditorView` identity + mount counters) before and after the demotion, through the reconnect |
 | `f1/2-owner-and-editor-have-no-regression` | F1 (2) | owner/editor: editable UI, typing persists, `Mod-z` still reverts through the session's `Y.UndoManager`, a remote edit merges, and a document switch still works (and stays isolated) |
 | `f1/3-unknown-role-does-not-lock-the-editor` | F1 (3) | `getRole() === null` in a real browser: offline from before the first frame, no `room-joined`, no membership row — the editor is editable, a real keystroke is accepted, a Yjs update appears in the local replica, and after an explicitly granted membership the server durably holds that text |
 | `f1/4-ui-gate-is-not-a-security-boundary` | F1 (4) | the page is fed a schema-valid forged `room-joined(role: 'owner')`: the UI becomes editable and the notice disappears — and the write it then produces (keystroke **and** an explicit SYNC frame) is answered `FORBIDDEN`, with nothing applied, persisted or broadcast, no reconnect, and the socket still receiving |
@@ -374,7 +399,7 @@ covering more than it does.
 | `m3r/4-ai-directory-offline` | CDP `Network.emulateNetworkConditions { offline: true }` + Refresh → `ai-directory[data-state="error"]`, `ai-directory-error[data-directory-error="network"]`, **zero** `ai-directory-item` elements; restoring the network + Refresh → `data-state="ready"` with rows, and the page recorded a real `200` |
 | `m3r/5-collapsed-caret-is-not-an-empty-proposal` | typing leaves a **collapsed** caret (no selection); Generate still sends no `selection`, so the stub sees the whole document and the proposal's diff is non-empty; Accept writes the uppercase text. Regression for A6's round-2 finding (an empty diff the user could Accept for no effect) |
 
-### M4 B12.5 — `New document` (`b125/*`, in the **default** suite)
+### M4 B12.5 — `新建文档` (`b125/*`, in the **default** suite)
 
 `docs/DECISIONS.md` D-084 froze self-service creation as the product's first usable entry point:
 the id/title are server facts (#2), the creator becomes `owner` through the existing membership

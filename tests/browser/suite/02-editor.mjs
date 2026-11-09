@@ -262,7 +262,7 @@ export function register(runner) {
       ctx.note('editor after Mod-z', JSON.stringify(text));
 
       assert(
-        afterTyping !== null && afterTyping.includes('available'),
+        afterTyping !== null && afterTyping.includes('撤销：可用'),
         'a local edit must become undoable (DEFECT P0-2: the edit never enters Y.Text)',
       );
     },

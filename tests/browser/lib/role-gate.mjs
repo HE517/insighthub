@@ -28,6 +28,8 @@ import {
   editorState,
   readEditorGate,
   READ_ONLY_NOTICE_BANNED_WORDS,
+  ROLE_LABELS,
+  roleChipText,
   sendSyncUpdateFromPage,
   sleep,
   typeInEditor,
@@ -60,8 +62,9 @@ export async function syncUpdateFrameBase64(text) {
  * 2. `EditorState.readOnly` is set on the **live** view — the facet CodeMirror's own commands and
  *    input handlers consult;
  * 3. the explanation is **visible**: laid out with a real box, not merely present in the DOM;
- * 4. the copy says *why*, and never implies a save or an instant role change
- *    (`docs/CONTRACTS.md` §17.9, `docs/DECISIONS.md` D-064 §1, D-066 §5).
+ * 4. the copy is Chinese, says *why*, names the same role the server reported, and never implies
+ *    a save or an instant role change (`docs/CONTRACTS.md` §17.9, `docs/DECISIONS.md` D-064 §1,
+ *    D-066 §5).
  */
 export async function assertUiReadOnly(ctx, page, { role, label = role }) {
   const gate = await readEditorGate(page);
@@ -75,8 +78,8 @@ export async function assertUiReadOnly(ctx, page, { role, label = role }) {
   assert(gate.editorPresent, `${label}: the editor must be mounted`);
   assertEqual(
     gate.roleTag,
-    `role: ${role}`,
-    `${label}: the UI must show the role the server reported`,
+    roleChipText(role),
+    `${label}: the UI must show the role the server reported (Chinese label, wire value unchanged)`,
   );
   assertEqual(
     gate.contentEditable,
@@ -97,10 +100,19 @@ export async function assertUiReadOnly(ctx, page, { role, label = role }) {
     `${label}: the notice must carry its stable test id`,
   );
   const copy = (gate.notice.text ?? '').toLowerCase();
-  assertIncludes(copy, 'read-only for your role', `${label}: the notice must say why (§17.9)`);
+  assertIncludes(
+    copy,
+    '你的角色为只读',
+    `${label}: the notice must say why in the frozen Chinese headline (§17.9)`,
+  );
+  assertIncludes(
+    copy,
+    ROLE_LABELS[role],
+    `${label}: the notice detail must name the exact role label the header shows`,
+  );
   for (const word of READ_ONLY_NOTICE_BANNED_WORDS) {
     assert(
-      !copy.includes(word),
+      !copy.includes(word.toLowerCase()),
       `${label}: the notice must not contain "${word}" — nothing was saved and no role change is ` +
         'instant (D-064 §1, D-066 §5); notice was: ' +
         JSON.stringify(gate.notice.text),
@@ -125,7 +137,7 @@ export async function assertUiEditable(ctx, page, { role, label = role }) {
     roleTag: gate.roleTag,
     noticePresent: gate.notice.present,
   });
-  assertEqual(gate.roleTag, `role: ${role}`, `${label}: the UI must show the reported role`);
+  assertEqual(gate.roleTag, roleChipText(role), `${label}: the UI must show the reported role`);
   assertEqual(gate.contentEditable, 'true', `${label}: the content element must stay editable`);
   assertEqual(gate.viewReadOnly, false, `${label}: EditorState.readOnly must not be set`);
   assertEqual(
@@ -137,18 +149,19 @@ export async function assertUiEditable(ctx, page, { role, label = role }) {
 }
 
 /**
- * Wait until the UI renders `role: <role>`.
+ * Wait until the UI renders `角色：<label>`.
  *
  * A poll with a timeout, deliberately: the client re-reads the role only when a `room-joined`
  * arrives (§17.9 rule 1), so "the UI will flip" is a future event, never an immediate one.
  */
 export async function waitForRoleTag(ctx, page, role, { timeoutMs = 45_000, label } = {}) {
   const deadline = Date.now() + timeoutMs;
+  const expected = roleChipText(role);
   let last = null;
   for (;;) {
     const gate = await readEditorGate(page);
     last = gate.roleTag;
-    if (gate.roleTag === `role: ${role}`) return gate;
+    if (gate.roleTag === expected) return gate;
     if (Date.now() >= deadline) {
       throw new Error(
         `${label ?? 'the UI'} never rendered role ${JSON.stringify(role)} within ${timeoutMs}ms ` +

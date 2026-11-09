@@ -218,9 +218,12 @@ export function register(runner) {
           String(clientId),
           "the selection must be attributed to the remote peer's client id",
         );
-        // The local caret belongs to the editor, never to the remote overlay.
+        // The local caret belongs to the editor, never to the remote overlay. The demo fallback
+        // display name is `你（<tab>）` (`apps/web/src/user.ts`), so no remote label may be a
+        // local-identity label. The old English spelling is kept in the assertion too: a
+        // regression to "You (…)" is the same local caret leaking into the remote overlay.
         assert(
-          !cursors.labels.includes('You'),
+          !cursors.labels.some((label) => label.includes('你（') || label.includes('You (')),
           'the local cursor must never be rendered as a remote one',
         );
       } finally {

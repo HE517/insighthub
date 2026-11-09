@@ -35,7 +35,7 @@ export const SELECTORS = {
   collaboratorList: '[data-testid="collaborator-list"]',
   activeDocument: '[data-testid="active-document"]',
   undoState: '[data-testid="undo-state"]',
-  documentInput: 'input[aria-label="Document id"]',
+  documentInput: 'input[aria-label="文档 ID"]',
   initializing: '[data-testid="session-initializing"]',
   failed: '[data-testid="session-failed"]',
   remoteCaret: '[data-insighthub-cursor="caret"]',
@@ -46,11 +46,67 @@ export const SELECTORS = {
   sessionIdentity: '[data-testid="session-identity"]',
   /**
    * The header history buttons (M3). The accessible name is the contract — A2's brief says not
-   * to add a `data-testid` for them — and `DocumentHeader.tsx` sets `aria-label="Undo"` / `"Redo"`.
+   * to add a `data-testid` for them — and the localized `DocumentHeader.tsx` sets
+   * `aria-label="撤销"` / `"重做"`. The **action** is unchanged; only the human-readable label is
+   * Chinese (A2 UI-copy unification), so a regression back to English fails every history
+   * scenario instead of silently matching a stale selector.
    */
-  undoButton: 'button[aria-label="Undo"]',
-  redoButton: 'button[aria-label="Redo"]',
+  undoButton: 'button[aria-label="撤销"]',
+  redoButton: 'button[aria-label="重做"]',
 };
+
+/**
+ * The Chinese **display labels** for the shared `DocumentRole` values.
+ *
+ * The role itself is protocol data and is never translated: `session.getRole()`,
+ * `room-joined.role` and every `data-*` attribute still carry `owner` / `editor` / `commenter` /
+ * `viewer`. Only the header chip's text is localized by `features/permissions/roleLabels.ts`.
+ * The map is duplicated here on purpose (the browser test cannot import the React bundle): if
+ * the product's label for a role changes, the assertions below must change with it.
+ */
+export const ROLE_LABELS = {
+  owner: '所有者',
+  editor: '编辑者',
+  commenter: '评论者',
+  viewer: '只读查看者',
+};
+
+/**
+ * The exact role-chip text the header renders: `角色：<label>` (full-width colon, no space).
+ *
+ * `readEditorGate().roleTag` returns this string, so every role assertion compares against the
+ * same helper rather than re-spelling the label in five suites.
+ */
+export function roleChipText(role) {
+  const label = ROLE_LABELS[role];
+  if (label === undefined) throw new Error(`no Chinese role label for ${JSON.stringify(role)}`);
+  return `角色：${label}`;
+}
+
+/**
+ * The exact `[data-testid="undo-state"]` vocabulary (`DocumentWorkspace.tsx`).
+ *
+ * The visible affordance is the two icon buttons; this visually-hidden line mirrors
+ * `getUndoState()` for assistive technology and for the browser suite. It stays a **state
+ * description** (`可用` / `无`), not a save claim: nothing here may imply that a document was
+ * persisted, because availability is local undo history only.
+ */
+export const UNDO_STATE = {
+  undoAvailable: '撤销：可用',
+  undoNone: '撤销：无',
+  redoAvailable: '重做：可用',
+  redoNone: '重做：无',
+  separator: ' · ',
+};
+
+/** Compose the exact `undo-state` text from the two booleans. */
+export function undoStateText({ canUndo, canRedo }) {
+  return (
+    `${canUndo ? UNDO_STATE.undoAvailable : UNDO_STATE.undoNone}` +
+    `${UNDO_STATE.separator}` +
+    `${canRedo ? UNDO_STATE.redoAvailable : UNDO_STATE.redoNone}`
+  );
+}
 
 /**
  * Words that must never appear in the read-only notice
@@ -58,9 +114,21 @@ export const SELECTORS = {
  *
  * The notice may explain *why* typing does nothing. It may not imply that anything was
  * saved, and it may not claim that a role change reached the UI immediately — the client
- * only learns a role from `room-joined` (D-066 §5).
+ * only learns a role from `room-joined` (D-066 §5). Both the English and the Chinese
+ * spellings are banned: the copy is Chinese now, but a regression to the old wording is the
+ * same false claim and must fail too.
  */
-export const READ_ONLY_NOTICE_BANNED_WORDS = ['saved', 'saving', 'immediately', 'instant'];
+export const READ_ONLY_NOTICE_BANNED_WORDS = [
+  'saved',
+  'saving',
+  'immediately',
+  'instant',
+  '已保存',
+  '保存中',
+  '已同步',
+  '立即',
+  '即时',
+];
 
 /** Load the instrumentation source once, so it can be injected on every page. */
 let instrumentSource;
@@ -556,7 +624,9 @@ export async function readCollaborators(page) {
       count: rows.length,
       listPresent: list !== null,
       rows,
-      emptyState: document.body.innerText.includes('Only you are here'),
+      // `CollaboratorList` renders the Chinese empty state inside the list (`只有你在这里`);
+      // the sentence is still part of the acceptance surface, only its language changed.
+      emptyState: document.body.innerText.includes('只有你在这里'),
     };
   });
 }
@@ -654,7 +724,7 @@ export async function clickHistoryButtonProgrammatically(page, which) {
  * | `contentEditable` | the real `.cm-content` attribute | the browser refuses the keystroke (`EditorView.editable`) |
  * | `viewReadOnly` | `EditorView.state.readOnly` of the live view | CodeMirror's own gate (`EditorState.readOnly`) |
  * | `notice` | `[data-testid="read-only-notice"]` + `getBoundingClientRect` | the explanation is **visible**, not merely present |
- * | `roleTag` | the `role: …` chip in the card title | `session.getRole()`'s value as the UI renders it (`null` = no chip) |
+ * | `roleTag` | the `角色：…` chip in the card title | `session.getRole()`'s value as the UI renders it (`null` = no chip) |
  */
 export async function readEditorGate(page) {
   return page.evaluate(() => {
@@ -663,9 +733,11 @@ export async function readEditorGate(page) {
     const notice = document.querySelector('[data-testid="read-only-notice"]');
     const rect = notice === null ? null : notice.getBoundingClientRect();
     const style = notice === null ? null : getComputedStyle(notice);
-    // The header chip is the only element whose trimmed text is exactly `role: <something>`.
+    // The header chip is the only element whose trimmed text is exactly `角色：<label>`; the
+    // wire role itself (`getRole()`) never enters the DOM, which is what `data-*`/session
+    // assertions keep covering.
     const chip = [...document.querySelectorAll('span')].find((node) =>
-      /^role:\s*\S+$/.test((node.textContent ?? '').trim()),
+      /^角色：\S+$/.test((node.textContent ?? '').trim()),
     );
     const probe = window.__qa?.probe;
     const state = typeof probe?.state === 'function' ? probe.state() : null;

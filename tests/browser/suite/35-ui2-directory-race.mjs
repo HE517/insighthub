@@ -272,7 +272,7 @@ export function register(runner) {
         'the undo button state must survive the round trip',
       );
 
-      await page.click('[aria-label="Undo"]');
+      await page.click('[aria-label="撤销"]');
       const undone = await editorState(page);
       assertEqual(
         undone.text,
