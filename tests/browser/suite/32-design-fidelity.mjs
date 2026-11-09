@@ -599,7 +599,7 @@ export function register(runner) {
       assertEqual(focus.activeIsInput, true, 'document.activeElement must be the real input');
       assertEqual(focus.tag, 'INPUT', 'the focused element must be an INPUT');
       assertEqual(focus.type, 'text', 'the switcher must be a real text input');
-      assertEqual(focus.ariaLabel, 'Document id', 'the input keeps its accessible name');
+      assertEqual(focus.ariaLabel, '文档 ID', 'the input keeps its Chinese accessible name');
 
       const focused = await waitForMatrix(
         page,
@@ -776,7 +776,7 @@ export function register(runner) {
             await page.evaluate(
               () => document.querySelector('[data-testid="undo-state"]')?.textContent ?? '',
             )
-          ).includes('undo: available'),
+          ).includes('撤销：可用'),
         { label: 'Undo to become enabled', timeoutMs: 10_000 },
       );
 
@@ -832,7 +832,7 @@ export function register(runner) {
         'outline-color',
       ]);
       ctx.note('Undo after real Tab focus', { tabs: focus.tabs, active: focus.active, outline });
-      assertEqual(focus.active.ariaLabel, 'Undo', 'Tab must land on the Undo button');
+      assertEqual(focus.active.ariaLabel, '撤销', 'Tab must land on the Undo button');
       assertEqual(outline['outline-width'], '2px', 'keyboard-focused Undo must have a 2px outline');
       assertEqual(outline['outline-style'], 'solid', 'the Undo outline must be solid');
       assertEqual(outline['outline-color'], ACCENT, 'the Undo outline must use the accent colour');
@@ -1092,7 +1092,7 @@ export function register(runner) {
    * ================================================================== */
   runner.scenario(
     'ui/8-notices-readable',
-    'the viewer read-only notice is visible with the exact headline “Read-only for your role”, and no page copy claims Saved, All changes saved, Synced, immediately revoked or role updated instantly',
+    'the viewer read-only notice is visible with the exact Chinese headline “你的角色为只读”, and no page copy claims 已保存 / 全部更改已保存 / 已同步 / 立即撤销 / 角色已立即更新',
     async (ctx) => {
       const documentId = `a6-ui-notice-${marker('doc')}`;
       const page = await openViewerPage(ctx, documentId);
@@ -1115,6 +1115,11 @@ export function register(runner) {
         'Synced',
         'immediately revoked',
         'role updated instantly',
+        '已保存',
+        '全部更改已保存',
+        '已同步',
+        '立即撤销',
+        '角色已立即更新',
       ];
       const found = banned.filter((phrase) => lower.includes(phrase.toLowerCase()));
       ctx.note('read-only notice', notice);
@@ -1135,8 +1140,8 @@ export function register(runner) {
       assertEqual(notice.opacity, '1', 'the notice must be fully opaque');
       assertEqual(
         title,
-        'Read-only for your role',
-        'the notice headline must be exactly “Read-only for your role”',
+        '你的角色为只读',
+        'the notice headline must be exactly the frozen Chinese “你的角色为只读”',
       );
       for (const phrase of banned) {
         assert(

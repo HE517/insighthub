@@ -730,7 +730,11 @@ export function register(runner) {
           'ready',
           'the preview must report data-state="ready" (rendered, not merely mounted)',
         );
-        assertEqual(previewState.previewLabel, 'Markdown preview', 'the preview is labelled for assistive technology');
+        assertEqual(
+          previewState.previewLabel,
+          'Markdown 预览',
+          'the preview is labelled for assistive technology in Chinese',
+        );
         assertEqual(
           previewState.previewAriaLive,
           null,
@@ -1112,7 +1116,11 @@ export function register(runner) {
         // 3f. Images are alt text only, and no request was attempted for the tracking URL.
         assertEqual(security.counts.imageSpans, 1, 'the Markdown image must become one alt-text placeholder');
         assertEqual(security.imageAltSpans[0]?.alt, 'tracking pixel', 'the placeholder must keep the alt text');
-        assertEqual(security.imageAltSpans[0]?.text, '[image: tracking pixel]', 'the placeholder must render the alt text');
+        assertEqual(
+          security.imageAltSpans[0]?.text,
+          '[图片：tracking pixel]',
+          'the placeholder must render the alt text in Chinese',
+        );
         const requestedUrls = await page.evaluate(() =>
           performance
             .getEntriesByType('resource')

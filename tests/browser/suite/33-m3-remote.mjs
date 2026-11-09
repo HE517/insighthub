@@ -101,12 +101,12 @@ const STUB = {
 
 /** The frozen status lines this file needs (`aiProposalCopy.ts`, `aiDirectoryCopy.ts`). */
 const COPY = {
-  idle: 'No proposal yet.',
-  proposal: 'Proposal ready',
-  applied: 'Suggestion applied through a Yjs transaction',
-  notConfigured: 'The AI provider is not configured on the server.',
-  directoryUnavailable: 'The document list is unavailable.',
-  remoteIdleHint: 'describe the edit you want',
+  idle: '尚无建议。',
+  proposal: '建议已就绪',
+  applied: '建议已通过 Yjs 事务应用',
+  notConfigured: '服务器未配置 AI 提供器。',
+  directoryUnavailable: '文档列表不可用：网络已断开。',
+  remoteIdleHint: '描述你想要的修改',
 };
 
 /** A per-run marker, so a replica or a row from an earlier run can never satisfy an assertion. */
@@ -679,7 +679,7 @@ export function register(runner) {
       assertEqual(durableUndone, baseText, 'Undo must revert the AI transaction, not a snapshot');
       assertIncludes(
         (await readUndoState(page)) ?? '',
-        'redo: available',
+        '重做：可用',
         'the undone AI edit must be redoable',
       );
       ctx.note('after Undo', {

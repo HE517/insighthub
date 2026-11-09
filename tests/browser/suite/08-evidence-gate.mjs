@@ -43,6 +43,7 @@ import {
   readApiCalls,
   readIndexedDb,
   readPageDiagnostics,
+  roleChipText,
   setDocumentId,
   waitForConnectionStatus,
   waitForEditorText,
@@ -85,7 +86,7 @@ async function readWorkspaceFacts(page) {
       roleChip:
         [...document.querySelectorAll('span')]
           .map((node) => (node.textContent ?? '').trim())
-          .find((text) => /^role:\s*\S+$/.test(text)) ?? null,
+          .find((text) => /^角色：\S+$/.test(text)) ?? null,
     };
   });
   return probe;
@@ -395,8 +396,16 @@ export function register(runner) {
         });
         assertEqual(identityA.activeDocument, documentId, 'page A must point at the shared document');
         assertEqual(identityB.activeDocument, documentId, 'page B must point at the shared document');
-        assertEqual(identityA.roleChip, 'role: editor', 'A must be told it is an editor');
-        assertEqual(identityB.roleChip, 'role: owner', 'B must be told it is an owner');
+        assertEqual(
+          identityA.roleChip,
+          roleChipText('editor'),
+          'A must be told it is an editor (Chinese label, wire role unchanged)',
+        );
+        assertEqual(
+          identityB.roleChip,
+          roleChipText('owner'),
+          'B must be told it is an owner (Chinese label, wire role unchanged)',
+        );
 
         // 5. Round 1 — A inserts at the front, B inserts at the tail. Started together and typed
         //    character by character, so the two edit streams genuinely overlap in time.

@@ -74,6 +74,7 @@ import {
   readIndexedDb,
   readUndoState,
   reloadApp,
+  roleChipText,
   SELECTORS,
   setDocumentId,
   setOffline,
@@ -117,16 +118,16 @@ const AI = {
  * must never be interchangeable, which is exactly what `m3/7` and `m3/9` measure.
  */
 const APPLY_FAILURE_COPY = {
-  revision: 'The document changed locally since this suggestion was generated.',
-  'text-mismatch': 'The text you reviewed has changed.',
+  revision: '生成此建议后，文档已在本地被修改。',
+  'text-mismatch': '你审阅过的文本已经改变。',
 };
 
 /** The frozen `ai-status` one-liners this suite asserts (never "saved", never a false claim). */
 const STATUS_COPY = {
-  proposal: 'Proposal ready — the document is unchanged until you accept.',
-  applied: 'Suggestion applied through a Yjs transaction. Use Undo to revert it.',
-  stale: 'This suggestion is stale and was not applied. The document is unchanged.',
-  rejected: 'Suggestion dismissed — the document is unchanged.',
+  proposal: '建议已就绪——在你点击接受之前，文档不会改变。',
+  applied: '建议已通过 Yjs 事务应用。可使用撤销回退。',
+  stale: '该建议已失效，未应用。文档没有改变。',
+  rejected: '建议已放弃——文档没有改变。',
 };
 
 /** A per-run marker, so a left-over replica from an earlier run can never satisfy an assertion. */
@@ -232,6 +233,36 @@ async function openAiPanel(page) {
  * broken chip cannot turn into a mysterious "unknown-instruction".
  */
 async function generateFromChip(page, intent) {
+  /*
+   * The chip's **visible** label is Chinese, but the instruction it seeds (and therefore what
+   * the deterministic provider parses) is still the frozen English intent token. Both are
+   * asserted: a localized label that changed `data-intent` or the seeded instruction would
+   * change behaviour, not just copy.
+   */
+  const chip = await page.evaluate((selector) => {
+    const button = document.querySelector(selector);
+    return button === null
+      ? null
+      : {
+          label: (button.textContent ?? '').trim(),
+          intent: button.getAttribute('data-intent'),
+        };
+  }, `${AI.intentButton}[data-intent="${intent}"]`);
+  assert(chip !== null, `the "${intent}" chip must exist`);
+  assertEqual(chip.intent, intent, `the "${intent}" chip must keep data-intent="${intent}"`);
+  const CHIP_LABELS = {
+    uppercase: '转为大写',
+    'trim-trailing-space': '去除行尾空格',
+    'add-todo': '添加待办',
+    'replace-selection': '替换选区',
+    'delete-selection': '删除选区',
+  };
+  assertEqual(
+    chip.label,
+    CHIP_LABELS[intent],
+    `the "${intent}" chip must show its Chinese label, not the English instruction token`,
+  );
+
   await page.click(`${AI.intentButton}[data-intent="${intent}"]`);
   const seeded = await readAiPanel(page);
   assertEqual(
@@ -395,8 +426,8 @@ export function register(runner) {
       assertProposalContent(proposal, { baseRevision: 0 });
       assertEqual(
         proposal.summary,
-        'Uppercase the document',
-        'the summary must name the target the proposal would change',
+        '将整篇文档转为大写',
+        'the summary must name the target the proposal would change (Chinese local-provider copy)',
       );
       assertEqual(proposal.acceptDisabled, false, 'Accept must be enabled for a pending proposal');
       ctx.note('proposal generated', {
@@ -514,7 +545,7 @@ export function register(runner) {
         );
         assertIncludes(
           (await readUndoState(page)) ?? '',
-          'redo: available',
+          '重做：可用',
           'the undone AI edit must be redoable',
         );
 
@@ -602,8 +633,8 @@ export function register(runner) {
       );
       assertEqual(
         rejected.empty,
-        'Dismissed. Nothing was written to the document.',
-        'the empty-preview copy must be the dismissed message',
+        '已放弃。没有向文档写入任何内容。',
+        'the empty-preview copy must be the Chinese dismissed message',
       );
       assertEqual(rejected.acceptPresent, false, 'a rejected proposal must be cleared');
 
@@ -706,7 +737,7 @@ export function register(runner) {
       assertEqual(stale.acceptDisabled, true, 'a stale proposal must not be acceptable again');
       assertEqual(
         stale.acceptTitle,
-        'This suggestion is stale — generate a new one',
+        '此建议已失效——请生成新的建议',
         'the disabled Accept must explain that a new suggestion is needed',
       );
 
@@ -772,7 +803,7 @@ export function register(runner) {
         assertProposalContent(proposal, { baseRevision: 0 });
         assertEqual(
           proposal.summary,
-          'Uppercase the selection',
+          '将选区转为大写',
           'a proposal generated from a selection must say so',
         );
         assertIncludes(
@@ -1047,7 +1078,7 @@ export function register(runner) {
         );
         assertIncludes(
           proposal.acceptTitle,
-          'Read-only',
+          '只读',
           'the explanation must name the read-only role, not be a generic tooltip',
         );
 
@@ -1211,7 +1242,7 @@ export function register(runner) {
         assertProposalContent(proposal, { baseRevision: 0 });
         assertEqual(
           proposal.summary,
-          'Prefix 2 lines with a task checkbox',
+          '为 2 行添加待办复选框',
           'the offline proposal must describe the real change',
         );
         ctx.note('offline proposal', {
@@ -1436,7 +1467,7 @@ export function register(runner) {
         );
         assertEqual(
           unknownPanel.acceptTitle,
-          'Apply this suggestion to the document',
+          '将此建议应用到文档',
           'the enabled Accept must carry the normal title, not the read-only one',
         );
 
@@ -1509,7 +1540,11 @@ export function register(runner) {
           forbiddenFramesAfter: forbiddenAfterReconnect,
           syncFrames: await countOutboundSyncFrames(viewerPage, viewerDocumentId),
         });
-        assertEqual(reconnectedGate.roleTag, 'role: viewer', 'the known role returns on reconnect');
+        assertEqual(
+          reconnectedGate.roleTag,
+          roleChipText('viewer'),
+          'the known role returns on reconnect',
+        );
         assertEqual(
           afterReconnectEditor.text,
           viewerExpected,
