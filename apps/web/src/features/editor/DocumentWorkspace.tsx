@@ -87,6 +87,7 @@ import type { CollaborativeSession, CollaborativeSessionOptions } from '@insight
 import { useCollaborativeDocument } from '../../collab/public.js';
 import { documentActions } from '../../store/documentSlice.js';
 import { useAppDispatch } from '../../store/hooks.js';
+import { ShareDialog } from '../members/ShareDialog.js';
 import { capabilityGate } from '../permissions/capabilityGate.js';
 import { ReadOnlyNotice } from '../permissions/ReadOnlyNotice.js';
 import { OfflineNotice } from '../status/ConnectionStatusBadge.js';
@@ -123,7 +124,9 @@ export function DocumentWorkspace({ documentId, user }: DocumentWorkspaceProps) 
   }
 
   // `result.state === 'active'` — the only branch where `Y.Text` exists.
-  return <ActiveDocument session={result.session} documentId={documentId} />;
+  return (
+    <ActiveDocument session={result.session} documentId={documentId} currentUserId={user.id} />
+  );
 }
 
 /** The loading shell. Still no editor: a fake one would be a lie about `Y.Text`. */
@@ -167,9 +170,12 @@ function SessionFailed({ error }: { error: string }) {
 function ActiveDocument({
   session,
   documentId,
+  currentUserId,
 }: {
   session: CollaborativeSession;
   documentId: string;
+  /** The session's user id, for the member list's "（你）" marker. Never an authorization input. */
+  currentUserId: string;
 }) {
   const collaborators = useSessionCollaborators(session);
   const status = useSessionConnectionStatus(session);
@@ -199,6 +205,19 @@ function ActiveDocument({
   // owns that) and never the document (the `Y.Text` owns that).
   const [aiOpen, setAiOpen] = useState(false);
   /**
+   * Whether the owner-only member dialog is open. UI state only — the dialog owns its own member
+   * list, and nothing here mirrors membership (`docs/agent-governance/P0-2-MEMBERS.md`).
+   */
+  const [membersOpen, setMembersOpen] = useState(false);
+  const closeMembers = useCallback((): void => {
+    setMembersOpen(false);
+    // Return focus to the control that opened the dialog. The button is always in the DOM while
+    // the role is owner; if a demotion removed it, the query simply finds nothing.
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('[data-testid="members-open"]')?.focus();
+    });
+  }, []);
+  /**
    * The one mode bit. UI state only — never persisted, never dispatched, and it carries no
    * document content. Defaulting to `editor` is the pre-preview behaviour.
    */
@@ -223,9 +242,20 @@ function ActiveDocument({
         onRedo={() => runSessionHistory(gate.readOnly, session, 'redo')}
         aiOpen={aiOpen}
         onToggleAi={() => setAiOpen((open) => !open)}
+        membersOpen={membersOpen}
+        onToggleMembers={() => setMembersOpen((open) => !open)}
         mode={mode}
         onModeChange={setMode}
       />
+
+      {/*
+        The member dialog. Guarded twice: the header renders the entry only for an owner, and this
+        mount site re-checks the same capability so a demotion during an open dialog cannot leave
+        it on screen. Unmounting is what aborts any in-flight members request (R9).
+      */}
+      {membersOpen && gate.capabilities.canManageMembers ? (
+        <ShareDialog documentId={documentId} currentUserId={currentUserId} onClose={closeMembers} />
+      ) : null}
 
       {/*
         Fixed notice order: offline state first (it explains that edits are local), then the

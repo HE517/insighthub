@@ -29,6 +29,13 @@ export interface ApiError {
   kind: 'http' | 'network' | 'timeout' | 'aborted';
   message: string;
   status?: number;
+  /**
+   * The server's machine-readable error code, read from the frozen `{ "error": "…" }` body
+   * (`docs/CONTRACTS.md` §17.4). Present only for an `http` failure whose body was JSON with a
+   * non-empty string code; a caller that needs to tell `404 user_not_found` from `404 not_found`
+   * reads this, never the human-facing HTTP status alone.
+   */
+  code?: string;
 }
 
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError };
@@ -43,6 +50,31 @@ export interface ApiRequestOptions {
 }
 
 /**
+ * Read the frozen machine-readable error code from a failed response.
+ *
+ * The server's HTTP error body is `{ "error": "code" }` (`docs/CONTRACTS.md` §17.4), optionally
+ * with extra fields (the AI routes add their own envelope; the restore route adds
+ * `currentRevision`). Only the string code is read here — the rest stays the caller's business.
+ * A non-JSON or empty body (a proxy error page, a 502 HTML page) yields `null`: the failure is
+ * still reported, just without a code to map.
+ */
+async function readErrorCode(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+    const record = body as Record<string, unknown>;
+    const error = record['error'];
+    if (typeof error === 'string' && error !== '') return error;
+    // Tolerate a `{ code }` envelope without inventing one: a route that sends it is still
+    // machine-readable, and reading it costs nothing.
+    const code = record['code'];
+    return typeof code === 'string' && code !== '' ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Perform one JSON request with cancellation + timeout.
  *
  * Resolves with a discriminated result; never throws for expected failures. A caller that wants
@@ -50,7 +82,7 @@ export interface ApiRequestOptions {
  * catch.
  */
 export async function requestJson<T>(
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<ApiResult<T>> {
@@ -76,18 +108,27 @@ export async function requestJson<T>(
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (!response.ok) {
+      const code = await readErrorCode(response);
       return {
         ok: false,
-        error: { kind: 'http', status: response.status, message: `HTTP ${response.status}` },
+        error: {
+          kind: 'http',
+          status: response.status,
+          message: `HTTP ${response.status}`,
+          ...(code === null ? {} : { code }),
+        },
       };
     }
-    // `204 No Content` is a success with no body (the frozen `DELETE /api/session` response,
-    // `docs/CONTRACTS.md` §17.4). Parsing it as JSON would throw and turn a successful delete into
-    // a `network` error, so the empty-body case is answered before the parser is reached.
-    if (response.status === 204 || response.status === 205) {
-      return { ok: true, data: undefined as T };
-    }
-    return { ok: true, data: (await response.json()) as T };
+    /*
+      A `2xx` with an empty body is a success with nothing to parse. `204 No Content` is the
+      frozen `DELETE /api/session`/`POST /leave` shape (`docs/CONTRACTS.md` §17.4), and the member
+      `DELETE` contract does not promise a body, so the empty case is answered before the parser:
+      `response.json()` on an empty body throws, and reporting that as a `network` failure would
+      turn a successful removal into an error the user would retry.
+    */
+    const text = await response.text();
+    if (text === '') return { ok: true, data: undefined as T };
+    return { ok: true, data: JSON.parse(text) as T };
   } catch (error) {
     if (controller.signal.aborted) {
       const reason = controller.signal.reason;
@@ -112,7 +153,7 @@ export async function requestJson<T>(
 /** GET a JSON endpoint with cancellation + timeout. */
 export function getJson<T>(
   path: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; credentials?: RequestCredentials } = {},
 ): Promise<ApiResult<T>> {
   return requestJson<T>('GET', path, options);
 }
@@ -120,6 +161,16 @@ export function getJson<T>(
 /** POST a JSON body. Used for the session bootstrap, which must send its cookie. */
 export function postJson<T>(path: string, options: ApiRequestOptions = {}): Promise<ApiResult<T>> {
   return requestJson<T>('POST', path, options);
+}
+
+/**
+ * PATCH a JSON body (member role changes, `docs/agent-governance/P0-2-MEMBERS.md`).
+ *
+ * The same cancellation/timeout contract as every other verb: an `AbortSignal` in, a
+ * discriminated result out.
+ */
+export function patchJson<T>(path: string, options: ApiRequestOptions = {}): Promise<ApiResult<T>> {
+  return requestJson<T>('PATCH', path, options);
 }
 
 /**
