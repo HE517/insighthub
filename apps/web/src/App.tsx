@@ -59,11 +59,17 @@
  * The topbar no longer renders Live/Offline (the status lives in the document header, D1) and has
  * no theme switcher (single Cloud theme, D2).
  */
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
 import { AppShell } from './AppShell.js';
 import { initialsOf } from './features/collaborators/collaboratorPresentation.js';
 import { currentAppMode } from './session/clerkMode.js';
+import {
+  DEMO_IDENTITY_CHOICES,
+  isDemoSignedOut,
+  signInDemo,
+  signOutDemo,
+} from './session/demoAuth.js';
 import { useServerSession } from './session/useServerSession.js';
 import { presenceUserFor } from './user.js';
 
@@ -100,16 +106,69 @@ export function App() {
  * The pre-M4 application: demo session identity, exactly as it shipped.
  *
  * `pending` behaves like `unavailable`: the editor must never wait for the network.
+ *
+ * A developer who used “退出登录” sees {@link DemoSignIn} instead of the shell. The flag is local
+ * UI state only; the server session itself was already revoked with `DELETE /api/session`.
  */
 function DemoApp() {
+  return isDemoSignedOut() ? <DemoSignIn /> : <DemoWorkspace />;
+}
+
+function DemoWorkspace() {
   const serverSession = useServerSession();
   const identity = serverSession.status === 'ready' ? serverSession.identity : null;
 
   return (
     <AppShell
-      identity={<SessionIdentity state={serverSession} />}
+      identity={
+        <SessionIdentity state={serverSession} onLogout={() => void signOutDemo()} />
+      }
       user={presenceUserFor(identity)}
     />
+  );
+}
+
+/** The demo identity gate: pick a roster identity to test its permissions. */
+function DemoSignIn() {
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const choose = async (demoUserId: string): Promise<void> => {
+    setPending(demoUserId);
+    setError(null);
+    if (!(await signInDemo(demoUserId))) {
+      setPending(null);
+      setError('登录失败：服务器没有接受该演示身份，请确认服务仍在运行。');
+    }
+  };
+
+  return (
+    <div className="demo-signin" data-testid="demo-signin">
+      <div className="demo-signin__card">
+        <h1 className="demo-signin__title">InsightHub 演示登录</h1>
+        <p className="demo-signin__lead">选择一个演示身份，用对应角色检查权限与协作效果。</p>
+        <div className="demo-signin__choices">
+          {DEMO_IDENTITY_CHOICES.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              className="demo-signin__choice"
+              data-testid={`demo-login-${choice.id}`}
+              disabled={pending !== null}
+              onClick={() => void choose(choice.id)}
+            >
+              <strong>{choice.name}</strong>
+              <span>{choice.roleLabel}</span>
+            </button>
+          ))}
+        </div>
+        {error !== null && (
+          <p className="demo-signin__error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -126,7 +185,13 @@ function DemoApp() {
  * "identity decision settled" marker). The avatar glyph is decorative and `aria-hidden`, so the
  * name and the "演示会话" line are the only text this block contributes.
  */
-function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession> }) {
+function SessionIdentity({
+  state,
+  onLogout,
+}: {
+  state: ReturnType<typeof useServerSession>;
+  onLogout: () => void;
+}) {
   if (state.status === 'ready') {
     return (
       <div className="identity" data-testid="session-identity" title="服务器签发的会话身份">
@@ -135,7 +200,7 @@ function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession>
         </span>
         <span className="identity__copy">
           <strong className="identity__name">{state.identity.displayName}</strong>
-          <small className="identity__meta">演示会话</small>
+          <DemoIdentityMenu onLogout={onLogout} />
         </span>
       </div>
     );
@@ -157,4 +222,52 @@ function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession>
     );
   }
   return null;
+}
+
+/** “演示会话” dropdown: switch roster identity or leave the demo. */
+function DemoIdentityMenu({ onLogout }: { onLogout: () => void }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const choose = async (demoUserId: string): Promise<void> => {
+    setPending(demoUserId);
+    setError(null);
+    if (!(await signInDemo(demoUserId))) {
+      setPending(null);
+      setError('切换失败，请重试');
+    }
+  };
+
+  return (
+    <details className="identity__menu" data-testid="demo-identity-menu">
+      <summary className="identity__menu-trigger">演示会话</summary>
+      <div className="identity__menu-panel">
+        {DEMO_IDENTITY_CHOICES.map((choice) => (
+          <button
+            key={choice.id}
+            type="button"
+            className="identity__menu-item"
+            data-testid={`demo-switch-${choice.id}`}
+            disabled={pending !== null}
+            onClick={() => void choose(choice.id)}
+          >
+            {choice.name} · {choice.roleLabel}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="identity__menu-item identity__menu-item--danger"
+          data-testid="demo-logout"
+          onClick={onLogout}
+        >
+          退出登录
+        </button>
+        {error !== null && (
+          <span className="identity__menu-error" role="alert">
+            {error}
+          </span>
+        )}
+      </div>
+    </details>
+  );
 }
