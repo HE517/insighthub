@@ -178,11 +178,14 @@ describe('request shape', () => {
       messages: Array<{ role: string; content: string }>;
       stream: boolean;
       max_tokens: number;
+      temperature: number;
       response_format?: { type: string };
     };
     assert.equal(body.model, 'kimi-k3');
     assert.equal(body.stream, false);
     assert.equal(body.max_tokens, DEFAULT_KIMI_MAX_OUTPUT_TOKENS);
+    // Kimi's reasoning model rejects any temperature other than 1 (live 400 finding).
+    assert.equal(body.temperature, 1);
     // B12 live finding: the CN endpoint rejects `response_format` (400 invalid_request_error),
     // so Kimi is prompt-only. OpenAI keeps the parameter; this assertion is provider-specific.
     assert.equal(body.response_format, undefined);
