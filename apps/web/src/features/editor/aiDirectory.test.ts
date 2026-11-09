@@ -91,7 +91,7 @@ describe('directory markup: the published DOM contract', () => {
     expect(html).toContain('data-state="loading"');
     expect(html).toContain('aria-busy="true"');
     expect(html).toContain('data-testid="ai-directory-refresh"');
-    expect(html).toContain('Loading readable documents');
+    expect(html).toContain('正在加载可阅读的文档');
     expect(html).not.toContain('data-testid="ai-directory-item"');
     expect(html).not.toContain('data-testid="ai-directory-error"');
     expect(html).not.toContain('data-testid="ai-directory-empty"');
@@ -128,7 +128,7 @@ describe('directory markup: the published DOM contract', () => {
     expect(html).toContain('data-state="empty"');
     expect(html).toContain('data-testid="ai-directory-empty"');
     expect(html).toContain(AI_DIRECTORY_EMPTY_COPY);
-    expect(AI_DIRECTORY_EMPTY_COPY).toBe('No readable documents');
+    expect(AI_DIRECTORY_EMPTY_COPY).toBe('没有可阅读的文档');
     expect(html).not.toContain('data-testid="ai-directory-item"');
     expect(html).not.toContain('data-testid="ai-directory-error"');
   });
@@ -142,8 +142,8 @@ describe('directory markup: the published DOM contract', () => {
     expect(html).toContain('data-testid="ai-directory-error"');
     expect(html).toContain('data-directory-error="network"');
     expect(html).toContain('role="alert"');
-    expect(html).toContain('The document list is unavailable.');
-    expect(html).toContain('Press Refresh to try again.');
+    expect(html).toContain('文档列表不可用：网络已断开。');
+    expect(html).toContain('请点击“刷新”重试。');
     expect(html).toContain('data-testid="ai-directory-refresh"');
     expect(html).not.toContain('data-testid="ai-directory-empty"');
     expect(html).not.toContain('data-testid="ai-directory-item"');
@@ -184,6 +184,18 @@ describe('directory failure copy: typed, distinct and never silent', () => {
     expect(failure?.detail).toContain('503');
   });
 
+  it('names a 403 origin refusal separately from other HTTP failures', () => {
+    const origin = describeDirectoryFailure(new DocumentListError('http', 'HTTP 403', 403));
+    const server = describeDirectoryFailure(new DocumentListError('http', 'HTTP 500', 500));
+
+    expect(origin?.kind).toBe('http');
+    expect(origin?.title).toBe('请求来源被拒绝。');
+    expect(origin?.detail).toContain('请求来源不被允许');
+    // The server-error copy must not be reused for a CSRF/origin refusal.
+    expect(origin?.title).not.toBe(server?.title);
+    expect(server?.detail).not.toContain('请求来源不被允许');
+  });
+
   it('keeps an untyped error message instead of swallowing it', () => {
     const failure = describeDirectoryFailure(new Error('boom while listing'));
     expect(failure?.kind).toBe('unexpected');
@@ -193,7 +205,7 @@ describe('directory failure copy: typed, distinct and never silent', () => {
   it('ignores a thrown non-Error without inventing a message it did not have', () => {
     const failure = describeDirectoryFailure('not an error');
     expect(failure?.kind).toBe('unexpected');
-    expect(failure?.detail).toContain('failed without a typed reason');
+    expect(failure?.detail).toContain('没有给出可识别的原因');
   });
 });
 
@@ -245,7 +257,7 @@ describe('new document control: markup (D-084 acceptance #7)', () => {
     expect(html).toContain('data-testid="new-document-error"');
     expect(html).toContain('data-create-error="http"');
     expect(html).toContain('role="alert"');
-    expect(html).toContain('The document was not created.');
+    expect(html).toContain('文档未创建。');
     expect(html).toContain('500');
     // A failed creation must not appear as a document: the server list is the only source.
     expect(count(html, 'data-testid="ai-directory-item"')).toBe(DOCUMENTS.length);
@@ -292,13 +304,13 @@ describe('creation failure copy: honest about what is known (D-084 #7)', () => {
     expect(serverError?.kind).toBe('http');
     expect(unauthorized?.title).not.toBe(serverError?.title);
     expect(serverError?.detail).toContain('500');
-    expect(unauthorized?.detail.toLowerCase()).toContain('nothing was created');
-    expect(serverError?.detail.toLowerCase()).toContain('nothing was created');
+    expect(unauthorized?.detail.toLowerCase()).toContain('未创建任何文档');
+    expect(serverError?.detail.toLowerCase()).toContain('未创建任何文档');
     // Neither may read as a success: the only confirmation of a created document is the switch
     // to the id the server returned.
     for (const failure of [unauthorized, serverError] as const) {
-      expect(failure?.detail).not.toMatch(/saved|saving|successfully/i);
-      expect(failure?.detail).toMatch(/try again|reload/i);
+      expect(failure?.detail).not.toMatch(/已保存|保存成功|创建成功/);
+      expect(failure?.detail).toMatch(/重试|重新加载/);
     }
   });
 
@@ -311,10 +323,18 @@ describe('creation failure copy: honest about what is known (D-084 #7)', () => {
 
     for (const failure of [timeout, malformed, network] as const) {
       expect(failure).not.toBeNull();
-      expect(failure?.detail).not.toContain('Nothing was created.');
+      expect(failure?.detail).not.toContain('未创建任何文档。');
       // The honest next step is to look at the server's list, not to create a second document.
-      expect(failure?.detail).toContain('Refresh');
+      expect(failure?.detail).toContain('刷新');
     }
+  });
+
+  it('names a 403 origin refusal as a refusal that created nothing', () => {
+    const failure = describeCreateFailure(new DocumentCreateError('http', 'HTTP 403', 403));
+    expect(failure?.kind).toBe('http');
+    expect(failure?.title).toBe('请求来源被拒绝。');
+    expect(failure?.detail).toContain('未创建任何文档');
+    expect(failure?.detail).toContain('请求来源不被允许');
   });
 
   it('returns null only for an aborted request', () => {
@@ -325,6 +345,6 @@ describe('creation failure copy: honest about what is known (D-084 #7)', () => {
     const failure = describeCreateFailure(new Error('boom while creating'));
     expect(failure?.kind).toBe('unexpected');
     expect(failure?.detail).toContain('boom while creating');
-    expect(failure?.detail).not.toContain('Nothing was created.');
+    expect(failure?.detail).not.toContain('未创建任何文档。');
   });
 });

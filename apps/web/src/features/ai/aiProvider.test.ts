@@ -15,7 +15,7 @@ const FIXED_NOW = new Date('2026-10-22T10:00:00.000Z');
 const REVISION = 7;
 
 const VALID_DRAFT = {
-  summary: 'Uppercase the document',
+  summary: '将整篇文档转为大写',
   operations: [{ kind: 'replace', index: 0, length: 5, text: 'ALPHA' }],
 };
 
@@ -79,7 +79,7 @@ describe('createAiProvider', () => {
     const suggestion = await provider.suggest(inputFor(doc));
 
     expect(suggestion.id).toMatch(/^local-/);
-    expect(suggestion.summary).toBe('Uppercase the document');
+    expect(suggestion.summary).toBe('将整篇文档转为大写');
     expect(docText(doc)).toBe('alpha');
   });
 

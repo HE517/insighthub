@@ -87,7 +87,7 @@ export function App() {
     <Suspense
       fallback={
         <div className="auth-boot" data-testid="auth-boot" role="status">
-          Loading sign-in…
+          正在加载登录…
         </div>
       }
     >
@@ -124,22 +124,18 @@ function DemoApp() {
  * identity's display name (`tests/browser/suite/20-m2-phase2-authz.mjs` reads it to prove the page
  * holds the session it claims, and `tests/browser/lib/app.mjs#waitForSessionActive` uses it as the
  * "identity decision settled" marker). The avatar glyph is decorative and `aria-hidden`, so the
- * name and the "demo session" line are the only text this block contributes.
+ * name and the "演示会话" line are the only text this block contributes.
  */
 function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession> }) {
   if (state.status === 'ready') {
     return (
-      <div
-        className="identity"
-        data-testid="session-identity"
-        title="Server-issued session identity"
-      >
+      <div className="identity" data-testid="session-identity" title="服务器签发的会话身份">
         <span className="identity__avatar" aria-hidden="true">
           {initialsOf(state.identity.displayName)}
         </span>
         <span className="identity__copy">
           <strong className="identity__name">{state.identity.displayName}</strong>
-          <small className="identity__meta">demo session</small>
+          <small className="identity__meta">演示会话</small>
         </span>
       </div>
     );
@@ -149,13 +145,13 @@ function SessionIdentity({ state }: { state: ReturnType<typeof useServerSession>
       <div
         className="identity identity--offline"
         data-testid="session-identity"
-        title="No server session; local placeholder"
+        title="没有服务器会话；使用本地占位身份"
       >
         <span className="identity__avatar" aria-hidden="true">
           ?
         </span>
         <span className="identity__copy">
-          <strong className="identity__name">local identity (offline)</strong>
+          <strong className="identity__name">本地身份（离线）</strong>
         </span>
       </div>
     );

@@ -25,6 +25,7 @@
  * markup test asserts exactly this model, and no component carries a second copy.
  */
 import type { CapabilityGate } from './capabilityGate.js';
+import { roleLabel } from './roleLabels.js';
 
 /** `data-testid` of the notice, shared by the component and the tests. */
 export const READ_ONLY_NOTICE_TESTID = 'read-only-notice';
@@ -57,9 +58,9 @@ export function readOnlyNoticeFor(gate: CapabilityGate): ReadOnlyNoticeModel | n
   if (gate.role === null) return null;
 
   return {
-    title: 'Read-only for your role',
+    title: '你的角色为只读',
     detail:
-      `Your role on this document is "${gate.role}", which does not include editing. ` +
-      'Typing is disabled in this editor, and no change is written to the document.',
+      `你在本文档中的角色是“${roleLabel(gate.role)}”，不包含编辑权限。` +
+      '此编辑器已禁用输入，不会向文档写入任何更改。',
   };
 }

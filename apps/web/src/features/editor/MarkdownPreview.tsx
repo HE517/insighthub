@@ -97,12 +97,12 @@ export function MarkdownPreview({
       className="markdown-preview"
       data-testid="markdown-preview"
       data-state={phase}
-      aria-label="Markdown preview"
+      aria-label="Markdown 预览"
     >
       <Suspense
         fallback={
           <p className="markdown-preview__loading" data-testid="markdown-preview-loading">
-            Rendering preview…
+            正在渲染预览…
           </p>
         }
       >

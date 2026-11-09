@@ -30,7 +30,7 @@
  * | `getRole()` | editor | notice |
  * | --- | --- | --- |
  * | `owner` / `editor` | editable, exactly as before | none |
- * | `viewer` / `commenter` | read-only (`readOnly` compartment) | "Read-only for your role" |
+ * | `viewer` / `commenter` | read-only (`readOnly` compartment) | “你的角色为只读” |
  * | `null` (unknown) | **editable** — never locked out of unsent text (R10) | none |
  *
  * A demotion does not destroy the local document: the editor is reconfigured, not remounted,
@@ -133,7 +133,7 @@ function SessionLoading({ documentId }: { documentId: string }) {
       <div className="canvas canvas--status" data-testid="session-initializing" role="status">
         <span className="canvas-status__pulse" aria-hidden="true" />
         <p className="canvas-status__text">
-          Opening <code>{documentId}</code> from local storage…
+          正在从本地存储打开 <code>{documentId}</code>…
         </p>
       </div>
     </div>
@@ -145,12 +145,18 @@ function SessionFailed({ error }: { error: string }) {
   return (
     <div className="workspace">
       <div className="canvas canvas--status">
-        <div className="notice notice--error" data-testid="session-failed" role="alert">
-          <strong className="notice__title">This document could not be opened</strong>
-          <span className="notice__detail">{error}</span>
+        <div
+          className="notice notice--error"
+          data-testid="session-failed"
+          data-session-error={error}
+          role="alert"
+        >
+          <strong className="notice__title">无法打开此文档</strong>
+          <span className="notice__detail">
+            本地文档副本打开失败。请稍后重试；错误诊断信息已记录在页面数据中。
+          </span>
           <span className="notice__hint">
-            Create the collaboration session again to retry. Local data already written by a
-            previous session is kept.
+            请重新创建协作会话以重试。此前会话已写入的本地数据会保留。
           </span>
         </div>
       </div>
@@ -236,21 +242,19 @@ function ActiveDocument({
         <ReadOnlyNotice gate={gate} />
         {/*
           Contract surface (`tests/browser/lib/app.mjs` `readUndoState`): the text mirrors
-          `getUndoState()` with the same `undo: … · redo: …` vocabulary. Visually hidden — the
+          `getUndoState()` with the same `撤销/重做` vocabulary. Visually hidden — the
           icon buttons are the visible affordance — but present for assistive technology and for
           the browser suite.
         */}
         <span className="sr-only" aria-live="polite" data-testid="undo-state">
-          {`undo: ${undoState.canUndo ? 'available' : 'none'} · redo: ${
-            undoState.canRedo ? 'available' : 'none'
+          {`撤销：${undoState.canUndo ? '可用' : '无'} · 重做：${
+            undoState.canRedo ? '可用' : '无'
           }`}
         </span>
         {resyncReason === null ? null : (
           <div className="notice notice--warning" data-testid="editor-resync" role="alert">
-            <strong className="notice__title">
-              The editor was resynchronised from the document
-            </strong>
-            <span className="notice__detail">{`reason: ${resyncReason}`}</span>
+            <strong className="notice__title">编辑器已根据文档重新同步</strong>
+            <span className="notice__detail">{`原因：${resyncReason}`}</span>
           </div>
         )}
       </div>
@@ -266,7 +270,7 @@ function ActiveDocument({
         directory; switching documents still remounts the keyed workspace (one room per socket).
       */}
       <div className={aiOpen ? 'workbench workbench--ai' : 'workbench'}>
-        <aside className="doc-rail" data-testid="doc-rail" aria-label="Documents">
+        <aside className="doc-rail" data-testid="doc-rail" aria-label="文档">
           <AiDirectory
             activeDocumentId={session.documentId}
             onSelectDocument={selectDocument}
@@ -305,7 +309,7 @@ function ActiveDocument({
           rail of the workbench, not a block above the canvas.
         */}
         {aiOpen ? (
-          <aside className="doc-assistant" aria-label="AI review">
+          <aside className="doc-assistant" aria-label="AI 审阅">
             <AiSuggestPanel
               key={session.localClientId}
               session={session}
@@ -316,9 +320,7 @@ function ActiveDocument({
                 // The opener is the header's `ai-open` button; returning focus there is what
                 // makes "close" reversible from the keyboard. The button is always in the DOM.
                 requestAnimationFrame(() => {
-                  document
-                    .querySelector<HTMLElement>('[data-testid="ai-open"]')
-                    ?.focus();
+                  document.querySelector<HTMLElement>('[data-testid="ai-open"]')?.focus();
                 });
               }}
               onSelectDocument={selectDocument}

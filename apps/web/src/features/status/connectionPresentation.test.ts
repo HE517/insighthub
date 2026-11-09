@@ -16,16 +16,21 @@ import {
 } from './connectionPresentation.js';
 
 describe('connection presentation', () => {
-  it('covers every wire status', () => {
+  it('covers every wire status and shows a Simplified Chinese label', () => {
     for (const status of CONNECTION_STATUSES) {
       expect(CONNECTION_PRESENTATION[status]).toBeDefined();
       expect(CONNECTION_PRESENTATION[status].label.length).toBeGreaterThan(0);
+      expect(CONNECTION_PRESENTATION[status].label).toMatch(/[\u4e00-\u9fff]/);
     }
+    expect(CONNECTION_PRESENTATION.connected.label).toBe('已连接');
+    expect(CONNECTION_PRESENTATION.reconnecting.label).toBe('重连中');
+    expect(CONNECTION_PRESENTATION.offline.label).toBe('离线');
+    expect(CONNECTION_PRESENTATION.error.label).toBe('连接中断');
   });
 
   it('describes offline as a normal, local-only editing state', () => {
     expect(CONNECTION_PRESENTATION.offline.localOnlyEdits).toBe(true);
-    expect(offlineNoticeText('offline')).toContain('editing continues');
+    expect(offlineNoticeText('offline')).toContain('编辑继续可用');
   });
 
   it('shows no notice when edits are being shared', () => {

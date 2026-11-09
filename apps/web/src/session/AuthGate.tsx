@@ -51,7 +51,7 @@ export function AuthGateView({ status, surface = 'sign-in', children }: AuthGate
           <span className="brand__name">InsightHub</span>
         </div>
         <p className="auth-gate__lead">
-          {status === 'loading' ? 'Checking your session…' : 'Sign in to open your team documents.'}
+          {status === 'loading' ? '正在检查你的会话…' : '登录后即可打开团队文档。'}
         </p>
       </div>
 
@@ -67,7 +67,7 @@ export function AuthGateView({ status, surface = 'sign-in', children }: AuthGate
         </div>
       ) : (
         <p className="auth-gate__status" role="status">
-          Loading sign-in…
+          正在加载登录…
         </p>
       )}
     </div>

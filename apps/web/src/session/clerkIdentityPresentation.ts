@@ -66,5 +66,5 @@ export function clerkIdentityFor(
     email === null ? null : email.split('@')[0],
   ]);
 
-  return { name: name ?? 'Signed-in user', email };
+  return { name: name ?? '已登录用户', email };
 }

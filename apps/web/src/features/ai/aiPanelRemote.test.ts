@@ -4,11 +4,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { DOCUMENT_TEXT_KEY, type CollaborativeSession } from '@insighthub/shared';
 import { describe, expect, it } from 'vitest';
 
-import { AiSuggestPanel } from '../editor/AiSuggestPanel.js';
+import {
+  AiSuggestPanel,
+  instructionForIntent,
+  LOCAL_INTENT_HINT,
+} from '../editor/AiSuggestPanel.js';
 import { AI_PANEL_PROVIDER_COPY } from '../editor/aiProposalCopy.js';
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
 import type { AiProviderMode } from './aiProvider.js';
-import { createLocalProvider } from './localProvider.js';
+import { createLocalProvider, LOCAL_INTENTS } from './localProvider.js';
 import type { AiProvider } from './provider.js';
 import { createRemoteProvider } from './remoteProvider.js';
 import { createDocument } from './testSupport.js';
@@ -71,8 +75,14 @@ describe('AiSuggestPanel provider modes', () => {
     expect(html).not.toContain('data-testid="ai-directory-refresh"');
     expect(html).toContain('data-phase="idle"');
     expect(occurrences(html, 'data-testid="ai-intent"')).toBe(5);
-    expect(html).toContain('Deterministic suggestion provider — no model.');
-    expect(html).toContain('placeholder="e.g. uppercase"');
+    expect(html).toContain('确定性建议提供器——不使用语言模型。');
+    expect(html).toContain('placeholder="例如：uppercase（转为大写）"');
+    // The local preset actions are labelled in Chinese, and the hint tells the user to pick one.
+    for (const label of ['转为大写', '去除行尾空格', '添加待办', '替换选区', '删除选区']) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain('data-testid="ai-local-hint"');
+    expect(html).toContain(LOCAL_INTENT_HINT);
   });
 
   it('remote mode hides the local intent chips but keeps every testid and the abort-safe surface', () => {
@@ -96,15 +106,17 @@ describe('AiSuggestPanel provider modes', () => {
     expect(html).toContain('data-phase="idle"');
 
     // No local-only promise survives into the remote copy.
-    expect(html).not.toContain('Deterministic');
-    expect(html).not.toContain('no model');
-    expect(html).not.toContain('local provider');
-    expect(html).not.toContain('no network');
-    expect(html).not.toContain('pick a chip');
+    expect(html).not.toContain('确定性');
+    expect(html).not.toContain('不使用语言模型');
+    expect(html).not.toContain('本地提供器');
+    expect(html).not.toContain('预设操作');
+    // Remote mode has no preset chips, so it must not show the "pick a preset" hint either.
+    expect(html).not.toContain('data-testid="ai-local-hint"');
+    expect(html).not.toContain(LOCAL_INTENT_HINT);
 
     expect(html).toContain(AI_PANEL_PROVIDER_COPY.remote.note);
-    expect(html).toContain('placeholder="e.g. Make the second paragraph more concise"');
-    expect(html).toContain('No proposal yet — describe the edit you want and press Generate.');
+    expect(html).toContain('placeholder="例如：把第二段写得更简洁"');
+    expect(html).toContain('尚无建议——描述你想要的修改，然后点击生成。');
   });
 
   it('infers remote from a provider created by createRemoteProvider, without a mode prop', () => {
@@ -118,5 +130,20 @@ describe('AiSuggestPanel provider modes', () => {
 
     expect(occurrences(html, 'data-testid="ai-intent"')).toBe(0);
     expect(html).toContain(AI_PANEL_PROVIDER_COPY.remote.note);
+  });
+});
+
+describe('local preset chips: Chinese labels, frozen instruction tokens', () => {
+  it('still sends the original provider prefixes, not the translated labels', () => {
+    for (const intent of LOCAL_INTENTS) {
+      const instruction = instructionForIntent(intent);
+      if (intent === 'replace-selection') {
+        expect(instruction).toBe('replace-selection: ');
+      } else {
+        expect(instruction).toBe(intent);
+      }
+      // The letter "uppercase" and friends must never be replaced by the Chinese chip label.
+      expect(instruction).not.toMatch(/[\u4e00-\u9fff]/);
+    }
   });
 });

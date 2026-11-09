@@ -106,7 +106,7 @@ describe('markdown preview renderer: supported Markdown', () => {
     const html = render('   \n\n');
     expect(html).toContain('data-testid="markdown-preview-content"');
     expect(html).toContain('markdown-preview__empty');
-    expect(html).toContain('This document is empty.');
+    expect(html).toContain('本文档为空。');
   });
 });
 
@@ -117,14 +117,14 @@ describe('markdown preview renderer: images never become requests', () => {
     expect(html).not.toContain('tracker.png');
     expect(html).not.toContain('src=');
     expect(html).toContain('markdown-preview__image');
-    expect(html).toContain('[image: a diagram]');
+    expect(html).toContain('[图片：a diagram]');
     expect(html).toContain('data-image-alt="a diagram"');
   });
 
   it('renders a placeholder for an image with empty alt text', () => {
     const html = render('![](https://example.com/tracker.png)');
     expect(html).not.toContain('<img');
-    expect(html).toContain('[image]');
+    expect(html).toContain('[图片]');
   });
 });
 
@@ -189,26 +189,30 @@ describe('markdown preview renderer: dangerous URLs are refused', () => {
 });
 
 describe('markdown preview renderer: 100k document', () => {
-  it('parses and renders a 100k document in one pass (timing instrumentation)', { timeout: 20_000 }, () => {
-    const source = hundredThousandMarkdown();
-    expect(source).toHaveLength(100_000);
+  it(
+    'parses and renders a 100k document in one pass (timing instrumentation)',
+    { timeout: 20_000 },
+    () => {
+      const source = hundredThousandMarkdown();
+      expect(source).toHaveLength(100_000);
 
-    const started = performance.now();
-    const html = render(source);
-    const elapsed = performance.now() - started;
+      const started = performance.now();
+      const html = render(source);
+      const elapsed = performance.now() - started;
 
-    // Test instrumentation, not product telemetry (D-086 §2 allows it in the harness).
-    console.log(
-      `[perf] 100k renderToStaticMarkup (node, parse + React elements): ${elapsed.toFixed(
-        2,
-      )} ms; HTML ${html.length} bytes`,
-    );
+      // Test instrumentation, not product telemetry (D-086 §2 allows it in the harness).
+      console.log(
+        `[perf] 100k renderToStaticMarkup (node, parse + React elements): ${elapsed.toFixed(
+          2,
+        )} ms; HTML ${html.length} bytes`,
+      );
 
-    // The fixture is block-structured, so the output must contain real elements, not one blob.
-    expect(html).toContain('<h2>Section</h2>');
-    expect(html).toContain('<strong>bold</strong>');
-    expect(elapsed).toBeLessThan(20_000);
-  });
+      // The fixture is block-structured, so the output must contain real elements, not one blob.
+      expect(html).toContain('<h2>Section</h2>');
+      expect(html).toContain('<strong>bold</strong>');
+      expect(elapsed).toBeLessThan(20_000);
+    },
+  );
 });
 
 describe('safePreviewUrl', () => {

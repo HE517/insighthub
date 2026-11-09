@@ -31,39 +31,39 @@ export interface ConnectionPresentation {
 export const CONNECTION_PRESENTATION: Record<ConnectionStatus, ConnectionPresentation> = {
   idle: {
     badge: 'default',
-    label: 'Idle',
+    label: '未连接',
     localOnlyEdits: false,
-    description: 'No connection attempt has been made yet.',
+    description: '尚未发起连接。',
   },
   connecting: {
     badge: 'processing',
-    label: 'Connecting',
+    label: '连接中',
     localOnlyEdits: false,
-    description: 'Opening the collaboration channel. Editing is already available.',
+    description: '正在打开协作通道。编辑功能已经可用。',
   },
   connected: {
     badge: 'success',
-    label: 'Live',
+    label: '已连接',
     localOnlyEdits: false,
-    description: 'Connected to the document room; edits are syncing to collaborators.',
+    description: '已连接到文档房间；断线恢复后会自动追平，并继续把编辑同步给协作者。',
   },
   reconnecting: {
     badge: 'warning',
-    label: 'Reconnecting',
+    label: '重连中',
     localOnlyEdits: true,
-    description: 'Syncing paused. Edits are saved locally and merge on reconnect.',
+    description: '同步已暂停。编辑内容保存在本地，重连后会合并。',
   },
   offline: {
     badge: 'error',
-    label: 'Offline',
+    label: '离线',
     localOnlyEdits: true,
-    description: 'Working offline. Edits are stored locally and merge when the network returns.',
+    description: '正在离线工作。编辑内容保存在本地，网络恢复后会合并。',
   },
   error: {
     badge: 'error',
-    label: 'Connection error',
+    label: '连接中断',
     localOnlyEdits: true,
-    description: 'The channel reported an error. Editing continues and edits stay local.',
+    description: '连接报告了错误。编辑会继续，更改暂存在本地。',
   },
 };
 
@@ -71,7 +71,7 @@ export const CONNECTION_PRESENTATION: Record<ConnectionStatus, ConnectionPresent
 export function offlineNoticeText(status: ConnectionStatus): string | null {
   const presentation = CONNECTION_PRESENTATION[status];
   if (!presentation.localOnlyEdits) return null;
-  return `${presentation.label} — editing continues; changes are stored locally and merge on reconnect.`;
+  return `${presentation.label} — 编辑继续可用；更改保存在本地，重连后会合并。`;
 }
 
 /** Whether the peer list is still meaningful (i.e. presence may be stale). */

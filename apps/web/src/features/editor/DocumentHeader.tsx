@@ -12,11 +12,12 @@
  *
  * - `[data-testid="active-document"]` is a **text element** whose trimmed text is exactly the
  *   document id. It is the header title, so the visual hierarchy and the contract agree. (`tests/browser/lib/app.mjs` `setDocumentId`)
- * - The role chip is a `<span>` whose text is exactly `role: <role>`, and it is **not rendered**
- *   when the role is unknown (`null`). `readEditorGate` identifies the chip by that exact shape,
- *   and §17.9 forbids presenting an unknown role as anything.
+ * - The role chip is a `<span>` whose text is `角色：<中文角色名>`, and it is **not rendered**
+ *   when the role is unknown (`null`). The wire value (`getRole()`) is unchanged; only the
+ *   display label is localized (`features/permissions/roleLabels.ts`), and §17.9 forbids
+ *   presenting an unknown role as anything.
  * - `[data-testid="collaborator-list"]` is rendered even when empty, because the empty state
- *   ("Only you are here") is part of the acceptance surface.
+ *   ("只有你在这里") is part of the acceptance surface.
  * - Collaborator names stay **real DOM text** inside the avatar row, not a `title=` attribute or
  *   CSS `content`; `readCollaborators` reads `innerText` from the avatar's ancestors.
  *
@@ -30,7 +31,7 @@
  * affordance and reads nothing itself. It is deliberately **not** disabled for a viewer: generating
  * a proposal only needs `canRead` (`docs/DECISIONS.md` D-075 §3.7), and the Accept button inside
  * the panel is what `canEdit` gates. `aria-expanded`/`aria-controls` describe the panel it owns,
- * and no existing selector (`active-document`, `connection-status`, `role: …`,
+ * and no existing selector (`active-document`, `connection-status`, `角色：…`,
  * `collaborator-list`, `undo-state`, `markdown-editor`) changes shape or meaning.
  *
  * ## The mode switch (V1 Markdown preview)
@@ -48,6 +49,7 @@
 import type { ConnectionStatus, CollaboratorInfo, UndoState } from '@insighthub/shared';
 
 import type { CapabilityGate } from '../permissions/capabilityGate.js';
+import { roleLabel } from '../permissions/roleLabels.js';
 import { CollaboratorList } from '../collaborators/CollaboratorList.js';
 import { ConnectionStatusBadge } from '../status/ConnectionStatusBadge.js';
 import type { EditorMode } from './editorMode.js';
@@ -131,8 +133,8 @@ export function DocumentHeader({
 
       {/* Unknown role → no chip at all (never "role: null", never a guess). */}
       {gate.role === null ? null : (
-        <span className="role-chip" title="Your role on this document">
-          {`role: ${gate.role}`}
+        <span className="role-chip" title="你在本文档中的角色">
+          {`角色：${roleLabel(gate.role)}`}
         </span>
       )}
 
@@ -145,10 +147,10 @@ export function DocumentHeader({
           type="button"
           className="doc-ai"
           data-testid="ai-open"
-          aria-label="Ask AI"
+          aria-label="询问 AI"
           aria-expanded={aiOpen}
           aria-controls="ai-panel"
-          title={aiOpen ? 'Close the AI proposal panel' : 'Ask the local AI provider for an edit'}
+          title={aiOpen ? '关闭 AI 建议面板' : '向 AI 提供器请求一次编辑建议'}
           onClick={onToggleAi}
         >
           <svg
@@ -164,17 +166,17 @@ export function DocumentHeader({
             <path d="M12 4l1.9 4.6L18.5 10.5l-4.6 1.9L12 17l-1.9-4.6L5.5 10.5l4.6-1.9z" />
             <path d="M18 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" />
           </svg>
-          <span className="doc-ai__label">Ask AI</span>
+          <span className="doc-ai__label">询问 AI</span>
         </button>
 
         <CollaboratorList collaborators={collaborators} localClientId={localClientId} />
 
-        <div className="doc-actions" role="group" aria-label="Edit history">
+        <div className="doc-actions" role="group" aria-label="编辑历史">
           <button
             type="button"
             className="doc-action"
-            aria-label="Undo"
-            title={readOnly ? 'Read-only for your role' : 'Undo'}
+            aria-label="撤销"
+            title={readOnly ? '你的角色为只读' : '撤销'}
             disabled={undoDisabled}
             onClick={onUndo}
           >
@@ -195,8 +197,8 @@ export function DocumentHeader({
           <button
             type="button"
             className="doc-action"
-            aria-label="Redo"
-            title={readOnly ? 'Read-only for your role' : 'Redo'}
+            aria-label="重做"
+            title={readOnly ? '你的角色为只读' : '重做'}
             disabled={redoDisabled}
             onClick={onRedo}
           >

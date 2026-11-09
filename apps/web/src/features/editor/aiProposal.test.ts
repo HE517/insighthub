@@ -11,6 +11,7 @@ import {
 import { applySuggestion } from '../ai/apply.js';
 import { createLocalProvider, LocalProviderError } from '../ai/localProvider.js';
 import type { AiSuggestInput } from '../ai/provider.js';
+import { RemoteProviderError } from '../ai/remoteProvider.js';
 import { createLocalRevisionTracker } from '../ai/revision.js';
 import { applyPort, createDocument, docText } from '../ai/testSupport.js';
 import { APPLY_FAILURE_COPY, describeProviderFailure } from './aiProposalCopy.js';
@@ -128,9 +129,7 @@ describe('revision + applySuggestion: the two measured cases', () => {
     // "Text unchanged" is the acceptance claim, not an implementation detail.
     expect(docText(doc)).toBe(before);
     expect(docText(doc)).toBe('Xhello world');
-    expect(APPLY_FAILURE_COPY.revision).toBe(
-      'The document changed locally since this suggestion was generated.',
-    );
+    expect(APPLY_FAILURE_COPY.revision).toBe('生成此建议后，文档已在本地被修改。');
   });
 
   it('a REMOTE edit outside the anchored range still applies (check #1 must NOT fire)', async () => {
@@ -169,31 +168,52 @@ describe('revision + applySuggestion: the two measured cases', () => {
 describe('apply failure copy', () => {
   it('has the exact frozen sentence for every reason', () => {
     expect(APPLY_FAILURE_COPY).toEqual({
-      revision: 'The document changed locally since this suggestion was generated.',
-      'anchor-unresolved': 'The text this suggestion was anchored to no longer exists.',
-      'text-mismatch': 'The text you reviewed has changed.',
-      malformed: 'This suggestion cannot be applied as-is.',
+      revision: '生成此建议后，文档已在本地被修改。',
+      'anchor-unresolved': '该建议所锚定的文本已不存在。',
+      'text-mismatch': '你审阅过的文本已经改变。',
+      malformed: '该建议无法直接应用。',
     });
   });
 });
 
 describe('describeProviderFailure', () => {
-  it('keeps the typed provider kind and shows its message verbatim', () => {
+  it('keeps the typed provider kind and shows an actionable Chinese detail', () => {
     const copy = describeProviderFailure(
       new LocalProviderError('unknown-instruction', 'Unknown instruction "summarise".'),
     );
     expect(copy.kind).toBe('unknown-instruction');
-    expect(copy.title).toBe('The local provider does not recognise that instruction.');
-    expect(copy.detail).toBe('Unknown instruction "summarise".');
+    expect(copy.title).toBe('本地提供器无法识别该指令。');
+    // The training step the user needs: pick a preset chip, or type a clearer instruction.
+    expect(copy.detail).toBe('无法识别该指令，请点击上方预设操作，或输入更明确的指令后点击生成。');
+    // The English diagnostic is not rendered.
+    expect(copy.detail).not.toContain('Unknown instruction');
   });
 
-  it('falls back to a generic headline without a stack trace', () => {
+  it('falls back to a generic Chinese headline without a stack trace', () => {
     const copy = describeProviderFailure(new TypeError('buildSuggestion: bad input'));
     expect(copy.kind).toBe('unexpected');
-    expect(copy.title).toBe('The suggestion could not be generated.');
-    expect(copy.detail).toBe('buildSuggestion: bad input');
+    expect(copy.title).toBe('无法生成建议。');
+    expect(copy.detail).toBe('提供器失败，且没有给出可识别的原因。');
+    expect(copy.detail).not.toContain('buildSuggestion');
 
     const unknown = describeProviderFailure('not an error');
-    expect(unknown.detail).toBe('The provider failed without a typed reason.');
+    expect(unknown.detail).toBe('提供器失败，且没有给出可识别的原因。');
+  });
+
+  it('distinguishes session loss, permission denial, origin refusal and network loss', () => {
+    const unauthorized = describeProviderFailure(new RemoteProviderError('unauthorized', 401));
+    const notFound = describeProviderFailure(new RemoteProviderError('not-found', 404));
+    const origin = describeProviderFailure(new RemoteProviderError('provider', 403));
+    const network = describeProviderFailure(new RemoteProviderError('provider'));
+
+    expect(unauthorized.title).toContain('会话已失效');
+    expect(notFound.title).toContain('无权访问');
+    expect(origin.title).toBe('AI 提供器未能生成建议。');
+    expect(origin.detail).toContain('403');
+    expect(origin.detail).toContain('请求来源不被允许');
+    expect(network.detail).toContain('网络');
+    // Distinct causes must not collapse into one sentence.
+    const details = new Set([unauthorized.detail, notFound.detail, origin.detail, network.detail]);
+    expect(details.size).toBe(4);
   });
 });

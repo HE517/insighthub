@@ -15,12 +15,12 @@ const STATUS_META: Record<
   ConnectionStatus,
   { badge: 'success' | 'processing' | 'default' | 'error' | 'warning'; label: string }
 > = {
-  idle: { badge: 'default', label: 'Idle' },
-  connecting: { badge: 'processing', label: 'Connecting' },
-  connected: { badge: 'success', label: 'Connected' },
-  reconnecting: { badge: 'warning', label: 'Reconnecting' },
-  offline: { badge: 'error', label: 'Offline' },
-  error: { badge: 'error', label: 'Error' },
+  idle: { badge: 'default', label: '未连接' },
+  connecting: { badge: 'processing', label: '连接中' },
+  connected: { badge: 'success', label: '已连接' },
+  reconnecting: { badge: 'warning', label: '重连中' },
+  offline: { badge: 'error', label: '离线' },
+  error: { badge: 'error', label: '错误' },
 };
 
 interface StatusPanelProps {
@@ -44,15 +44,15 @@ export function StatusPanel({ health }: StatusPanelProps) {
           </Space>
         }
         items={[
-          { key: 'connectionId', label: 'Connection ID', children: connectionId ?? '-' },
-          { key: 'attempts', label: 'Attempts', children: attempt },
-          { key: 'received', label: 'Messages received', children: receivedCount },
+          { key: 'connectionId', label: '连接 ID', children: connectionId ?? '-' },
+          { key: 'attempts', label: '尝试次数', children: attempt },
+          { key: 'received', label: '已接收消息', children: receivedCount },
           {
             key: 'contract',
-            label: 'Contract version',
+            label: '合同版本',
             children: <Tag color="blue">v{SHARED_CONTRACT_VERSION}</Tag>,
           },
-          { key: 'lastError', label: 'Last error', children: lastError ?? '-' },
+          { key: 'lastError', label: '最近错误', children: lastError ?? '-' },
         ]}
       />
 
@@ -65,16 +65,16 @@ export function StatusPanel({ health }: StatusPanelProps) {
             {health.status === 'ok' ? (
               <Badge status="success" text="200" />
             ) : health.status === 'loading' ? (
-              <Badge status="processing" text="checking" />
+              <Badge status="processing" text="检查中" />
             ) : (
-              <Badge status="error" text="unreachable" />
+              <Badge status="error" text="不可达" />
             )}
           </Space>
         }
         items={[
           {
             key: 'status',
-            label: 'Response',
+            label: '响应',
             children:
               health.status === 'ok' ? (
                 <Typography.Text code>{JSON.stringify(health.data)}</Typography.Text>

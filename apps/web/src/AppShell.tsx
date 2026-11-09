@@ -42,11 +42,11 @@ export function AppShell({ identity, user }: AppShellProps) {
           <span className="brand__name">InsightHub</span>
         </div>
 
-        <label className="switcher" title="Switch document by id">
+        <label className="switcher" title="按文档 ID 切换">
           <span className="switcher__glyph" aria-hidden="true" />
           <input
             className="switcher__input"
-            aria-label="Document id"
+            aria-label="文档 ID"
             autoComplete="off"
             spellCheck={false}
             value={pendingDocumentId}
