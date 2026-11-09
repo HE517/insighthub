@@ -91,6 +91,11 @@ export interface OpenAICompatibleOptions {
   readonly maxOutputTokens?: number;
   /** The field the provider expects for the output bound. Defaults to `max_tokens`. */
   readonly maxTokensField?: AiMaxTokensField;
+  /**
+   * Sampling temperature. Defaults to 0 (deterministic-ish). Kimi's reasoning model rejects any
+   * value other than 1, so that adapter states 1 explicitly.
+   */
+  readonly temperature?: number;
   /** Sent only when configured: a provider that does not support JSON mode must not receive it. */
   readonly responseFormat?: { readonly type: 'json_object' };
   /** Test seam. Production omits it and uses the global `fetch`. */
@@ -145,7 +150,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleOptions)
           { role: 'system', content: AI_SYSTEM_PROMPT },
           { role: 'user', content: buildUserPrompt(input) },
         ],
-        temperature: 0,
+        temperature: options.temperature ?? 0,
         // Explicitly non-streaming: this endpoint wants one JSON answer, not an event stream.
         stream: false,
         // The output bound, in the field this provider documents. `max_tokens` (not

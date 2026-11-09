@@ -157,6 +157,8 @@ export function createKimiProvider(options: KimiProviderOptions): ServerAiProvid
     // than inherited, so a provider that switches to `max_completion_tokens` is a one-line change
     // with its own test.
     maxTokensField: 'max_tokens',
+    // Kimi's reasoning model accepts only temperature 1; the shared adapter defaults to 0.
+    temperature: 1,
     // No `response_format` (D-085 §3 rev after the live 400 `invalid_request_error`): the CN
     // endpoint rejected the JSON-mode request for this model. The system prompt already demands
     // bare JSON, and the response still goes through parse + strict draft schema validation, so
