@@ -12,7 +12,7 @@ import { defineConfig } from 'vite';
  * non-default port instead of colliding with a running dev server.
  */
 const backendHost = process.env.INSIGHTHUB_SERVER_HOST ?? '127.0.0.1';
-const backendPort = process.env.PORT ?? '3001';
+const backendPort = process.env.INSIGHTHUB_SERVER_PORT ?? process.env.PORT ?? '3001';
 // The test stack can run several worktrees at once; it passes its listen port through
 // this variable so two suites never fight over 5173.
 const webPort = Number(process.env.INSIGHTHUB_WEB_PORT ?? 5173);
