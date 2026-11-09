@@ -30,7 +30,7 @@
  */
 
 /** The title used when `POST /api/documents` omits one (`docs/DECISIONS.md` D-084). */
-export const DEFAULT_NEW_DOCUMENT_TITLE = 'Untitled document';
+export const DEFAULT_NEW_DOCUMENT_TITLE = '无标题文档';
 
 /** `DocumentMeta.title` is capped at 200 characters (`packages/shared/src/document.ts`). */
 export const DOCUMENT_TITLE_MAX_LENGTH = 200;

@@ -193,7 +193,7 @@ describe('POST /api/documents — authenticated atomic creation', () => {
     assert.equal(defaulted.status, 201);
     assert.equal(
       ((await defaulted.json()) as Record<string, unknown>)['title'],
-      'Untitled document',
+      '无标题文档',
     );
 
     const maxTitle = 'x'.repeat(200);

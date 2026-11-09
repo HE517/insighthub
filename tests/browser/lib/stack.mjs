@@ -252,6 +252,9 @@ export class DevStack {
     return {
       PORT: String(this.#serverPort),
       HOST: '127.0.0.1',
+      // The suite may run on a non-default web port for worktree isolation. The server validates
+      // the browser Origin, so derive it from the same web port the Vite child listens on.
+      CORS_ORIGIN: `http://127.0.0.1:${this.#webPort}`,
       BOOTSTRAP_RATE_LIMIT_PER_MINUTE: '10000',
       // One suite run performs far more AI generations for demo-ada than the 20/hour budget
       // allows; raising it through the same configuration keeps the limiter code under test.

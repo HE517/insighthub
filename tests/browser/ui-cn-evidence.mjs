@@ -703,7 +703,7 @@ async function main() {
     check('the same write from the launcher origin is 201', allowedWrite.status === 201, allowedWrite);
     check(
       'the allowed write returns the server default title',
-      allowedWrite.json?.title === 'Untitled document',
+      allowedWrite.json?.title === '无标题文档',
       allowedWrite.json,
     );
     const evilNoCookie = await http('foreign-Origin write without a session', 'POST', '/api/documents', {
