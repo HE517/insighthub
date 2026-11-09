@@ -145,6 +145,30 @@ describe('app_user mapping (M4 B1)', () => {
     assert.equal(await users.findByClerkUserId('no-such-clerk-id'), null);
   });
 
+  it('finds a mapping row by email, case-insensitively and trimmed (P0-2)', async () => {
+    const id = await users.upsertByClerkUserId({
+      clerkUserId: 'user_email_lookup',
+      email: 'Mixed.Case@Example.COM',
+      displayName: 'Mixed Case',
+    });
+
+    // Typed addresses are normalised the same way the SQL is: trim + lower-case.
+    const found = await users.findByEmail('  mixed.case@example.com  ');
+    assert.equal(found?.id, id);
+    assert.equal(found?.displayName, 'Mixed Case');
+    assert.equal(found?.email, 'Mixed.Case@Example.COM', 'the stored profile is not rewritten');
+
+    assert.equal(await users.findByEmail('unknown@example.com'), null);
+    assert.equal(await users.findByEmail(''), null);
+    assert.equal(await users.findByEmail('   '), null);
+
+    // A user Clerk supplied without an email is unreachable by address (NULL never matches).
+    const withoutEmail = await users.upsertByClerkUserId({ clerkUserId: 'user_without_email' });
+    const stored = await users.findById(withoutEmail);
+    assert.equal(stored?.email, null);
+    assert.equal(await users.findByEmail('null@example.com'), null);
+  });
+
   it('keeps the mapping across a store restart', async () => {
     const directory = await tempDirectory('insighthub-app-user-restart-');
     const first = await openDocumentStore(directory);

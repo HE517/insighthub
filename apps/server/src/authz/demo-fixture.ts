@@ -43,6 +43,14 @@ import type { MembershipRow } from './membership-store.js';
 export interface DemoIdentity {
   readonly userId: string;
   readonly displayName: string;
+  /**
+   * The demo mailbox, used **only** by the P0-2 member service's email lookup.
+   *
+   * It is not an account: there is no password, no inbox and no signup. It exists so the
+   * frozen email-invitation flow (`docs/agent-governance/P0-2-MEMBERS.md`) is exercisable in
+   * demo mode, where `app_user` is empty.
+   */
+  readonly email: string;
 }
 
 /**
@@ -55,11 +63,15 @@ export interface DemoIdentity {
  * Names avoid the substring `You`: the web UI labels the local session "You", and a demo name
  * containing it would make "is this the local caret or a remote one?" ambiguous in the
  * presence UI and in the browser suite's assertions.
+ *
+ * The emails are the `P0-2` demo address book: `ada@insighthub.test` etc. They are lowercase
+ * by definition, and the member service compares them case-insensitively like any other
+ * address.
  */
 export const DEMO_IDENTITIES: readonly DemoIdentity[] = [
-  { userId: 'demo-ada', displayName: 'Ada Lovelace' },
-  { userId: 'demo-grace', displayName: 'Grace Hopper' },
-  { userId: 'demo-linus', displayName: 'Linus Torvalds' },
+  { userId: 'demo-ada', displayName: 'Ada Lovelace', email: 'ada@insighthub.test' },
+  { userId: 'demo-grace', displayName: 'Grace Hopper', email: 'grace@insighthub.test' },
+  { userId: 'demo-linus', displayName: 'Linus Torvalds', email: 'linus@insighthub.test' },
 ];
 
 /** The identity a client claims when it has no reason to pick another one. */
@@ -69,6 +81,18 @@ export const DEFAULT_DEMO_USER_ID = 'demo-ada';
 export function findDemoIdentity(demoUserId: unknown): DemoIdentity | null {
   if (typeof demoUserId !== 'string') return null;
   return DEMO_IDENTITIES.find((identity) => identity.userId === demoUserId) ?? null;
+}
+
+/**
+ * Look up a roster entry by email, case-insensitively and trimmed (P0-2).
+ *
+ * Returns `null` for anything that is not a demo mailbox, which the member service turns into
+ * the same `404 user_not_found` a registered-but-unknown Clerk address produces.
+ */
+export function findDemoIdentityByEmail(email: string): DemoIdentity | null {
+  const normalized = email.trim().toLowerCase();
+  if (normalized === '') return null;
+  return DEMO_IDENTITIES.find((identity) => identity.email === normalized) ?? null;
 }
 
 /** A seeded membership row: the durable unit of authorization (§17.3). */
@@ -162,6 +186,20 @@ export function assertDemoFixtureIsConsistent(): void {
   const userIds = new Set(DEMO_IDENTITIES.map((identity) => identity.userId));
   const seenPairs = new Set<string>();
   const documentedIds = new Set<string>();
+  // P0-2: an email that is blank, duplicated or not address-shaped would make the demo address
+  // book ambiguous — two identities resolving from one typed address — so it is a startup error
+  // here rather than a surprising invite later.
+  const seenEmails = new Set<string>();
+  for (const identity of DEMO_IDENTITIES) {
+    const email = identity.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
+      problems.push(`identity ${identity.userId}: invalid demo email`);
+    }
+    if (seenEmails.has(email)) {
+      problems.push(`identity ${identity.userId}: duplicate demo email`);
+    }
+    seenEmails.add(email);
+  }
 
   for (const membership of DEMO_MEMBERSHIPS) {
     if (!documentIds.has(membership.documentId)) {

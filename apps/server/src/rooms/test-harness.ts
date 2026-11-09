@@ -40,8 +40,10 @@ import { createApp } from '../app.js';
 import {
   createAuthz,
   createIdentityDeps,
+  createMemberService,
   isAppUserStore,
   type AuthzService,
+  type MemberService,
   type SessionVerifier,
 } from '../authz/public.js';
 import type { AuthMode, ServerConfig } from '../config.js';
@@ -112,6 +114,13 @@ export interface TestServer {
    * cookie; the socket layer only receives it when `authorization: 'enforced'`.
    */
   readonly authz: AuthzService;
+  /**
+   * The P0-2 member service, when the harness was asked to wire it (`members: true`).
+   *
+   * Exposed because a test may need to observe the service (e.g. call it directly), but the
+   * HTTP routes and the revocation callback are already wired exactly as `index.ts` wires them.
+   */
+  readonly members: MemberService | null;
   close(): Promise<void>;
 }
 
@@ -169,6 +178,14 @@ export interface TestServerOptions extends WebSocketServerOptions {
    * mode, where the existing session lookup is the identity source.
    */
   verifier?: SessionVerifier | null;
+  /**
+   * Wire the P0-2 member service and its six HTTP routes, exactly as `index.ts` does.
+   *
+   * Default `false` so every pre-P0-2 suite keeps an app without the member routes (the same
+   * opt-in shape as `versions`), and so no suite pays for a second membership connection it
+   * does not use.
+   */
+  members?: boolean;
 }
 
 /**
@@ -188,6 +205,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     authorization = 'permissive',
     authMode = 'demo',
     verifier = null,
+    members: wireMembers = false,
     ...transportOptions
   } = options;
 
@@ -259,10 +277,26 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(options.now === undefined ? {} : { now: options.now }),
   });
 
+  // P0-2: mirror `index.ts` — a second membership connection for reads/writes plus the
+  // revocation callback into the same registry the sockets use. Opt-in so the ~190 pre-P0-2
+  // suites do not each open another SQLite handle.
+  const memberService = wireMembers
+    ? await createMemberService({
+        dataPath: authzDirectory,
+        authz,
+        appUsers: isAppUserStore(store) ? store : null,
+        demoEmails: authMode === 'demo',
+        onMembershipChanged: (documentId, userIds) => {
+          registry.closeUserConnections(documentId, userIds);
+        },
+      })
+    : null;
+
   const appOptions = {
     ...(options.log === undefined ? {} : { logger: options.log }),
     ...(isDocumentCreationStore(store) ? { documentCreation: store } : {}),
     versions: registry,
+    ...(memberService === null ? {} : { members: memberService }),
   };
   const server: Server = createServer(
     createApp(config, authz, undefined, identityOptions, undefined, appOptions),
@@ -287,8 +321,11 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     store,
     dataPath,
     authz,
+    members: memberService,
     close: async () => {
       await handle.close();
+      // P0-2: the member service's write connection goes before authz's read connection.
+      memberService?.close();
       // Close the databases before removing their directories: on Windows an open handle makes
       // the removal fail, and a leaked temp directory per test run is its own bug.
       authz.close();

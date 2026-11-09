@@ -62,6 +62,22 @@ export interface AppUserStore {
 
   /** The mapping row for a Clerk user id, or `null` when it does not exist. */
   findByClerkUserId(clerkUserId: string): Promise<AppUser | null>;
+
+  /**
+   * The mapping row for an email address, or `null` when no registered user has it.
+   *
+   * **P0-2 (email invitation).** This is the lookup that turns a typed address into an
+   * internal `userId`; the member service never accepts a user id from an invite body.
+   *
+   * Matching is **case-insensitive on the trimmed address**: `Ada<span>@Example.com</span>` and
+   * `ada@example.com` denote the same mailbox, and a user who typed a trailing space must
+   * not get `404 user_not_found` for their own address. `app_user.email` is nullable because
+   * Clerk may not supply one, so a `NULL` email never matches.
+   *
+   * Multiple rows may share an email (Clerk does not make email unique). The adapter must
+   * therefore pick **deterministically** (lowest `id`) rather than depend on SQLite row order.
+   */
+  findByEmail(email: string): Promise<AppUser | null>;
 }
 
 /** True when `value` can serve the internal-user mapping (the SQLite store does). */
@@ -71,6 +87,7 @@ export function isAppUserStore(value: unknown): value is AppUserStore {
   return (
     typeof candidate.upsertByClerkUserId === 'function' &&
     typeof candidate.findById === 'function' &&
-    typeof candidate.findByClerkUserId === 'function'
+    typeof candidate.findByClerkUserId === 'function' &&
+    typeof candidate.findByEmail === 'function'
   );
 }

@@ -39,12 +39,14 @@
  * - **A denied join must not evict a room the socket already holds.** That ordering is A3's to
  *   implement; this surface only supplies the decision.
  *
- * ## What this surface deliberately does not offer
+ * ## P0-2: member management is a separate service on the same surface
  *
- * No `isAdmin`, no role mutation, no space/tenant check, no "full capabilities" enumeration.
- * §17.7 excludes a space entity and membership management in Phase 2, and a helper that returned
- * all four capabilities at once would invite a caller to make a decision from stale values
- * instead of asking again at the enforcement point.
+ * `createMemberService` (below) is the one role-mutation seam, and it is **not** a widening of the
+ * decision core: it still asks `authorizeDocument(…, 'canManageMembers')` for every write, and the
+ * store re-checks the Owner inside each transaction. What this surface deliberately does not
+ * offer is still: no `isAdmin`, no space/tenant check, no "full capabilities" enumeration. A
+ * helper that returned all four capabilities at once would invite a caller to decide from stale
+ * values instead of asking again at the enforcement point.
  */
 export {
   createAuthz,
@@ -99,3 +101,23 @@ export {
   type IdentityDeps,
   type IdentityOptions,
 } from './identity.js';
+
+/* ------------------------------------------------------------------ *
+ * P0-2 — document member management (email invitation, transfer/leave)
+ * ------------------------------------------------------------------ */
+
+export {
+  createMemberService,
+  type MemberErrorCode,
+  type MemberList,
+  type MemberOutcome,
+  type MemberService,
+  type MemberServiceOptions,
+  type MemberSummary,
+} from './members.js';
+
+export {
+  ASSIGNABLE_MEMBER_ROLES,
+  isAssignableMemberRole,
+  type AssignableMemberRole,
+} from './membership-store.js';

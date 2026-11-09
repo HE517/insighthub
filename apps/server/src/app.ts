@@ -85,12 +85,16 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
   createIdentityDeps,
+  isAssignableMemberRole,
   resolveAuthenticatedUser,
+  type AssignableMemberRole,
   type AuthzService,
   type AuthenticatedUser,
   type DocumentAccessDecision,
   type IdentityDeps,
   type IdentityOptions,
+  type MemberOutcome,
+  type MemberService,
 } from './authz/public.js';
 import { type AuthMode, type ServerConfig } from './config.js';
 import {
@@ -187,6 +191,17 @@ const RESPONSE_BODIES = {
   restoreFailed: { error: 'restore_failed' },
   /** P0-1 C4: the same operation id was reused with a different request. */
   operationConflict: { error: 'operation_conflict' },
+  /**
+   * P0-2 member management. Each refusal has its own frozen body so the client can show the
+   * specific Chinese message (`P0-2-MEMBERS.md`): "no such user" is distinguishable from
+   * "not your document", and the three ownership refusals each name a different remedy
+   * (transfer, use transfer, transfer before leaving).
+   */
+  userNotFound: { error: 'user_not_found' },
+  alreadyOwner: { error: 'already_owner' },
+  ownerRoleImmutable: { error: 'owner_role_immutable' },
+  ownerRequiresTransfer: { error: 'owner_requires_transfer' },
+  lastOwner: { error: 'last_owner' },
 } as const;
 
 /**
@@ -235,6 +250,14 @@ export interface AppOptions {
    * an endpoint that could only answer 500 is worse than the honest 404 for an unknown path.
    */
   readonly versions?: DocumentVersionService | null;
+  /**
+   * P0-2: the member-management service (`authz/members.ts`).
+   *
+   * Absent means the six `/api/documents/:id/members` routes are **not mounted at all** — the
+   * same honest-404 rule as {@link versions}. That keeps every pre-P0-2 test harness and the
+   * AI invariants app unchanged, while `index.ts` always supplies the real service.
+   */
+  readonly members?: MemberService | null;
 }
 
 /** The only body a bootstrap request may carry (§17.3/§17.4). */
@@ -411,6 +434,12 @@ export function createApp(
     bootstrapLimiter,
     options.documentCreation ?? null,
   );
+  // P0-2: member management. Mounted only when the composition root supplied the service (it
+  // needs its own connection to the membership table), so an app built without one answers the
+  // ordinary unknown-path 404 rather than a route that could only 500.
+  if (options.members !== undefined && options.members !== null) {
+    mountMemberRoutes(app, authz, identityDeps, options.members);
+  }
   // P0-1: `POST …/versions/:versionId/restore` + `GET …/versions` (C4). Mounted only when the
   // composition root supplied a version service — a route with no service could only 500.
   if (options.versions !== undefined && options.versions !== null) {
@@ -621,6 +650,380 @@ function mountAuthorizationRoutes(
    * through production code rather than through a mock.
    */
   app.get('/api/documents/:id', createDocumentAccessHandler(authz, 'canRead', identityDeps));
+}
+
+/* ------------------------------------------------------------------ *
+ * P0-2 — document member management (D-M1 = A, D-M2 = C)
+ * ------------------------------------------------------------------ */
+
+/** The strictly validated invite body. */
+interface InviteMemberBody {
+  readonly email: string;
+  readonly role: AssignableMemberRole;
+}
+
+/** The strictly validated role-change body. */
+interface ChangeMemberRoleBody {
+  readonly role: AssignableMemberRole;
+}
+
+/** The strictly validated ownership-transfer body. */
+interface TransferOwnerBody {
+  readonly userId: string;
+}
+
+/**
+ * Parse the **entire** invite body.
+ *
+ * Exactly `{ email: string, role: 'viewer'|'commenter'|'editor' }`. Any other key, a missing
+ * field, a blank/oversized address or `role: 'owner'` is refused rather than ignored — this is
+ * what makes "the client cannot grant ownership with an invite" a property of the endpoint, not
+ * of a later check. The service validates again (defence in depth: it is directly callable).
+ */
+function parseInviteMemberBody(body: unknown): InviteMemberBody | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.includes('email') || !keys.includes('role')) return null;
+
+  const rawEmail = record['email'];
+  if (typeof rawEmail !== 'string') return null;
+  const email = rawEmail.trim();
+  // 320 is the practical maximum for an address; the bounds also stop an absurd body from
+  // reaching the SQL comparison. Shape is checked here so a typo is `400`, while a
+  // well-formed but unregistered address is the endpoint's `404 user_not_found`.
+  if (email.length < 3 || email.length > 320) return null;
+  if (!/^[^\s@]+@[^\s@]+$/.test(email)) return null;
+
+  const role = record['role'];
+  if (!isAssignableMemberRole(role)) return null;
+  return { email, role };
+}
+
+/** Parse the strict `PATCH …/members/:userId` body: exactly `{ role }`. */
+function parseChangeMemberRoleBody(body: unknown): ChangeMemberRoleBody | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 1 || keys[0] !== 'role') return null;
+  const role = record['role'];
+  if (!isAssignableMemberRole(role)) return null;
+  return { role };
+}
+
+/** Parse the strict `POST …/owner` body: exactly `{ userId }`, a non-empty id. */
+function parseTransferOwnerBody(body: unknown): TransferOwnerBody | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 1 || keys[0] !== 'userId') return null;
+  const userId = record['userId'];
+  if (typeof userId !== 'string') return null;
+  const trimmed = userId.trim();
+  if (trimmed.length === 0 || trimmed.length > 200) return null;
+  return { userId: trimmed };
+}
+
+/**
+ * Read a JSON body **after** authentication and authorization.
+ *
+ * The parser is scoped to these routes (like the version/creation parsers): an unauthenticated
+ * or non-member caller must be refused before the server allocates a parse tree, and a body
+ * Express cannot parse must produce this endpoint's `400 invalid_request`, never an error page.
+ */
+const memberJsonParser = express.json({ limit: '8kb' });
+
+function readMemberBody(req: Request, res: Response): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    memberJsonParser(req, res, (error?: unknown) => {
+      if (error !== undefined && error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(req.body);
+    });
+  });
+}
+
+/**
+ * Mount the six P0-2 member routes.
+ *
+ * ## Order, and why
+ *
+ * `identity (401) → authorization (404/403) → body (400) → operation (200/204/409)`
+ *
+ * Authorization precedes body parsing for the same reason the version routes do: a stranger must
+ * always leave through the same `404` regardless of what it sent, and a non-Owner member through
+ * the same `403`. `GET` has no body, so the service's own `authorizeDocument` call is the whole
+ * check for it.
+ *
+ * ## Why the service repeats the authorization
+ *
+ * The entry check here is what the caller sees; the service (and its store transaction) re-checks
+ * the Owner row, because a transfer/removal can land between the entry check and the write. The
+ * two checks use the same capability (`canManageMembers`), so they cannot disagree about what
+ * "Owner" means.
+ */
+function mountMemberRoutes(
+  app: Express,
+  authz: AuthzService,
+  identityDeps: IdentityDeps,
+  members: MemberService,
+): void {
+  app.get('/api/documents/:id/members', async (req: Request, res: Response) => {
+    const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+    if (user === null) {
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
+      return;
+    }
+    bindRequestUser(res, user.userId);
+    const documentId = readPathParameter(req.params, 'id');
+    bindRequestDocument(res, documentId);
+    const outcome = await members.list(documentId, user.userId);
+    respondToMemberOutcome(res, identityDeps.mode, outcome, (list) => {
+      res.status(200).json(list);
+    });
+  });
+
+  app.post('/api/documents/:id/members', async (req: Request, res: Response) => {
+    const access = await authorizeMemberWrite(
+      req,
+      res,
+      authz,
+      identityDeps,
+      'canManageMembers',
+    );
+    if (access === null) return;
+
+    let rawBody: unknown;
+    try {
+      rawBody = await readMemberBody(req, res);
+    } catch {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+    const input = parseInviteMemberBody(rawBody);
+    if (input === null) {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+
+    const outcome = await members.invite(
+      access.documentId,
+      access.userId,
+      input.email,
+      input.role,
+    );
+    respondToMemberOutcome(res, identityDeps.mode, outcome, (member) => {
+      // "200 返回更新后的成员" (P0-2): the member row itself, no token or secret.
+      res.status(200).json(member);
+    });
+  });
+
+  app.patch('/api/documents/:id/members/:userId', async (req: Request, res: Response) => {
+    const access = await authorizeMemberWrite(
+      req,
+      res,
+      authz,
+      identityDeps,
+      'canManageMembers',
+    );
+    if (access === null) return;
+
+    let rawBody: unknown;
+    try {
+      rawBody = await readMemberBody(req, res);
+    } catch {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+    const input = parseChangeMemberRoleBody(rawBody);
+    if (input === null) {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+
+    const targetUserId = readPathParameter(req.params, 'userId');
+    const outcome = await members.changeRole(
+      access.documentId,
+      access.userId,
+      targetUserId,
+      input.role,
+    );
+    respondToMemberOutcome(res, identityDeps.mode, outcome, (member) => {
+      res.status(200).json(member);
+    });
+  });
+
+  app.delete('/api/documents/:id/members/:userId', async (req: Request, res: Response) => {
+    const access = await authorizeMemberWrite(
+      req,
+      res,
+      authz,
+      identityDeps,
+      'canManageMembers',
+    );
+    if (access === null) return;
+
+    const targetUserId = readPathParameter(req.params, 'userId');
+    const outcome = await members.remove(access.documentId, access.userId, targetUserId);
+    respondToMemberOutcome(res, identityDeps.mode, outcome, () => {
+      // 204: the row is gone and the live sockets have been told; there is nothing to return.
+      res.status(204).end();
+    });
+  });
+
+  app.post('/api/documents/:id/owner', async (req: Request, res: Response) => {
+    const access = await authorizeMemberWrite(
+      req,
+      res,
+      authz,
+      identityDeps,
+      'canManageMembers',
+    );
+    if (access === null) return;
+
+    let rawBody: unknown;
+    try {
+      rawBody = await readMemberBody(req, res);
+    } catch {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+    const input = parseTransferOwnerBody(rawBody);
+    if (input === null) {
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    }
+
+    const outcome = await members.transferOwner(
+      access.documentId,
+      access.userId,
+      input.userId,
+    );
+    respondToMemberOutcome(res, identityDeps.mode, outcome, (result) => {
+      res.status(200).json({ ownerId: result.ownerId });
+    });
+  });
+
+  app.post('/api/documents/:id/leave', async (req: Request, res: Response) => {
+    // Any member may leave; `canRead` is the membership check. A stranger still gets the same
+    // non-disclosure `404`, and the Owner refusal (`last_owner`) comes from the store's
+    // transaction, not from a second role comparison here.
+    const access = await authorizeMemberWrite(req, res, authz, identityDeps, 'canRead');
+    if (access === null) return;
+
+    const outcome = await members.leave(access.documentId, access.userId);
+    respondToMemberOutcome(res, identityDeps.mode, outcome, () => {
+      res.status(204).end();
+    });
+  });
+}
+
+interface MemberWriteAccess {
+  readonly userId: string;
+  readonly documentId: string;
+}
+
+/**
+ * Resolve identity and authorize one member **write** before its body is parsed.
+ *
+ * Returns `null` after writing the response, so every route has exactly one refusal path. The
+ * capability is passed in (`canManageMembers` for management, `canRead` for `leave`) rather than
+ * hardcoded, so "Owner may manage" and "any member may leave" stay one decision each.
+ */
+async function authorizeMemberWrite(
+  req: Request,
+  res: Response,
+  authz: AuthzService,
+  identityDeps: IdentityDeps,
+  capability: 'canManageMembers' | 'canRead',
+): Promise<MemberWriteAccess | null> {
+  const user = await resolveAuthenticatedUser({ cookie: req.headers.cookie }, identityDeps);
+  if (user === null) {
+    res.status(401).json(unauthorizedBody(identityDeps.mode));
+    return null;
+  }
+  bindRequestUser(res, user.userId);
+  const documentId = readPathParameter(req.params, 'id');
+  bindRequestDocument(res, documentId);
+
+  const decision = await authz.authorizeDocument(documentId, user.userId, capability);
+  switch (decision.kind) {
+    case 'unauthenticated':
+      res.status(401).json(unauthorizedBody(identityDeps.mode));
+      return null;
+    case 'not_found':
+      res.status(404).json(RESPONSE_BODIES.notFound);
+      return null;
+    case 'forbidden':
+      res.status(403).json(RESPONSE_BODIES.forbidden);
+      return null;
+    case 'granted':
+      return { userId: user.userId, documentId };
+    default: {
+      const never: never = decision;
+      throw new Error(`unhandled document access decision: ${JSON.stringify(never)}`);
+    }
+  }
+}
+
+/**
+ * Map one member outcome to the frozen P0-2 status/body table.
+ *
+ * `success` is a callback because the three success shapes differ (a member row, a 204 with no
+ * body, and the transfer's `{ ownerId }`). Keeping every refusal in this one switch is what makes
+ * the same domain code produce the same response on every one of the six routes.
+ */
+function respondToMemberOutcome<T>(
+  res: Response,
+  mode: AuthMode,
+  outcome: MemberOutcome<T>,
+  success: (value: T) => void,
+): void {
+  if (outcome.ok) {
+    success(outcome.value);
+    return;
+  }
+  switch (outcome.code) {
+    case 'unauthenticated':
+      res.status(401).json(unauthorizedBody(mode));
+      return;
+    case 'not_found':
+    case 'member_not_found':
+      // A missing target row and an inaccessible document both use the one non-disclosure body.
+      res.status(404).json(RESPONSE_BODIES.notFound);
+      return;
+    case 'forbidden':
+      res.status(403).json(RESPONSE_BODIES.forbidden);
+      return;
+    case 'user_not_found':
+      res.status(404).json(RESPONSE_BODIES.userNotFound);
+      return;
+    case 'already_owner':
+      res.status(409).json(RESPONSE_BODIES.alreadyOwner);
+      return;
+    case 'owner_role_immutable':
+      res.status(409).json(RESPONSE_BODIES.ownerRoleImmutable);
+      return;
+    case 'owner_requires_transfer':
+      res.status(409).json(RESPONSE_BODIES.ownerRequiresTransfer);
+      return;
+    case 'last_owner':
+      res.status(409).json(RESPONSE_BODIES.lastOwner);
+      return;
+    case 'invalid_role':
+    case 'invalid_request':
+      res.status(400).json(RESPONSE_BODIES.invalidRequest);
+      return;
+    case 'internal_error':
+      res.status(500).json(RESPONSE_BODIES.internalError);
+      return;
+    default: {
+      const never: never = outcome.code;
+      throw new Error(`unhandled member outcome: ${JSON.stringify(never)}`);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1068,11 +1471,11 @@ function readCreateDocumentBody(req: Request, res: Response): Promise<unknown> {
 /**
  * Handle `GET /api/documents/:id` for one required capability.
  *
- * Exported because the capability matrix needs the **production** mapper for capabilities no
- * production route requires yet: Phase 2 has no endpoint that needs more than `canRead`
- * (`docs/TASKS.md` P2-6 is a decision-core property, and §17.3 forbids inventing a member
- * management endpoint to make a 403 observable). Mounting this factory with `canEdit` or
- * `canManageMembers` therefore proves the refusal path without inventing a product surface.
+ * Exported because the capability matrix needs the **production** mapper for every capability.
+ * Most production routes read through this factory with `canRead`; the P0-2 member routes ask
+ * the decision core directly (they need a 401/404/403 branch per write, not a document body), so
+ * mounting this factory with `canEdit` or `canManageMembers` still proves the refusal path
+ * through production code rather than through a mock.
  *
  * `identityDeps` is required (not defaulted) so a caller cannot accidentally mount the
  * production handler with demo-only identity resolution after the mode changed.
