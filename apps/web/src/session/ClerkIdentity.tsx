@@ -32,11 +32,11 @@ import { performSignOut } from './signOut.js';
 export function serverIdentityLabel(state: ClerkServerSessionState): string {
   switch (state.status) {
     case 'ready':
-      return `server: ${state.identity.displayName}`;
+      return `服务器：${state.identity.displayName}`;
     case 'pending':
-      return 'server identity pending';
+      return '服务器身份待确认';
     case 'unavailable':
-      return 'server identity unavailable';
+      return '服务器身份不可用';
     default: {
       const never: never = state;
       return never;
@@ -56,7 +56,7 @@ export function ClerkIdentityView({ user, serverSession, onSignOut }: ClerkIdent
     <div
       className="identity identity--clerk"
       data-testid="clerk-identity"
-      title="Signed in with Clerk"
+      title="已通过 Clerk 登录"
     >
       <span className="identity__avatar" aria-hidden="true">
         {initialsOf(user.name)}
@@ -80,8 +80,8 @@ export function ClerkIdentityView({ user, serverSession, onSignOut }: ClerkIdent
         data-testid="sign-out"
         onClick={onSignOut}
       >
-        Sign out
-      </button>
+        退出登录
+      </button>{' '}
     </div>
   );
 }

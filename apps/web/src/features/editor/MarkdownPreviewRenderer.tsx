@@ -96,7 +96,7 @@ interface PreviewImageProps {
  * cannot fetch it. `data-image-alt` keeps the original alt queryable for tests and tooling.
  */
 function PreviewImage({ alt, title }: PreviewImageProps) {
-  const label = alt === undefined || alt.trim() === '' ? '[image]' : `[image: ${alt}]`;
+  const label = alt === undefined || alt.trim() === '' ? '[图片]' : `[图片：${alt}]`;
   return (
     <span className="markdown-preview__image" data-image-alt={alt ?? ''} title={title}>
       {label}
@@ -137,7 +137,7 @@ export default function MarkdownPreviewRenderer({
   return (
     <div className="markdown-preview__body" data-testid="markdown-preview-content">
       {source.trim() === '' ? (
-        <p className="markdown-preview__empty">This document is empty.</p>
+        <p className="markdown-preview__empty">本文档为空。</p>
       ) : (
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

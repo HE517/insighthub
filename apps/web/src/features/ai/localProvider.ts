@@ -362,24 +362,24 @@ function summaryFor(
 ): string {
   switch (intent) {
     case 'uppercase':
-      return usedSelection ? 'Uppercase the selection' : 'Uppercase the document';
+      return usedSelection ? '将选区转为大写' : '将整篇文档转为大写';
     case 'trim-trailing-space': {
-      const lines = plural(drafts.length, 'line');
-      return `Trim trailing whitespace on ${lines}`;
+      const lines = plural(drafts.length, '行');
+      return `去除 ${lines}的行尾空格`;
     }
     case 'add-todo': {
-      const lines = plural(drafts.length, 'line');
-      return `Prefix ${lines} with a task checkbox`;
+      const lines = plural(drafts.length, '行');
+      return `为 ${lines}添加待办复选框`;
     }
     case 'replace-selection':
-      return 'Replace the selection with the requested text';
+      return '用请求的文本替换选区';
     case 'delete-selection':
-      return 'Delete the selection';
+      return '删除选区';
   }
 }
 
 function plural(count: number, noun: string): string {
-  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
+  return count === 1 ? `1 ${noun}` : `${count} ${noun}`;
 }
 
 function isWhitespace(character: string): boolean {

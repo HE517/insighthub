@@ -71,8 +71,8 @@ describe('clerkIdentityFor', () => {
       name: 'grace',
       email: 'grace@example.com',
     });
-    expect(clerkIdentityFor({})).toEqual({ name: 'Signed-in user', email: null });
-    expect(clerkIdentityFor(null)).toEqual({ name: 'Signed-in user', email: null });
+    expect(clerkIdentityFor({})).toEqual({ name: '已登录用户', email: null });
+    expect(clerkIdentityFor(null)).toEqual({ name: '已登录用户', email: null });
   });
 
   it('ignores blank strings instead of rendering an empty name', () => {
@@ -84,15 +84,15 @@ describe('clerkIdentityFor', () => {
         username: '  ',
         primaryEmailAddress: { emailAddress: '  ' },
       }),
-    ).toEqual({ name: 'Signed-in user', email: null });
+    ).toEqual({ name: '已登录用户', email: null });
   });
 });
 
 describe('serverIdentityLabel', () => {
   it('reports all three server-session states truthfully', () => {
-    expect(serverIdentityLabel(READY)).toBe('server: Ada Lovelace (server)');
-    expect(serverIdentityLabel({ status: 'pending' })).toBe('server identity pending');
-    expect(serverIdentityLabel({ status: 'unavailable' })).toBe('server identity unavailable');
+    expect(serverIdentityLabel(READY)).toBe('服务器：Ada Lovelace (server)');
+    expect(serverIdentityLabel({ status: 'pending' })).toBe('服务器身份待确认');
+    expect(serverIdentityLabel({ status: 'unavailable' })).toBe('服务器身份不可用');
   });
 });
 
@@ -106,11 +106,11 @@ describe('ClerkIdentityView', () => {
     expect(markup).toContain('data-testid="clerk-user-email"');
     expect(markup).toContain('ada@example.com');
     expect(markup).toContain('data-testid="clerk-server-identity"');
-    expect(markup).toContain('server: Ada Lovelace (server)');
+    expect(markup).toContain('服务器：Ada Lovelace (server)');
     expect(markup).toContain('data-testid="sign-out"');
     // The Clerk block must not impersonate the demo identity contract.
     expect(markup).not.toContain('data-testid="session-identity"');
-    expect(markup).not.toContain('demo session');
+    expect(markup).not.toContain('演示会话');
   });
 
   it('omits the email line when Clerk has no email, and states the server session honestly', () => {
@@ -119,7 +119,7 @@ describe('ClerkIdentityView', () => {
       serverSession: { status: 'pending' },
     });
     expect(markup).not.toContain('data-testid="clerk-user-email"');
-    expect(markup).toContain('server identity pending');
+    expect(markup).toContain('服务器身份待确认');
   });
 
   it('never renders an id or a token-like value', () => {

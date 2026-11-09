@@ -18,7 +18,7 @@
  * ## Why the empty state is rendered inside the list
  *
  * The list container is a contract surface (`[data-testid="collaborator-list"]`) and must
- * exist even when nobody else is connected. The sentence "Only you are here" is the
+ * exist even when nobody else is connected. The sentence "只有你在这里" is the
  * established wording; `readCollaborators` uses it for its `emptyState` field.
  */
 import type { CollaboratorInfo } from '@insighthub/shared';
@@ -34,13 +34,9 @@ export interface CollaboratorListProps {
 
 export function CollaboratorList({ collaborators, localClientId }: CollaboratorListProps) {
   return (
-    <div
-      className="collab-group"
-      data-testid="collaborator-list"
-      aria-label="Collaborators"
-    >
+    <div className="collab-group" data-testid="collaborator-list" aria-label="协作者">
       {collaborators.length === 0 ? (
-        <span className="collab-group__empty">Only you are here</span>
+        <span className="collab-group__empty">只有你在这里</span>
       ) : (
         collaborators.map((collaborator) => {
           const color = collaborator.user.color ?? colorForClient(collaborator.clientId);
@@ -65,7 +61,7 @@ export function CollaboratorList({ collaborators, localClientId }: CollaboratorL
               */}
               <span className="collab__tip">
                 {collaborator.user.name}
-                {isSelf ? ' · you' : ''}
+                {isSelf ? ' · 你' : ''}
               </span>
             </div>
           );

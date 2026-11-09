@@ -59,14 +59,14 @@ describe('read-only notice: shown for a known role without canEdit', () => {
     const html = markupFor(gate);
     expect(html).toContain(`data-testid="${READ_ONLY_NOTICE_TESTID}"`);
     expect(html).toContain('role="status"');
-    // The wording CONTRACTS §17.9 requires, in some capitalisation.
-    expect(html).toMatch(/read-only for your role/i);
-    // The role is named, so the user can tell why.
-    expect(html).toContain('viewer');
+    // The wording CONTRACTS §17.9 requires, in Simplified Chinese.
+    expect(html).toMatch(/只读/);
+    // The role is named (Chinese label), so the user can tell why.
+    expect(html).toContain('只读查看者');
     // It must not claim a save happened, or imply one.
-    expect(html).not.toMatch(/saved|saving/i);
+    expect(html).not.toMatch(/已保存|保存成功|正在保存/);
     // Nor may it claim the role change reaches the UI immediately (D-066 §5).
-    expect(html).not.toMatch(/immediately|instant/i);
+    expect(html).not.toMatch(/立即|即时/);
   });
 
   it('matches the capability table for every role, not a hardcoded list', () => {
@@ -76,7 +76,7 @@ describe('read-only notice: shown for a known role without canEdit', () => {
       const model = readOnlyNoticeFor(gate);
       if (gate.readOnly) {
         expect(model).not.toBeNull();
-        expect(markupForRole(role)).toMatch(/read-only for your role/i);
+        expect(markupForRole(role)).toMatch(/只读/);
       } else {
         expect(model).toBeNull();
         expect(markupForRole(role)).toBe('');

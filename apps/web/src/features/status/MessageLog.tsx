@@ -14,7 +14,7 @@ export function MessageLog() {
   const messages = useAppSelector((state) => state.realtime.messages);
 
   if (messages.length === 0) {
-    return <Empty description="No server message yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+    return <Empty description="暂无服务器消息" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
 
   return (
@@ -25,9 +25,7 @@ export function MessageLog() {
         <List.Item>
           <div style={{ width: '100%' }}>
             <Typography.Text strong>{message.type}</Typography.Text>{' '}
-            {message.type === WS_MESSAGE_TYPES.connected ? (
-              <Tag color="green">handshake</Tag>
-            ) : null}
+            {message.type === WS_MESSAGE_TYPES.connected ? <Tag color="green">握手</Tag> : null}
             <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
               {message.ts}
             </Typography.Text>

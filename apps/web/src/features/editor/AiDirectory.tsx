@@ -39,7 +39,7 @@
  *
  * `loading` / `error` / `empty` are distinct and visible: `data-state` on the section, the
  * `ai-directory-error` block (with a typed `data-directory-error` and readable copy), and the
- * exact `ai-directory-empty` sentence ("No readable documents"). The list itself is never a
+ * exact `ai-directory-empty` sentence ("没有可阅读的文档"). The list itself is never a
  * substitute for an error: a failed request never renders as "no documents" (R9).
  *
  * ## New document (M4 B12.5, `docs/DECISIONS.md` D-084 acceptance #7)
@@ -106,7 +106,11 @@ export interface AiDirectoryProps {
 }
 
 /** The stateful half: fetch, abort, retry, create. The view below is pure so it can be tested as markup. */
-export function AiDirectory({ activeDocumentId, onSelectDocument, refreshKey = '' }: AiDirectoryProps) {
+export function AiDirectory({
+  activeDocumentId,
+  onSelectDocument,
+  refreshKey = '',
+}: AiDirectoryProps) {
   const [state, setState] = useState<DirectoryState>({ kind: 'loading' });
   /** `true` between the click and the settled request; drives the button's `disabled`. */
   const [creating, setCreating] = useState(false);
@@ -261,15 +265,14 @@ export function AiDirectoryView({
       className="ai-directory"
       data-testid="ai-directory"
       data-state={status}
-      aria-label="Readable documents"
+      aria-label="可阅读的文档"
       aria-busy={state.kind === 'loading'}
     >
       <div className="ai-directory__head">
         <div className="ai-directory__heading">
-          <h3 className="ai-directory__title">Documents</h3>
+          <h3 className="ai-directory__title">文档</h3>
           <p className="ai-directory__note">
-            Readable by your identity. Selecting one opens it; the proposal stays on the active
-            document.
+            你的身份可阅读的文档。选择其中一个即可打开；建议仍针对当前活动的文档。
           </p>
         </div>
         <div className="ai-directory__actions">
@@ -283,7 +286,7 @@ export function AiDirectoryView({
             type="button"
             className="ai-directory__new"
             data-testid="new-document"
-            title="Create a new document you own"
+            title="创建一个归你所有的新文档"
             disabled={creating}
             onClick={onCreate}
           >
@@ -293,11 +296,11 @@ export function AiDirectoryView({
             type="button"
             className="ai-directory__refresh"
             data-testid="ai-directory-refresh"
-            title="Reload the list of documents you may read"
+            title="重新加载你有权阅读的文档列表"
             disabled={state.kind === 'loading'}
             onClick={onRefresh}
           >
-            Refresh
+            刷新
           </button>
         </div>
       </div>
@@ -321,7 +324,7 @@ export function AiDirectoryView({
 
       {state.kind === 'loading' ? (
         <p className="ai-directory__loading" role="status">
-          Loading readable documents…
+          正在加载可阅读的文档…
         </p>
       ) : null}
 
@@ -355,16 +358,14 @@ export function AiDirectoryView({
                   data-testid="ai-directory-item"
                   data-document-id={document.id}
                   aria-current={current ? 'true' : undefined}
-                  title={
-                    current ? `${document.id} — open in this workspace` : `Open ${document.id}`
-                  }
+                  title={current ? `${document.id} — 已在此工作台打开` : `打开 ${document.id}`}
                   onClick={() => onSelect(document.id)}
                 >
                   <span className="ai-directory__doc-title">{document.title}</span>
                   <code className="ai-directory__doc-id">{document.id}</code>
                   {current ? (
                     <span className="ai-directory__current" aria-hidden="true">
-                      current
+                      当前
                     </span>
                   ) : null}
                 </button>

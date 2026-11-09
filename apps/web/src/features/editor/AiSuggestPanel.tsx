@@ -105,14 +105,45 @@ type PanelPhase =
   | { kind: 'rejected' }
   | { kind: 'error'; failure: ProviderFailureCopy };
 
-/** Hover text for each chip; the chip *label* is the literal instruction, so it is what you type. */
-const INTENT_HINTS: Readonly<Record<LocalIntent, string>> = {
-  uppercase: 'Uppercase the selection, or the whole document.',
-  'trim-trailing-space': 'Remove trailing spaces from each selected line, or the whole document.',
-  'add-todo': 'Prefix each selected non-blank line with "- [ ] " (a Markdown task).',
-  'replace-selection': 'Replace the selection with the text you type after the colon.',
-  'delete-selection': 'Delete the selection.',
+/**
+ * The Chinese label shown on each preset chip.
+ *
+ * The chip's **visible** text is Chinese, but the instruction it writes into the box (and the
+ * provider request prefix) is still the frozen English intent token (`uppercase`, `add-todo`, …).
+ * Those tokens are the local provider's instruction syntax, not UI copy; changing them would
+ * change what is sent to the provider. `data-intent` keeps the same frozen value.
+ */
+const INTENT_LABELS: Readonly<Record<LocalIntent, string>> = {
+  uppercase: '转为大写',
+  'trim-trailing-space': '去除行尾空格',
+  'add-todo': '添加待办',
+  'replace-selection': '替换选区',
+  'delete-selection': '删除选区',
 };
+
+/** Hover text for each chip; the chip *label* is Chinese, the inserted instruction is the token. */
+const INTENT_HINTS: Readonly<Record<LocalIntent, string>> = {
+  uppercase: '将选区（未选中时为整篇文档）转为大写。',
+  'trim-trailing-space': '删除每一行末尾的空格（选区，或整篇文档）。',
+  'add-todo': '在每个选中的非空行前添加“- [ ] ”（Markdown 待办）。',
+  'replace-selection': '用你在冒号后输入的文本替换选区。',
+  'delete-selection': '删除选区。',
+};
+
+/** The hint shown next to the local instruction box. Remote mode has no preset chips, so no hint. */
+export const LOCAL_INTENT_HINT = '请选择预设操作';
+
+/**
+ * The instruction text a chip writes into the box.
+ *
+ * This is the frozen local-provider syntax (`uppercase`, `add-todo`, …), **not** the Chinese chip
+ * label. `replace-selection` seeds its prefix and leaves the replacement text to the user. Keeping
+ * this as an exported pure function lets the Node gate prove that localizing the labels did not
+ * change what is sent to the provider.
+ */
+export function instructionForIntent(intent: LocalIntent): string {
+  return intent === 'replace-selection' ? 'replace-selection: ' : intent;
+}
 
 export interface AiSuggestPanelProps {
   /** An `active` session; the caller narrows `CollaborativeSessionResult` first. */
@@ -293,16 +324,17 @@ export function AiSuggestPanel({
 
   const applyIntent = (intent: LocalIntent): void => {
     // `replace-selection` needs a payload, so the chip seeds the prefix and leaves the caret's work
-    // to the user; every other chip is the complete instruction.
-    setInstruction(intent === 'replace-selection' ? 'replace-selection: ' : intent);
+    // to the user; every other chip is the complete instruction. The label is Chinese, the seeded
+    // instruction is the frozen provider token (`instructionForIntent`).
+    setInstruction(instructionForIntent(intent));
   };
 
   const acceptDisabled = !canEdit || phase.kind !== 'proposal';
   const acceptTitle = !canEdit
-    ? 'Read-only for your role'
+    ? '你的角色为只读'
     : phase.kind === 'stale'
-      ? 'This suggestion is stale — generate a new one'
-      : 'Apply this suggestion to the document';
+      ? '此建议已失效——请生成新的建议'
+      : '将此建议应用到文档';
 
   return (
     <section
@@ -310,39 +342,50 @@ export function AiSuggestPanel({
       className="ai-panel"
       data-testid="ai-panel"
       data-phase={phase.kind}
-      aria-label="AI proposal"
+      aria-label="AI 建议"
     >
       <header className="ai-panel__head">
         <div className="ai-panel__heading">
-          <h2 className="ai-panel__title">Ask AI</h2>
+          <h2 className="ai-panel__title">询问 AI</h2>
           <p className="ai-panel__note">{providerCopy.note}</p>
         </div>
         <button
           type="button"
           className="ai-panel__close"
-          aria-label="Close AI panel"
+          aria-label="关闭 AI 面板"
           data-testid="ai-close"
-          title="Close the AI panel"
+          title="关闭 AI 面板"
           onClick={close}
         >
-          Close
+          关闭
         </button>
       </header>
 
       <div className="ai-panel__body">
         <div className="ai-panel__main">
           <label className="ai-field">
-            <span className="ai-field__label">Instruction</span>
+            <span className="ai-field__label">指令</span>
             <textarea
               className="ai-instruction"
               data-testid="ai-instruction"
-              aria-label="AI instruction"
+              aria-label="AI 指令"
               rows={2}
               spellCheck={false}
               value={instruction}
               placeholder={providerCopy.instructionPlaceholder}
               onChange={(event) => setInstruction(event.target.value)}
             />
+            {/*
+              Local mode only: the local provider is not a language model, so an arbitrary sentence
+              has no meaning to it. The preset chips above are the instructions that work, and this
+              hint says so next to the box. Remote mode hides both the chips and this hint, because
+              there the endpoint accepts natural language.
+            */}
+            {showLocalIntents ? (
+              <span className="ai-field__hint" data-testid="ai-local-hint">
+                {LOCAL_INTENT_HINT}
+              </span>
+            ) : null}
           </label>
 
           {/*
@@ -353,7 +396,7 @@ export function AiSuggestPanel({
         language — so the chips are hidden rather than left as instructions that would fail.
       */}
           {showLocalIntents ? (
-            <div className="ai-chips" role="group" aria-label="Supported instructions">
+            <div className="ai-chips" role="group" aria-label="支持的预设操作">
               {LOCAL_INTENTS.map((intent) => (
                 <button
                   key={intent}
@@ -364,7 +407,7 @@ export function AiSuggestPanel({
                   title={INTENT_HINTS[intent]}
                   onClick={() => applyIntent(intent)}
                 >
-                  {intent === 'replace-selection' ? 'replace-selection: <text>' : intent}
+                  {INTENT_LABELS[intent]}
                 </button>
               ))}
             </div>
@@ -375,22 +418,20 @@ export function AiSuggestPanel({
               type="button"
               className="ai-primary"
               data-testid="ai-generate"
-              aria-label="Generate suggestion"
+              aria-label="生成建议"
               disabled={!canRead || tracker === null}
               title={
                 !canRead
-                  ? 'Your role may not read this document'
+                  ? '你的角色无权阅读此文档'
                   : tracker === null
-                    ? 'Preparing the revision counter…'
-                    : 'Generate a proposal from the current document and selection'
+                    ? '正在准备修订计数器…'
+                    : '根据当前文档和选区生成建议'
               }
               onClick={generate}
             >
-              {generating ? 'Regenerating…' : 'Generate'}
+              {generating ? '正在重新生成…' : '生成'}
             </button>
-            <span className="ai-actions__hint">
-              Target: the current selection, or the whole document when nothing is selected.
-            </span>
+            <span className="ai-actions__hint">目标：当前选区；未选中时作用于整篇文档。</span>
           </div>
 
           <p
@@ -422,12 +463,7 @@ export function AiSuggestPanel({
             (A4). The panel must not recompute it: the authority for what gets applied is the
             operations + anchors, and a second diff could disagree with the preview.
           */}
-              <pre
-                className="ai-diff"
-                data-testid="ai-diff"
-                aria-label="Unified diff preview"
-                tabIndex={0}
-              >
+              <pre className="ai-diff" data-testid="ai-diff" aria-label="统一差异预览" tabIndex={0}>
                 {proposal.diff}
               </pre>
 
@@ -447,22 +483,22 @@ export function AiSuggestPanel({
                   type="button"
                   className="ai-accept"
                   data-testid="ai-accept"
-                  aria-label="Accept suggestion"
+                  aria-label="接受建议"
                   disabled={acceptDisabled}
                   title={acceptTitle}
                   onClick={accept}
                 >
-                  Accept
+                  接受
                 </button>
                 <button
                   type="button"
                   className="ai-reject"
                   data-testid="ai-reject"
-                  aria-label="Reject suggestion"
-                  title="Dismiss this suggestion without changing the document"
+                  aria-label="拒绝建议"
+                  title="放弃此建议，不改变文档"
                   onClick={reject}
                 >
-                  Reject
+                  拒绝
                 </button>
               </div>
             </article>
@@ -477,17 +513,17 @@ export function AiSuggestPanel({
 function statusTextFor(phase: PanelPhase): string {
   switch (phase.kind) {
     case 'idle':
-      return 'No proposal yet.';
+      return '尚无建议。';
     case 'generating':
-      return 'Generating a proposal…';
+      return '正在生成建议…';
     case 'proposal':
-      return 'Proposal ready — the document is unchanged until you accept.';
+      return '建议已就绪——在你点击接受之前，文档不会改变。';
     case 'stale':
-      return 'This suggestion is stale and was not applied. The document is unchanged.';
+      return '该建议已失效，未应用。文档没有改变。';
     case 'applied':
-      return 'Suggestion applied through a Yjs transaction. Use Undo to revert it.';
+      return '建议已通过 Yjs 事务应用。可使用撤销回退。';
     case 'rejected':
-      return 'Suggestion dismissed — the document is unchanged.';
+      return '建议已放弃——文档没有改变。';
     case 'error':
       return phase.failure.title;
   }
@@ -497,16 +533,16 @@ function statusTextFor(phase: PanelPhase): string {
 function emptyCopyFor(phase: PanelPhase, providerMode: AiProviderMode): string {
   switch (phase.kind) {
     case 'generating':
-      return 'Generating…';
+      return '正在生成…';
     case 'applied':
-      return 'Applied. Generate another proposal to keep going.';
+      return '已应用。可继续生成新的建议。';
     case 'rejected':
-      return 'Dismissed. Nothing was written to the document.';
+      return '已放弃。没有向文档写入任何内容。';
     case 'error':
-      return 'Nothing to review. Adjust the instruction and generate again.';
+      return '没有可审阅的内容。请调整指令后重新生成。';
     case 'stale':
       // Unreachable in practice (a stale failure keeps the proposal), but honest if it ever is.
-      return 'Nothing to review. Generate a new proposal.';
+      return '没有可审阅的内容。请生成新的建议。';
     case 'idle':
     case 'proposal':
       // The idle hint points at the affordance that exists: chips in local mode, free-form text

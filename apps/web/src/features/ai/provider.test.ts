@@ -79,7 +79,7 @@ describe('local provider: replace + insert', () => {
       expect(Object.prototype.hasOwnProperty.call(operation.anchor, 'end')).toBe(false);
       expect(operation.anchor.expectedText).toBe('');
     }
-    expect(suggestion.summary).toContain('2 lines');
+    expect(suggestion.summary).toContain('2 行');
     expect(suggestion.diff).toContain('+- [ ] alpha');
     expectContractValid(suggestion, doc);
   });
@@ -98,7 +98,7 @@ describe('local provider: replace + insert', () => {
       { index: 3, length: 2, text: '' },
       { index: 15, length: 1, text: '' },
     ]);
-    expect(suggestion.summary).toContain('2 lines');
+    expect(suggestion.summary).toContain('2 行');
     expectContractValid(suggestion, doc);
   });
 

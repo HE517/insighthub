@@ -12,17 +12,21 @@
  *    to the document the server named (and that switch is the visible confirmation).
  * 2. **No false failure either.** A timeout or unreadable `2xx` cannot prove the server did not
  *    commit, so those two say "may have been created" and send the user to Refresh. The failures
- *    that are provably before the commit (401, HTTP error, unreachable) say "nothing was created".
+ *    that are provably before the commit (401, 403 origin refusal, other HTTP error, unreachable)
+ *    say "nothing was created".
  * 3. **Aborted is not an error.** A cancelled request is the normal result of closing the panel or
  *    switching documents; returning `null` keeps it out of the UI (R9, A5 stale-response rules).
+ *
+ * The wording is Simplified Chinese (A2 UI-copy unification). The typed `kind` discriminators and
+ * the `data-create-error` attribute stay exactly as they were.
  */
 import { DocumentCreateError, type DocumentCreateFailure } from './documentCreation.js';
 
 /** The control's idle label. */
-export const NEW_DOCUMENT_LABEL = 'New document';
+export const NEW_DOCUMENT_LABEL = '新建文档';
 
 /** The control's label while the request is in flight (the button is also `disabled`). */
-export const NEW_DOCUMENT_PENDING_LABEL = 'Creating…';
+export const NEW_DOCUMENT_PENDING_LABEL = '正在创建…';
 
 /** Stable discriminators, rendered as `data-create-error` for machine-readable assertions. */
 export type NewDocumentFailureKind = Exclude<DocumentCreateFailure, 'aborted'> | 'unexpected';
@@ -38,10 +42,10 @@ export interface NewDocumentFailureCopy {
 }
 
 /** Retry through the same control that failed; no second entry point. */
-const RETRY_HINT = 'Press New document to try again.';
+const RETRY_HINT = '请点击“新建文档”重试。';
 
 /** A failure that happened before the commit: the directory is safe to keep using. */
-const NOT_CREATED = 'Nothing was created.';
+const NOT_CREATED = '未创建任何文档。';
 
 /**
  * Turn whatever `createDocument` threw into readable copy.
@@ -57,41 +61,50 @@ export function describeCreateFailure(error: unknown): NewDocumentFailureCopy | 
       case 'unauthorized':
         return {
           kind: 'unauthorized',
-          title: 'No valid server session.',
+          title: '服务器会话已失效。',
           detail:
-            'The server did not accept this browser’s session, so nothing was created. ' +
-            'If the page has just loaded, reload it to sign in again, then try once more.',
+            '服务器没有接受此浏览器的会话，因此未创建任何文档。' +
+            '若页面刚加载，请重新加载页面并登录，然后再试一次。',
         };
       case 'network':
         return {
           kind: 'network',
-          title: 'The request did not complete.',
+          title: '网络已断开，请求未完成。',
           detail:
-            'The server could not be reached — you may be offline. The client cannot confirm ' +
-            'whether a document was created, so press Refresh to check the list before trying ' +
-            'again.',
+            '无法连接到服务器——你可能已离线。客户端无法确认是否已创建文档，' +
+            '因此请先点击“刷新”查看列表，再决定是否重试。',
         };
       case 'timeout':
         return {
           kind: 'timeout',
-          title: 'The server did not answer in time.',
+          title: '服务器未及时响应。',
           detail:
-            'The client cannot tell whether the document was created, because no answer arrived. ' +
-            'Press Refresh to check the list before trying again.',
+            '没有收到服务器的回答，客户端无法判断文档是否已创建。' +
+            '请先点击“刷新”查看列表，再决定是否重试。',
         };
       case 'malformed':
         return {
           kind: 'malformed',
-          title: 'The server’s answer could not be read.',
+          title: '无法读取服务器的响应。',
           detail:
-            'A document may have been created, but this client could not read the server’s ' +
-            'confirmation. Press Refresh to check the list before trying again.',
+            '文档可能已创建，但此客户端无法读取服务器的确认信息。' +
+            '请先点击“刷新”查看列表，再决定是否重试。',
         };
       case 'http':
+        if (error.status === 403) {
+          // `403 origin_not_allowed`: the request was refused before the creation handler ran, so
+          // it is safe to say nothing was created. A different 403 (forbidden) is also before the
+          // commit; neither code is added here — only the status/body the server already sends.
+          return {
+            kind: 'http',
+            title: '请求来源被拒绝。',
+            detail: `服务器以 HTTP 403 拒绝了该请求：请求来源不被允许。${NOT_CREATED} ${RETRY_HINT}`,
+          };
+        }
         return {
           kind: 'http',
-          title: 'The document was not created.',
-          detail: `The server answered HTTP ${String(error.status ?? 'error')}. ${NOT_CREATED} ${RETRY_HINT}`,
+          title: '文档未创建。',
+          detail: `服务器返回 HTTP ${String(error.status ?? 'error')}。${NOT_CREATED} ${RETRY_HINT}`,
         };
     }
   }
@@ -101,11 +114,11 @@ export function describeCreateFailure(error: unknown): NewDocumentFailureCopy | 
   // claim about what the server did.
   const detail =
     error instanceof Error && error.message.trim() !== ''
-      ? `${error.message.replace(/[.\s]+$/, '')}.`
-      : 'The request failed without a typed reason.';
+      ? `${error.message.replace(/[.\s]+$/, '')}。`
+      : '请求失败，且没有给出可识别的原因。';
   return {
     kind: 'unexpected',
-    title: 'The document could not be created.',
-    detail: `${detail} Press Refresh to check the list before trying again.`,
+    title: '文档无法创建。',
+    detail: `${detail} 请先点击“刷新”查看列表，再决定是否重试。`,
   };
 }

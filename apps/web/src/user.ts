@@ -46,7 +46,7 @@ const TAB_SUFFIX = Math.random().toString(36).slice(2, 6);
  */
 const FALLBACK_USER: CollaborativeSessionOptions['user'] = {
   id: `local-${TAB_SUFFIX}`,
-  name: `You (${TAB_SUFFIX})`,
+  name: `你（${TAB_SUFFIX}）`,
 };
 
 /**
