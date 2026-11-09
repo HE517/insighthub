@@ -47,9 +47,11 @@ import {
   createAuthz,
   createClerkSessionVerifier,
   createIdentityDeps,
+  createMemberService,
   isAppUserStore,
   type AuthzService,
   type IdentityOptions,
+  type MemberService,
   type SessionVerifier,
 } from './authz/public.js';
 import { loadConfig, type AuthMode } from './config.js';
@@ -270,6 +272,37 @@ async function main(): Promise<void> {
   // receives this instance instead of building a second one (see `WebSocketServerOptions.registry`).
   const registry = new RoomRegistry({ store, authz, logger: log });
 
+  // P0-2: member management gets its own connection to the membership table (the authorization
+  // core's handle is for synchronous decisions). The revocation hook closes live sockets after a
+  // committed remove/demote/transfer, so "revoked" is true for both transports at once. A failure
+  // here is a startup refusal like the store/authz ones: the routes would otherwise 404 after
+  // having appeared in the contract.
+  let members: MemberService;
+  try {
+    members = await createMemberService({
+      dataPath,
+      authz,
+      appUsers: isAppUserStore(store) ? store : null,
+      // The demo address book is addressable only in demo mode (`P0-2-MEMBERS.md` §数据).
+      demoEmails: authMode === 'demo',
+      onMembershipChanged: (documentId, userIds) => {
+        registry.closeUserConnections(documentId, userIds);
+      },
+    });
+  } catch (error) {
+    const code = isSqliteCapabilityError(error) ? error.code : 'MEMBERS_INIT_FAILED';
+    log.error('server.refused', { code, message: `refusing to start: ${code}` });
+    log.error('server.refused_detail', {
+      code,
+      ...(isSqliteCapabilityError(error) ? { detail: error.message } : {}),
+      errorClass: error instanceof Error ? error.name : typeof error,
+    });
+    authz.close();
+    await store.close();
+    process.exitCode = 1;
+    return;
+  }
+
   const app = createApp(config, authz, aiProvider, identityOptions, undefined, {
     staticAssets,
     logger: log,
@@ -285,6 +318,9 @@ async function main(): Promise<void> {
     // uses. A restore must run in the document's FIFO slot and against the room the sockets
     // are in, so two registries are not an option.
     versions: registry,
+    // P0-2: the six member routes. The service owns the transaction and the revocation callback
+    // above, so `app.ts` only maps outcomes to status codes.
+    members,
   });
   const server = createServer(app);
 
@@ -359,6 +395,10 @@ async function main(): Promise<void> {
     // then flush and release the store. `registry.destroy()` inside `socket.close()` stops
     // every per-document queue, so nothing is left mid-append when the store closes.
     await socket.close();
+    // P0-2: the member service's write connection is closed before authz's read connection.
+    // Both point at `insighthub.db`; releasing them in reverse creation order keeps shutdown
+    // deterministic (no in-flight member write can see a closed schema check).
+    members.close();
     // Sessions are in memory, so closing authz only drops them and releases its read connection
     // to `insighthub.db` (membership lives there since schema 2, D-084). It runs after the
     // transports stop: an in-flight HTTP request must not see a closed membership table.

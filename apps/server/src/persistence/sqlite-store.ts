@@ -122,6 +122,7 @@ export class SqliteDocumentStore
     insertMembership: Stmt;
     selectAppUserByClerkId: Stmt;
     selectAppUserById: Stmt;
+    selectAppUserByEmail: Stmt;
     insertAppUser: Stmt;
     updateAppUserProfile: Stmt;
   };
@@ -243,6 +244,17 @@ export class SqliteDocumentStore
       ),
       selectAppUserById: db.prepare(
         'SELECT id, clerk_user_id, email, display_name, created_at, updated_at FROM app_user WHERE id = ?',
+      ),
+      // P0-2: email invitation resolves a typed address to an internal user. The comparison is
+      // case-insensitive and trimmed **in SQL** so a differently-cased address still matches the
+      // stored profile, and `ORDER BY id` makes the (rare) duplicate-email case deterministic
+      // rather than dependent on SQLite's row order.
+      selectAppUserByEmail: db.prepare(
+        `SELECT id, clerk_user_id, email, display_name, created_at, updated_at
+           FROM app_user
+          WHERE email IS NOT NULL AND lower(trim(email)) = ?
+          ORDER BY id ASC
+          LIMIT 1`,
       ),
       insertAppUser: db.prepare(
         'INSERT OR IGNORE INTO app_user (id, clerk_user_id, email, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -747,6 +759,24 @@ export class SqliteDocumentStore
     });
   }
 
+  /**
+   * Resolve an email address to its mapping row (P0-2).
+   *
+   * The normalisation is applied **here**, in JS, and the statement compares against
+   * `lower(trim(email))`. Doing it in one place keeps `findByEmail('  Ada@X.test ')` and
+   * `findByEmail('ada@x.test')` the same query; a `NULL` email never matches because the
+   * statement excludes it. An address with no registered user is `null`, which the member
+   * service maps to the single non-disclosing `404 user_not_found`.
+   */
+  async findByEmail(email: string): Promise<AppUser | null> {
+    const normalized = normalizeEmail(email);
+    if (normalized === '') return null;
+    return this.#guard('load', () => {
+      const row = this.#statements.selectAppUserByEmail.get(normalized);
+      return row === undefined ? null : toAppUser(row);
+    });
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
@@ -871,6 +901,17 @@ function readInteger(value: unknown): number {
   if (typeof value === 'number') return value;
   if (typeof value === 'bigint') return Number(value);
   return 0;
+}
+
+/**
+ * Normalise an email address for the `app_user` lookup.
+ *
+ * Trimmed and lower-cased because that is exactly what the SQL compares against
+ * (`lower(trim(email))`). The server stores the address as Clerk supplied it and never rewrites
+ * the column, so normalisation belongs to the comparison, not to the row.
+ */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 /**

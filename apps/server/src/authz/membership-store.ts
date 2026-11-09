@@ -49,12 +49,64 @@ import { SQLITE_BUSY_TIMEOUT_MS } from '../persistence/constants.js';
 import { assertSchemaSupported, ensureSchema } from '../persistence/schema.js';
 import { loadSqliteModule, type SqliteModule } from '../persistence/sqlite-runtime.js';
 import { DATABASE_FILE_NAME } from '../persistence/sqlite-store.js';
+import { runInTransaction } from '../persistence/transaction.js';
 
 /** One membership row. The durable unit of the authorization decision. */
 export interface MembershipRow {
   readonly documentId: string;
   readonly userId: string;
   readonly role: DocumentRole;
+}
+
+/**
+ * The roles an Owner may hand out directly.
+ *
+ * `owner` is deliberately **not** in the list: `docs/agent-governance/P0-2-MEMBERS.md` says
+ * ownership only moves through the transfer operation, which is the only operation that keeps
+ * "exactly one owner" true inside a transaction. An invite/`PATCH` body carrying `owner` is a
+ * validation error (`400 invalid_request`), not a quiet `editor`.
+ */
+export const ASSIGNABLE_MEMBER_ROLES = ['viewer', 'commenter', 'editor'] as const;
+
+export type AssignableMemberRole = (typeof ASSIGNABLE_MEMBER_ROLES)[number];
+
+/** True when `value` is a role a member operation may assign directly. */
+export function isAssignableMemberRole(value: unknown): value is AssignableMemberRole {
+  return (
+    value === 'viewer' ||
+    value === 'commenter' ||
+    value === 'editor'
+  );
+}
+
+/**
+ * Why a membership write was refused.
+ *
+ * These are **domain** codes, mapped to HTTP by `app.ts`. Keeping them out of the store's error
+ * payload is what lets the HTTP layer own status/body mapping while the transaction owns the
+ * invariant. `member_not_found` is distinct from `not_found` on purpose: the first means "the
+ * document is yours but the target row is not", the second is the non-disclosing "no access".
+ */
+export type MembershipWriteErrorCode =
+  | 'not_found'
+  | 'forbidden'
+  | 'member_not_found'
+  | 'already_owner'
+  | 'owner_role_immutable'
+  | 'owner_requires_transfer'
+  | 'last_owner'
+  | 'invalid_role'
+  | 'invariant_violation';
+
+/** One refused membership write. Carries only the domain code, never a row or an SQL string. */
+export class MembershipWriteError extends Error {
+  readonly code: MembershipWriteErrorCode;
+
+  constructor(code: MembershipWriteErrorCode) {
+    super(`membership write refused: ${code}`);
+    this.name = 'MembershipWriteError';
+    this.code = code;
+  }
 }
 
 /**
@@ -69,11 +121,44 @@ export interface MembershipStore {
   roleFor(documentId: string, userId: string): DocumentRole | null;
   /** Every row for one user, for `GET /api/documents`. */
   rowsForUser(userId: string): readonly MembershipRow[];
+  /** Every row for one document, for `GET /api/documents/:id/members`. */
+  rowsForDocument(documentId: string): readonly MembershipRow[];
   /** Insert rows, ignoring ones that already exist. Returns how many were inserted. */
   seed(rows: readonly MembershipRow[]): number;
   /** Total rows. Used by the startup log and by tests; never by a decision. */
   count(): number;
   close(): void;
+
+  /*
+   * ---- P0-2 member management (every one is a single transaction) ----
+   *
+   * Each write re-checks "the actor is still the Owner" **inside** the transaction, because the
+   * HTTP layer's check happened before body parsing. Two requests can both pass that check and
+   * then serialise on `BEGIN IMMEDIATE`; the loser must be refused on the state it now finds,
+   * not on the state it arrived with. The methods throw {@link MembershipWriteError} for every
+   * domain refusal — a returned value always means the row committed.
+   */
+
+  /** Owner invites (or re-roles) a member. Never assigns `owner`. */
+  invite(
+    documentId: string,
+    actorUserId: string,
+    targetUserId: string,
+    role: AssignableMemberRole,
+  ): MembershipRow;
+  /** Owner changes a non-owner member's role. The target owner is immutable via this call. */
+  changeRole(
+    documentId: string,
+    actorUserId: string,
+    targetUserId: string,
+    role: AssignableMemberRole,
+  ): MembershipRow;
+  /** Owner removes a non-owner member. */
+  remove(documentId: string, actorUserId: string, targetUserId: string): void;
+  /** Owner transfers ownership atomically (demote actor, promote target). */
+  transferOwner(documentId: string, actorUserId: string, targetUserId: string): MembershipRow;
+  /** A member removes their own row; an Owner must transfer first. */
+  leave(documentId: string, actorUserId: string): void;
 }
 
 type Db = InstanceType<SqliteModule['DatabaseSync']>;
@@ -84,8 +169,14 @@ export class SqliteMembershipStore implements MembershipStore {
   readonly #statements: {
     selectRole: Stmt;
     selectByUser: Stmt;
+    selectByDocument: Stmt;
     insertIgnore: Stmt;
+    upsertRole: Stmt;
+    updateRole: Stmt;
+    deleteMembership: Stmt;
     count: Stmt;
+    countOwners: Stmt;
+    selectOwnerId: Stmt;
   };
   #closed = false;
 
@@ -98,10 +189,33 @@ export class SqliteMembershipStore implements MembershipStore {
       selectByUser: db.prepare(
         'SELECT document_id, user_id, role FROM authz_document_membership WHERE user_id = ? ORDER BY document_id ASC',
       ),
+      // Deterministic order, so the member list response cannot depend on SQLite row order.
+      selectByDocument: db.prepare(
+        'SELECT document_id, user_id, role FROM authz_document_membership WHERE document_id = ? ORDER BY user_id ASC',
+      ),
       insertIgnore: db.prepare(
         'INSERT OR IGNORE INTO authz_document_membership (document_id, user_id, role) VALUES (?, ?, ?)',
       ),
+      // One statement makes "invite an existing member" an idempotent role update (P0-2): the
+      // composite primary key is the conflict target, so there is no read-then-write window.
+      upsertRole: db.prepare(
+        `INSERT INTO authz_document_membership (document_id, user_id, role)
+         VALUES (?, ?, ?)
+         ON CONFLICT(document_id, user_id) DO UPDATE SET role = excluded.role`,
+      ),
+      updateRole: db.prepare(
+        'UPDATE authz_document_membership SET role = ? WHERE document_id = ? AND user_id = ?',
+      ),
+      deleteMembership: db.prepare(
+        'DELETE FROM authz_document_membership WHERE document_id = ? AND user_id = ?',
+      ),
       count: db.prepare('SELECT COUNT(*) AS total FROM authz_document_membership'),
+      countOwners: db.prepare(
+        "SELECT COUNT(*) AS total FROM authz_document_membership WHERE document_id = ? AND role = 'owner'",
+      ),
+      selectOwnerId: db.prepare(
+        "SELECT user_id FROM authz_document_membership WHERE document_id = ? AND role = 'owner' ORDER BY user_id ASC LIMIT 1",
+      ),
     };
   }
 
@@ -171,6 +285,110 @@ export class SqliteMembershipStore implements MembershipStore {
     return rows;
   }
 
+  rowsForDocument(documentId: string): readonly MembershipRow[] {
+    this.#assertOpen();
+    return this.#readRowsForDocument(documentId);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * P0-2 member writes — one transaction each
+   * ---------------------------------------------------------------- */
+
+  invite(
+    documentId: string,
+    actorUserId: string,
+    targetUserId: string,
+    role: AssignableMemberRole,
+  ): MembershipRow {
+    this.#assertOpen();
+    if (!isAssignableMemberRole(role)) throw new MembershipWriteError('invalid_role');
+    return runInTransaction(this.#db, () => {
+      this.#assertOwner(documentId, actorUserId);
+      // An existing owner can only be the actor (the single-owner invariant), but checking the
+      // target row rather than the id keeps this correct if that invariant is ever violated by
+      // data written outside this class.
+      if (this.#readRole(documentId, targetUserId) === 'owner') {
+        throw new MembershipWriteError('already_owner');
+      }
+      this.#statements.upsertRole.run(documentId, targetUserId, role);
+      this.#assertSingleOwner(documentId);
+      return { documentId, userId: targetUserId, role };
+    });
+  }
+
+  changeRole(
+    documentId: string,
+    actorUserId: string,
+    targetUserId: string,
+    role: AssignableMemberRole,
+  ): MembershipRow {
+    this.#assertOpen();
+    if (!isAssignableMemberRole(role)) throw new MembershipWriteError('invalid_role');
+    return runInTransaction(this.#db, () => {
+      this.#assertOwner(documentId, actorUserId);
+      const targetRole = this.#readRole(documentId, targetUserId);
+      if (targetRole === null) throw new MembershipWriteError('member_not_found');
+      if (targetRole === 'owner') throw new MembershipWriteError('owner_role_immutable');
+      this.#statements.updateRole.run(role, documentId, targetUserId);
+      this.#assertSingleOwner(documentId);
+      return { documentId, userId: targetUserId, role };
+    });
+  }
+
+  remove(documentId: string, actorUserId: string, targetUserId: string): void {
+    this.#assertOpen();
+    runInTransaction(this.#db, () => {
+      this.#assertOwner(documentId, actorUserId);
+      const targetRole = this.#readRole(documentId, targetUserId);
+      if (targetRole === null) throw new MembershipWriteError('member_not_found');
+      if (targetRole === 'owner') throw new MembershipWriteError('owner_requires_transfer');
+      this.#statements.deleteMembership.run(documentId, targetUserId);
+      this.#assertSingleOwner(documentId);
+    });
+  }
+
+  transferOwner(
+    documentId: string,
+    actorUserId: string,
+    targetUserId: string,
+  ): MembershipRow {
+    this.#assertOpen();
+    return runInTransaction(this.#db, () => {
+      this.#assertOwner(documentId, actorUserId);
+      const targetRole = this.#readRole(documentId, targetUserId);
+      if (targetRole === null) throw new MembershipWriteError('member_not_found');
+      if (targetRole === 'owner') throw new MembershipWriteError('already_owner');
+      // The invariant the transfer exists to preserve, checked before any row is written.
+      this.#assertSingleOwner(documentId);
+
+      // Demote first, then promote: a crash between the two statements is rolled back by the
+      // surrounding transaction, so no committed state ever has two owners. (Demoting first also
+      // means an injected failure on the promote statement leaves the pre-transfer state after
+      // the rollback, which is what the regression test asserts.)
+      this.#statements.updateRole.run('editor', documentId, actorUserId);
+      this.#statements.updateRole.run('owner', documentId, targetUserId);
+
+      // Read back inside the transaction: counts and the owner id are the committed truth.
+      const ownerId = this.#readOwnerId(documentId);
+      if (ownerId !== targetUserId) throw new MembershipWriteError('invariant_violation');
+      this.#assertSingleOwner(documentId);
+      return { documentId, userId: targetUserId, role: 'owner' };
+    });
+  }
+
+  leave(documentId: string, actorUserId: string): void {
+    this.#assertOpen();
+    runInTransaction(this.#db, () => {
+      const role = this.#readRole(documentId, actorUserId);
+      if (role === null) throw new MembershipWriteError('not_found');
+      // An Owner leaving would leave the document without an owner; the contract requires a
+      // transfer first, so this is a refusal, not an automatic promotion.
+      if (role === 'owner') throw new MembershipWriteError('last_owner');
+      this.#statements.deleteMembership.run(documentId, actorUserId);
+      this.#assertSingleOwner(documentId);
+    });
+  }
+
   seed(rows: readonly MembershipRow[]): number {
     this.#assertOpen();
     let inserted = 0;
@@ -225,6 +443,59 @@ export class SqliteMembershipStore implements MembershipStore {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('the authorization membership store is closed');
+  }
+
+  /** The raw role read, without `#assertOpen`; only call inside a transaction or a public read. */
+  #readRole(documentId: string, userId: string): DocumentRole | null {
+    const row = this.#statements.selectRole.get(documentId, userId);
+    if (row === undefined) return null;
+    const role = row['role'];
+    return isDocumentRole(role) ? role : null;
+  }
+
+  #readRowsForDocument(documentId: string): readonly MembershipRow[] {
+    const rows: MembershipRow[] = [];
+    for (const raw of this.#statements.selectByDocument.all(documentId)) {
+      const storedDocumentId = raw['document_id'];
+      const userId = raw['user_id'];
+      const role = raw['role'];
+      if (typeof storedDocumentId !== 'string' || typeof userId !== 'string') continue;
+      if (!isDocumentRole(role)) continue;
+      rows.push({ documentId: storedDocumentId, userId, role });
+    }
+    return rows;
+  }
+
+  /**
+   * The actor must be the document's Owner, decided inside the write transaction.
+   *
+   * `not_found` for "no membership" is the non-disclosure branch the HTTP layer also produces; a
+   * membership that is not Owner is `forbidden`. Reading the row here (rather than trusting the
+   * caller) is what makes a revocation that lands while a request is in flight effective.
+   */
+  #assertOwner(documentId: string, actorUserId: string): void {
+    const role = this.#readRole(documentId, actorUserId);
+    if (role === null) throw new MembershipWriteError('not_found');
+    if (role !== 'owner') throw new MembershipWriteError('forbidden');
+  }
+
+  /** Exactly one `owner` row for the document. Called after every mutation, inside its transaction. */
+  #assertSingleOwner(documentId: string): void {
+    const total = this.#readCount(this.#statements.countOwners.get(documentId));
+    if (total !== 1) throw new MembershipWriteError('invariant_violation');
+  }
+
+  #readOwnerId(documentId: string): string | null {
+    const row = this.#statements.selectOwnerId.get(documentId);
+    const userId = row?.['user_id'];
+    return typeof userId === 'string' ? userId : null;
+  }
+
+  #readCount(row: Record<string, unknown> | undefined): number {
+    const total = row?.['total'];
+    if (typeof total === 'number') return total;
+    if (typeof total === 'bigint') return Number(total);
+    return 0;
   }
 }
 

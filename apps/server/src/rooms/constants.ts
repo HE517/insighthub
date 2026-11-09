@@ -57,3 +57,21 @@ export const SLOW_CLIENT_CLOSE_CODE = 1013; // "Try Again Later"
  * a close handshake that will not come.
  */
 export const DEAD_SOCKET_CLOSE_CODE = 1001;
+
+/**
+ * WebSocket close code used when a member's access to a document is revoked (P0-2).
+ *
+ * 1008 ("Policy Violation") is the code the frozen member contract names for
+ * remove/demote/transfer: the socket is not broken, the user is simply no longer allowed to
+ * stay in this room. The server closes instead of leaving a socket that would keep receiving
+ * broadcasts under its old role, and the client is expected to show its own localised message
+ * and re-join (where the new membership decides access).
+ *
+ * Detection is not left to the close handshake: the connection is detached from the room at
+ * the same moment, so its awareness entry is removed and it cannot receive another frame even
+ * if the client ignores the close frame until the heartbeat reaps it.
+ */
+export const MEMBERSHIP_CHANGED_CLOSE_CODE = 1008;
+
+/** The close reason for {@link MEMBERSHIP_CHANGED_CLOSE_CODE}. */
+export const MEMBERSHIP_CHANGED_CLOSE_REASON = 'membership_changed';

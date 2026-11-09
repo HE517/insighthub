@@ -95,6 +95,7 @@ import {
   type RestoreVersionResult,
 } from '../versions/restore.js';
 import type { SocketContext } from './context.js';
+import { MEMBERSHIP_CHANGED_CLOSE_CODE, MEMBERSHIP_CHANGED_CLOSE_REASON } from './constants.js';
 import { PeerImpl, type Peer, type SocketLike } from './peer.js';
 import {
   DocumentRoom,
@@ -530,6 +531,51 @@ export class RoomRegistry implements DocumentVersionService {
     }
     this.#detach(context);
     return { ok: true, left: true };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * P0-2 — real-time revocation
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Close every live socket a set of users holds on one document.
+   *
+   * Called **after** the membership row has committed (the P0-2 service invokes it through a
+   * callback), so this is the real-time half of "revoked immediately": the next HTTP request
+   * already sees the new row, and this closes the sockets that were admitted under the old one.
+   *
+   * ## Why detach as well as close
+   *
+   * `peer.close()` starts a close handshake; until the client answers, the socket still exists.
+   * Detaching it from the room **now** removes its awareness entry, stops broadcasts to it and
+   * makes any in-flight frame fail the `activeRoom === null` check. The `close` handler later
+   * calls {@link disconnect}, which is idempotent.
+   *
+   * ## Why 1008
+   *
+   * 1008 (policy violation) is the frozen contract's code: the socket is not faulty, the user's
+   * permission changed. The reason string is a stable token, not a user-facing sentence — the
+   * client renders its own localised message (`P0-2-MEMBERS.md` §实时撤权).
+   *
+   * `userIds` is a set because a transfer changes both the old and the new Owner's effective
+   * role. Unknown documents/users close nothing and return 0.
+   */
+  closeUserConnections(documentId: string, userIds: readonly string[]): number {
+    const room = this.#rooms.get(documentId);
+    if (room === undefined || userIds.length === 0) return 0;
+    const targets = new Set(userIds);
+    let closed = 0;
+    // Copy: `#detach` mutates `room.participants()`, so iterating the live array would skip the
+    // next participant when two revoked users share a room.
+    for (const participant of [...room.participants()]) {
+      const context = this.#contexts.get(participant.peer);
+      if (context === undefined) continue;
+      if (context.userId === undefined || !targets.has(context.userId)) continue;
+      participant.peer.close(MEMBERSHIP_CHANGED_CLOSE_CODE, MEMBERSHIP_CHANGED_CLOSE_REASON);
+      this.#detach(context);
+      closed += 1;
+    }
+    return closed;
   }
 
   /* ---------------------------------------------------------------- *

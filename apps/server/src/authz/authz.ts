@@ -287,10 +287,15 @@ export async function createAuthz(options: AuthzOptions): Promise<AuthzService> 
 
   const memberships = await openMembershipStore(options.dataPath);
   try {
-    // Seeding is idempotent (`INSERT OR IGNORE`), so a restart keeps whatever the table holds
-    // and only fills in rows that are missing — membership survives a process restart because it
-    // is *stored*, not because it is re-applied.
-    memberships.seed(DEMO_MEMBERSHIPS);
+    // Seeding is a **first-boot** action since P0-2. Membership is mutable now (invite / remove /
+    // transfer), so re-applying the demo fixture on every start would resurrect a member the
+    // Owner removed and silently undo a revocation on restart. An empty table is the only state
+    // in which the fixture is the truth; afterwards the stored rows are, exactly as the
+    // durability contract says ("stored, not re-applied").
+    //
+    // The insert itself stays `OR IGNORE`, so two processes racing a first boot cannot duplicate
+    // a row.
+    if (memberships.count() === 0) memberships.seed(DEMO_MEMBERSHIPS);
   } catch (error) {
     memberships.close();
     throw error;
